@@ -6,6 +6,8 @@
   "scripts": {
     "start": "serve -p 8080"
   },
+  "author": "Hyeokjae Kwon, M.D., Ph.D. <https://hyeokjaekwon26.github.io/>",
+  "license": "AGPL-3.0-only",
   "dependencies": {
     "@capacitor-community/text-to-speech": "^5.1.0",
     "@capacitor/android": "^6.0.0",

@@ -4,7 +4,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-blue.svg?style=for-the-badge&logo=android)](https://developer.android.com)
 [![Author](https://img.shields.io/badge/Author-권혁재%20M.D.%2C%20Ph.D.-orange.svg?style=for-the-badge)](https://hyeokjaekwon26.github.io/)
-[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-red.svg?style=for-the-badge)](https://creativecommons.org/licenses/by-nc/4.0/)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
 
 > **"운전 중 눈을 찌르는 저녁 태양(역광)을 피하고 건물·지형 그림자의 시원한 그늘 길로 안내받으세요!"**
 > 
@@ -128,13 +128,13 @@ cmd /c "build_apk.bat"
 
 ---
 
-## 🛑 라이선스 및 상업적 이용 금지 (License)
+## ⚖️ 라이선스 (License)
 
-본 프로젝트는 **[Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)** 라이선스를 적용합니다.
+본 프로젝트는 **[GNU Affero General Public License v3.0 (GNU AGPL-3.0)](https://www.gnu.org/licenses/agpl-3.0)** 라이선스를 적용합니다.
 
-* **저작자**: **권혁재 M.D., Ph.D. (Hyeokjae Kwon, M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
-* **개인적/비상업적 목적**: 소스코드 조회, 공유, 개인적 이용 및 수정이 자유롭게 허용됩니다.
-* **상업적 이용 금지 (NonCommercial)**: 본 프로그램, 소스코드, APK 설치 파일 및 유래 파생물을 **상업적 목적(유료 판매, 광고 수익화, 기업 상용 제품 탑재 등)으로 이용하는 것은 엄격히 금지**됩니다.
+* **저작자 (Author)**: **권혁재 M.D., Ph.D. (Hyeokjae Kwon, M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
+* **자유로운 사용 및 공유**: 소스코드 조회, 실행, 수정, 연구 및 학술적 재배포가 자유롭게 보장됩니다.
+* **강력한 카피레프트 (Strong Copyleft)**: 본 프로젝트의 소스코드를 수정하거나 이를 기반으로 파생된 소프트웨어 및 네트워크/클라우드 서비스(SaaS)를 운영할 경우, 동일하게 **AGPL-3.0 라이선스 하에 전체 소스코드를 의무적으로 공개**해야 합니다. (특정 기업/단체의 독점 폐쇄 상용화 방지)
 
 <br><hr><br>
 
@@ -144,7 +144,7 @@ cmd /c "build_apk.bat"
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-blue.svg?style=for-the-badge&logo=android)](https://developer.android.com)
 [![Author](https://img.shields.io/badge/Author-Hyeokjae%20Kwon%2C%20M.D.%2C%20Ph.D.-orange.svg?style=for-the-badge)](https://hyeokjaekwon26.github.io/)
-[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-red.svg?style=for-the-badge)](https://creativecommons.org/licenses/by-nc/4.0/)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
 
 > **"Avoid blinding low-angle sun glare and drive under cool building & terrain shadows!"**
 > 
@@ -262,9 +262,10 @@ This project is built using the following open-source libraries and open data AP
 
 ---
 
-## 🛑 License (Non-Commercial Use Only)
+## ⚖️ License (GNU AGPL-3.0)
 
-Distributed under **[Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)**. Commercial use, paid distribution, or monetization is strictly prohibited.
+This project is licensed under the **[GNU Affero General Public License v3.0 (GNU AGPL-3.0)](https://www.gnu.org/licenses/agpl-3.0)**.
 
 * **Author**: **Hyeokjae Kwon, M.D., Ph.D. (권혁재 M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
-* **NonCommercial**: Commercial use, monetization, or selling of this application/source code is strictly prohibited.
+* **Freedom to Use & Share**: You are free to run, study, modify, and distribute this software under the terms of the AGPL-3.0.
+* **Strong Copyleft Requirement**: Any modifications, derivative works, or network/cloud-hosted services based on this project must also make their complete source code publicly available under the AGPL-3.0 license.
