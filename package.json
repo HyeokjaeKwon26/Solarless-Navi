@@ -1,0 +1,18 @@
+{
+  "name": "solaris-nav",
+  "version": "1.0.0",
+  "description": "Solaris Nav - Sun-Aware Automotive Navigation Mobile App",
+  "main": "index.html",
+  "scripts": {
+    "start": "serve -p 8080"
+  },
+  "dependencies": {
+    "@capacitor-community/text-to-speech": "^5.1.0",
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/app": "^6.0.3",
+    "@capacitor/core": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0"
+  }
+}

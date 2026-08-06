@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>SolarLess Navi | 햇빛을 피하는 스마트 내비게이션</title>
+    
+    <!-- Google Fonts (Outfit, Inter, JetBrains Mono) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet CSS (Locally Bundled) -->
+    <link rel="stylesheet" href="css/leaflet.css" />
+    
+    <!-- FontAwesome Icons (Locally Bundled) -->
+    <link rel="stylesheet" href="css/all.min.css" />
+
+    <!-- Application Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app-container">
+        <!-- Full-Screen Speeding Red Flash Warning Overlay -->
+        <div class="speeding-warning-overlay hidden" id="speeding-warning-overlay"></div>
+
+        <!-- Floating Auto-Recenter Circular Countdown Toast Banner -->
+        <div class="recenter-toast-banner hidden" id="recenter-toast-banner">
+            <div class="recenter-toast-content">
+                <div class="timer-ring-wrapper">
+                    <svg class="timer-ring-svg" viewBox="0 0 36 36">
+                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                        <path class="circle-progress" id="timer-ring-progress" stroke-dasharray="100, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                    </svg>
+                    <span class="timer-num" id="recenter-timer-num">3</span>
+                </div>
+                <div class="recenter-text-group">
+                    <span class="recenter-title" id="recenter-toast-title">📍 내 위치로 자동 복귀</span>
+                    <span class="recenter-sub" id="recenter-toast-sub">3초 후 차량 위치 중심으로 자동 복귀합니다.</span>
+                </div>
+                <button class="recenter-now-btn" id="btn-recenter-now-toast">
+                    <i class="fa-solid fa-location-crosshairs"></i> <span id="recenter-now-lbl">지금 복귀</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Top Automotive Header -->
+        <header class="app-header">
+            <div class="logo-group" id="btn-header-home" title="홈 / 출발지 검색">
+                <div class="logo-icon">
+                    <i class="fa-solid fa-sun"></i>
+                </div>
+                <div class="logo-text">
+                    <h1>SolarLess <span>Navi</span></h1>
+                    <span class="tagline" id="logo-tagline-text">햇빛을 피하는 스마트 내비게이션</span>
+                </div>
+            </div>
+
+            <!-- Header Middle Action: Shaded Rest Spot Button -->
+            <button class="shaded-rest-btn" id="btn-find-shaded-rest" title="근처 5분 그늘 쉼터/주차장 경유지 찾기">
+                <i class="fa-solid fa-umbrella"></i> <span id="shaded-rest-btn-text">그늘 쉼터</span>
+            </button>
+
+            <!-- Voice & 1-Tap Language Toggle Button in Header -->
+            <div class="header-voice-controls">
+                <button class="lang-toggle-btn" id="btn-toggle-lang" title="언어 즉시 전환 (한국어 <-> English)">
+                    <span id="lang-flag">🇰🇷</span> <span id="lang-text">KO</span>
+                </button>
+                <button class="voice-btn" id="btn-toggle-voice" title="음성 안내 켜기/끄기">
+                    <i class="fa-solid fa-volume-high" id="voice-icon"></i>
+                </button>
+            </div>
+
+            <!-- Header GPS Status Indicator & Blinking Satellite Warning Icon -->
+            <div class="header-status" id="header-gps-status">
+                <span class="live-dot" id="gps-dot"></span>
+                <i class="fa-solid fa-satellite-dish gps-warning-icon hidden" id="gps-warning-icon" title="GPS 신호 탐색 중 / 미연결"></i>
+            </div>
+
+            <!-- Settings Drawer Toggle Button (Sliders Icon) -->
+            <button class="mobile-toggle-btn" id="mobile-toggle-panel" title="주행 설정 및 옵션 열기">
+                <i class="fa-solid fa-sliders"></i>
+            </button>
+        </header>
+
+        <!-- Main Content Area -->
+        <div class="main-body">
+
+            <!-- Destination-First Start Search Overlay Modal -->
+            <div class="start-search-overlay" id="start-search-modal">
+                <div class="start-search-card">
+                    <div class="start-card-title">
+                        <i class="fa-solid fa-compass"></i>
+                        <div>
+                            <h2 id="search-modal-title">어디로 가시나요?</h2>
+                            <p id="search-modal-sub">실시간 태양 위치와 그늘을 계산해 최적 경로를 안내합니다.</p>
+                        </div>
+                    </div>
+
+                    <!-- Origin Row -->
+                    <div class="search-input-group">
+                        <label class="input-label origin-label" id="origin-label-text"><i class="fa-solid fa-circle-dot"></i> 출발지</label>
+                        <div class="input-wrapper origin-wrapper">
+                            <input type="text" id="origin-input" placeholder="🎯 내 위치 (현재 GPS)" autocomplete="off">
+                            <button type="button" class="gps-auto-btn" id="btn-use-gps" title="내 GPS 위치로 재설정">
+                                <i class="fa-solid fa-crosshairs"></i> GPS
+                            </button>
+                        </div>
+                        <div class="search-results-dropdown" id="origin-results"></div>
+                    </div>
+
+                    <!-- Destination Row -->
+                    <div class="search-input-group">
+                        <label class="input-label dest-label" id="dest-label-text"><i class="fa-solid fa-location-dot"></i> 목적지 (필수)</label>
+                        <div class="input-wrapper">
+                            <input type="text" id="destination-input" placeholder="장소명, 주소, 또는 건물 검색..." autocomplete="off">
+                        </div>
+                        <div class="search-results-dropdown" id="destination-results"></div>
+                    </div>
+
+                    <!-- Favorites & Frequently Visited Section -->
+                    <div class="favorite-section">
+                        <div class="fav-header">
+                            <span id="fav-title-text"><i class="fa-solid fa-star" style="color:#fbbf24;"></i> 즐겨찾기 / 자주 가는 장소</span>
+                        </div>
+                        <div class="quick-favorite-chips" id="favorite-chips-group"></div>
+                    </div>
+
+                    <!-- Recent Search Destination History Section -->
+                    <div class="recent-history-section" id="recent-history-group">
+                        <div class="history-header">
+                            <span id="recent-title-text"><i class="fa-solid fa-clock-rotate-left"></i> 최근 검색한 장소</span>
+                            <button type="button" class="clear-history-btn" id="btn-clear-history">전체 삭제</button>
+                        </div>
+                        <div class="history-list" id="recent-history-list"></div>
+                    </div>
+
+                    <!-- Start Nav Action Button -->
+                    <button class="confirm-start-btn" id="btn-confirm-destination" disabled>
+                        <i class="fa-solid fa-route"></i> 내비게이션 탐색 시작
+                    </button>
+                </div>
+            </div>
+
+            <!-- About App Modal Overlay (Z-Index 9000 Front-Most Layer) -->
+            <div class="start-search-overlay hidden" id="about-app-modal">
+                <div class="start-search-card about-card">
+                    <div class="start-card-title">
+                        <i class="fa-solid fa-circle-info" style="color:#a78bfa;"></i>
+                        <div>
+                            <h2 id="about-title-text">앱 정보 (About App)</h2>
+                            <p>SolarLess Navi Automotive System</p>
+                        </div>
+                    </div>
+
+                    <div class="about-info-grid">
+                        <div class="about-row">
+                            <span class="about-lbl" id="lbl-app-name">어플리케이션 이름</span>
+                            <span class="about-val highlight">SolarLess Navi</span>
+                        </div>
+                        <div class="about-row">
+                            <span class="about-lbl" id="lbl-app-ver">버전 정보</span>
+                            <span class="about-val">v1.0 (Build 2026.08)</span>
+                        </div>
+                        <div class="about-row">
+                            <span class="about-lbl" id="lbl-app-dev">개발자 정보</span>
+                            <span class="about-val">권혁재 M.D., Ph.D. (Hyeokjae Kwon, M.D., Ph.D.)</span>
+                        </div>
+                        <div class="about-row">
+                            <span class="about-lbl" id="lbl-app-web">개발자 홈페이지</span>
+                            <span class="about-val">
+                                <a href="https://hyeokjaekwon26.github.io" target="_blank" rel="noopener noreferrer" style="color:#38bdf8; text-decoration:underline;">
+                                    hyeokjaekwon26.github.io 🔗
+                                </a>
+                            </span>
+                        </div>
+                        <div class="about-row">
+                            <span class="about-lbl" id="lbl-app-cert">보안 서명</span>
+                            <span class="about-val cert">RSA 2048-bit Release Certified 🛡️</span>
+                        </div>
+                    </div>
+
+                    <button class="confirm-start-btn close-about" id="btn-close-about-modal">
+                        닫기
+                    </button>
+                </div>
+            </div>
+
+            <!-- Update Notification Modal Overlay (Z-Index 9500) -->
+            <div class="start-search-overlay hidden" id="update-modal">
+                <div class="start-search-card update-card">
+                    <div class="start-card-title">
+                        <i class="fa-solid fa-cloud-arrow-down" style="color:#38bdf8; font-size: 24px;"></i>
+                        <div>
+                            <h2 id="update-modal-title">🚀 최신 버전 업데이트 안내</h2>
+                            <p id="update-modal-sub">GitHub Release Notification</p>
+                        </div>
+                    </div>
+
+                    <div style="margin: 16px 0; font-size: 14px; color: #cbd5e1; line-height: 1.6;" id="update-info-msg">
+                        SolarLess Navi의 새로운 기능과 안정성이 향상된 최신 버전이 출시되었습니다.
+                    </div>
+
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <a href="https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/latest" target="_blank" rel="noopener noreferrer" class="confirm-start-btn" id="btn-download-update" style="text-align: center; text-decoration: none; background: linear-gradient(135deg, #0284c7, #2563eb); display: flex; align-items: center; justify-content: center; gap: 8px;">
+                            <i class="fa-solid fa-download"></i> <span id="update-download-btn-text">지금 업데이트 다운로드</span>
+                        </a>
+                        <button type="button" class="about-app-link-btn" id="btn-close-update-modal" style="font-size: 13px; color: #94a3b8; padding: 8px;">
+                            <span id="update-later-btn-text">나중에 하기</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Left/Bottom Panel Controls & HUD -->
+            <aside class="sidebar-panel" id="sidebar-panel">
+                <!-- Mobile Swipe-Down Drag Handle Bar -->
+                <div class="drawer-drag-handle-bar" id="drawer-drag-handle" title="아래로 끌어 설정창 닫기">
+                    <div class="drag-pill"></div>
+                </div>
+
+                <!-- Change Destination Card -->
+                <div class="card search-card">
+                    <div class="card-header">
+                        <h3 id="drawer-reset-title"><i class="fa-solid fa-location-arrow"></i> 장소 재설정</h3>
+                        <button class="close-drawer-btn" id="btn-close-drawer"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="card-body">
+                        <button class="reopen-modal-btn" id="btn-open-search-modal">
+                            <i class="fa-solid fa-magnifying-glass"></i> 출발지 / 목적지 변경하기
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Driving Settings & Auto Dark Mode Card -->
+                <div class="card settings-card">
+                    <div class="card-header">
+                        <h3 id="drive-options-title"><i class="fa-solid fa-gear"></i> 주행 & 화면 옵션</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="option-row">
+                            <div class="option-label-group">
+                                <span class="option-title" id="auto-dark-title">🕶️ 야간/터널 자동 다크모드</span>
+                                <span class="option-desc" id="auto-dark-desc">일몰 시각 후 및 터널 진입 시 지도 자동 어둡게</span>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-auto-dark" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="option-row" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(255, 255, 255, 0.1);">
+                            <div class="option-label-group">
+                                <span class="option-title" id="toll-free-title">🚫 무료 도로 우선 (통행료 회피)</span>
+                                <span class="option-desc" id="toll-free-desc">유료 도로 및 요금소 회피 경로 안내</span>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-toll-free">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="option-row" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(255, 255, 255, 0.1);">
+                            <div class="option-label-group">
+                                <span class="option-title" id="satellite-title">🛰️ 위성 사진 지도 뷰</span>
+                                <span class="option-desc" id="satellite-desc">고화질 항공/위성 사진 리얼 타일 지도</span>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-satellite-view">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Time & Sun Position Controls -->
+                <div class="card time-card">
+                    <div class="card-header">
+                        <h3 id="time-card-title"><i class="fa-solid fa-clock"></i> 주행 시각 설정</h3>
+                        <span class="time-display" id="time-display-text">실시간 (Live)</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="slider-container">
+                            <input type="range" id="time-slider" min="0" max="1439" value="1110" step="1">
+                        </div>
+                        <!-- Dynamic GPS Solar Times -->
+                        <div class="time-solar-buttons">
+                            <button class="time-btn active" id="btn-now-time"><i class="fa-solid fa-bolt"></i> 실시간 (기본)</button>
+                            <button class="time-btn" id="btn-sunrise-time"><i class="fa-solid fa-sun-plant-wilt"></i> 일출</button>
+                            <button class="time-btn" id="btn-noon-time"><i class="fa-solid fa-sun"></i> 태양 남중</button>
+                            <button class="time-btn" id="btn-sunset-time"><i class="fa-solid fa-cloud-sun"></i> 일몰</button>
+                        </div>
+
+                        <div class="sun-hud-grid">
+                            <div class="hud-metric">
+                                <span class="metric-label" id="azimuth-lbl">태양 방위각 (Azimuth)</span>
+                                <span class="metric-value" id="sun-azimuth-val">--°</span>
+                            </div>
+                            <div class="hud-metric">
+                                <span class="metric-label" id="elevation-lbl">태양 고도 (Elevation)</span>
+                                <span class="metric-value" id="sun-elevation-val">--°</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Routing Mode Selector with Real-Time Traffic ETAs -->
+                <div class="card mode-card">
+                    <div class="card-header">
+                        <h3 id="traffic-card-title"><i class="fa-solid fa-route"></i> 실시간 교통 소요시간 비교</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="mode-options">
+                            <!-- 1. Fastest Route Option -->
+                            <button class="mode-btn" data-mode="fastest">
+                                <div class="mode-icon fastest"><i class="fa-solid fa-bolt"></i></div>
+                                <div class="mode-info">
+                                    <div class="mode-title-row">
+                                        <span class="mode-title" id="fastest-title-text">최단 시간 경로</span>
+                                        <span class="mode-eta-val" id="eta-fastest">⏱️ --분</span>
+                                    </div>
+                                    <div class="mode-sub-row">
+                                        <span class="mode-desc" id="desc-fastest">일반 탐색 경로</span>
+                                        <span class="traffic-chip smooth hidden" id="traffic-fastest"></span>
+                                    </div>
+                                </div>
+                            </button>
+
+                            <!-- 2. Glare-Free Route Option -->
+                            <button class="mode-btn" data-mode="glareFree">
+                                <div class="mode-icon glare"><i class="fa-solid fa-glasses"></i></div>
+                                <div class="mode-info">
+                                    <div class="mode-title-row">
+                                        <span class="mode-title" id="glare-title-text">역광(눈부심) 회피 경로</span>
+                                        <span class="mode-eta-val" id="eta-glare">⏱️ --분</span>
+                                    </div>
+                                    <div class="mode-sub-row">
+                                        <span class="mode-desc" id="desc-glare">태양 직사광선 정면 우회</span>
+                                    </div>
+                                </div>
+                            </button>
+
+                            <!-- 3. Shade-Priority Route Option -->
+                            <button class="mode-btn" data-mode="shade">
+                                <div class="mode-icon shade"><i class="fa-solid fa-tree"></i></div>
+                                <div class="mode-info">
+                                    <div class="mode-title-row">
+                                        <span class="mode-title" id="shade-title-text">그늘·구조물 우선 경로</span>
+                                        <span class="mode-eta-val" id="eta-shade">⏱️ --분</span>
+                                    </div>
+                                    <div class="mode-sub-row">
+                                        <span class="mode-desc" id="desc-shade">건물 그림자 / 터널 구간</span>
+                                    </div>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Driver HUD Indicator & Action Buttons -->
+                <div class="card hud-card">
+                    <div class="card-header">
+                        <h3 id="hud-card-title"><i class="fa-solid fa-car-side"></i> 모바일 주행 HUD 계기판</h3>
+                        <span class="status-badge" id="glare-risk-badge">SAFE</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="compass-container">
+                            <div class="compass-dial" id="compass-dial">
+                                <div class="compass-n">N</div>
+                                <div class="compass-e">E</div>
+                                <div class="compass-s">S</div>
+                                <div class="compass-w">W</div>
+                                <div class="sun-vector-pointer" id="sun-vector-pointer">
+                                    <i class="fa-solid fa-circle-dot"></i>
+                                    <div class="vector-line"></div>
+                                </div>
+                                <div class="car-heading-arrow" id="car-heading-arrow">
+                                    <i class="fa-solid fa-location-arrow"></i>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="hazard-meter-group">
+                            <div class="meter-label">
+                                <span id="meter-label-text">정면 역광(눈부심) 위험도</span>
+                                <span id="glare-pct-val">0%</span>
+                            </div>
+                            <div class="meter-bar">
+                                <div class="meter-fill" id="glare-meter-fill" style="width: 0%;"></div>
+                            </div>
+                            <div class="hazard-advice" id="hazard-advice-text">
+                                <i class="fa-solid fa-circle-info"></i> 실시간 시각 기준 태양 각도 연산 중.
+                            </div>
+                        </div>
+
+                        <!-- Real Driving Control & App Info Link at Bottom of Drawer -->
+                        <div class="action-buttons-group">
+                            <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> 실시간 GPS 내비 시작</button>
+                            <div class="about-menu-wrapper" style="margin-top: 8px; display: flex; justify-content: center;">
+                                <button type="button" class="about-app-link-btn" id="btn-about-app" style="font-size: 12px; color: #a78bfa; font-weight: 700;">
+                                    ℹ️ 앱 정보 및 개발자 정보
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- 2D Map View Column -->
+            <main class="map-container" id="map-perspective-wrapper">
+                <!-- Top Floating Destination Bar on Map -->
+                <div class="map-top-bar" id="map-top-bar">
+                    <div class="bar-route-text" id="bar-route-summary">
+                        <span class="orig-chip" id="orig-chip-text">🎯 내 위치</span>
+                        <i class="fa-solid fa-arrow-right"></i>
+                        <span class="dest-chip" id="bar-dest-text">목적지를 설정하세요</span>
+                    </div>
+                    <button class="bar-change-btn" id="btn-top-bar-change">
+                        <i class="fa-solid fa-magnifying-glass"></i> 변경
+                    </button>
+                </div>
+
+                <!-- Mobile Navigation Turn Banner -->
+                <div class="mobile-turn-banner" id="mobile-turn-banner">
+                    <div class="banner-icon" id="banner-turn-icon"><i class="fa-solid fa-arrow-turn-up"></i></div>
+                    <div class="banner-info">
+                        <div class="turn-dist" id="banner-dist">--m 앞</div>
+                        <div class="turn-desc" id="banner-desc"></div>
+                    </div>
+                </div>
+
+                <div id="map"></div>
+
+                <!-- Bottom-Left Speedometer HUD & Country-Specific Speed Limit & Stop Sign Badge Container -->
+                <div class="speedometer-bottom-left" id="speedometer-bottom-left">
+
+                    <!-- Country Sign Container (KR Red Circle vs US MUTCD White Rectangular) -->
+                    <div class="speed-sign-wrapper" id="speed-sign-wrapper">
+                        <!-- KR / International Red Circle Sign -->
+                        <div class="speed-limit-badge kr-style hidden" id="speed-limit-badge-kr" title="제한 속도 (대한민국/국제 규격)">
+                            <span class="limit-num" id="limit-val-kr"></span>
+                        </div>
+
+                        <!-- US MUTCD Rectangular White Sign -->
+                        <div class="speed-limit-badge us-style hidden" id="speed-limit-badge-us" title="SPEED LIMIT (US MUTCD Sign)">
+                            <span class="us-sign-label">SPEED<br>LIMIT</span>
+                            <span class="us-limit-num" id="limit-val-us"></span>
+                        </div>
+
+                        <!-- US MUTCD Octagonal Red STOP Sign Badge -->
+                        <div class="us-stop-sign-badge hidden" id="us-stop-sign-badge" title="US All-Way Stop Sign Ahead">
+                            <span>STOP</span>
+                        </div>
+
+                        <!-- Real-Time Road Type & Toll Badges -->
+                        <div class="road-type-badge highway-badge hidden" id="road-badge-highway" title="고속도로 주행 구간">
+                            <i class="fa-solid fa-road"></i>
+                            <span id="road-badge-highway-text">고속도로</span>
+                        </div>
+                        <div class="road-type-badge toll-badge hidden" id="road-badge-toll" title="유료 도로 / 통행료 구간">
+                            <i class="fa-solid fa-coins"></i>
+                            <span id="road-badge-toll-text">유료</span>
+                        </div>
+                        <div class="road-type-badge toll-booth-badge hidden" id="road-badge-tollbooth" title="요금소(톨게이트) 접근">
+                            <i class="fa-solid fa-ticket"></i>
+                            <span id="road-badge-tollbooth-text">요금소</span>
+                        </div>
+                    </div>
+
+                    <!-- Borderless Speedometer HUD -->
+                    <div class="speedometer-hud-clean">
+                        <span class="speed-num" id="speed-val">0</span>
+                        <span class="speed-unit" id="speed-unit-val">km/h</span>
+                    </div>
+                </div>
+
+                <!-- Floating Navigation Control Buttons on Map -->
+                <div class="map-controls-group">
+                    <!-- OLED Heat & Battery Saver Mode Toggle Button -->
+                    <button class="map-floating-btn saver-btn" id="btn-toggle-battery-saver" title="OLED 발열/배터리 절전 HUD 모드">
+                        <i class="fa-solid fa-battery-half"></i>
+                    </button>
+
+                    <!-- Compass Mode Toggle Button (Heading-Up vs North-Up) -->
+                    <button class="map-floating-btn compass-btn" id="btn-toggle-compass" title="방위 모드 변경 (주행 방향 / 북쪽 정렬)">
+                        <i class="fa-solid fa-compass" id="compass-btn-icon"></i>
+                        <span class="compass-mode-tag" id="compass-mode-tag">주행방향</span>
+                    </button>
+
+                    <!-- Floating My Location Button with Recenter Active Pulse Alert -->
+                    <button class="map-floating-btn GPS-btn" id="btn-recenter-gps" title="내 GPS 위치로 지도 이동">
+                        <i class="fa-solid fa-location-crosshairs"></i>
+                    </button>
+                </div>
+
+                <!-- Floating Route Summary Card with Direct One-Tap Map Start Button -->
+                <div class="route-summary-floating" id="route-summary-box">
+                    <div class="summary-stats-wrapper">
+                        <div class="summary-stat">
+                            <span class="stat-icon"><i class="fa-solid fa-stopwatch"></i></span>
+                            <div>
+                                <div class="stat-val" id="sum-time">--</div>
+                                <div class="stat-lbl" id="sum-time-lbl">소요 시간</div>
+                            </div>
+                        </div>
+                        <div class="summary-divider"></div>
+                        <div class="summary-stat">
+                            <span class="stat-icon"><i class="fa-solid fa-road"></i></span>
+                            <div>
+                                <div class="stat-val" id="sum-dist">-- km</div>
+                                <div class="stat-lbl" id="sum-dist-lbl">거리</div>
+                            </div>
+                        </div>
+                        <div class="summary-divider"></div>
+                        <div class="summary-stat hazard">
+                            <span class="stat-icon hazard"><i class="fa-solid fa-sun"></i></span>
+                            <div>
+                                <div class="stat-val hazard" id="sum-glare">--%</div>
+                                <div class="stat-lbl" id="sum-glare-lbl">역광 위험</div>
+                            </div>
+                        </div>
+                        <div class="summary-divider"></div>
+                        <div class="summary-stat shade">
+                            <span class="stat-icon shade"><i class="fa-solid fa-umbrella"></i></span>
+                            <div>
+                                <div class="stat-val shade" id="sum-shade">--%</div>
+                                <div class="stat-lbl" id="sum-shade-lbl">그늘 비율</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Direct One-Tap Start Navigation Button on Map -->
+                    <button class="map-direct-start-btn" id="btn-map-start-nav">
+                        <i class="fa-solid fa-play"></i> 안내 시작
+                    </button>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/leaflet.js"></script>
+    <script src="js/suncalc.js"></script>
+    <script src="js/i18n.js"></script>
+    <script src="js/shadow-router.js"></script>
+    <script src="js/geocoder.js"></script>
+    <script src="js/tts-voice.js"></script>
+    <script src="js/offline-map.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
