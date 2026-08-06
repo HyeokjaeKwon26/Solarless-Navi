@@ -3,11 +3,18 @@
 [🇰🇷 한국어](#-solarless-navi---햇빛을-피하는-스마트-내비게이션-android) | [🇺🇸 English](#-solarless-navi---sun-glare--shade-aware-smart-navigation-android)
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-blue.svg?style=for-the-badge&logo=android)](https://developer.android.com)
+[![Author](https://img.shields.io/badge/Author-권혁재%20M.D.%2C%20Ph.D.-orange.svg?style=for-the-badge)](https://hyeokjaekwon26.github.io/)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-red.svg?style=for-the-badge)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 > **"운전 중 눈을 찌르는 저녁 태양(역광)을 피하고 건물·지형 그림자의 시원한 그늘 길로 안내받으세요!"**
 > 
 > **SolarLess Navi**는 실시간 천문학 태양 위치(방위각/고도)와 OpenStreetMap 도로 벡터 연산을 통해 **① 건물 및 지형 그림자(그늘) 우선 경로**와 **② 정면 태양 눈부심(역광) 회피 경로**를 스마트하게 탐색하는 안드로이드 내비게이션입니다.
+
+---
+
+## 👨‍💻 개발자 정보 (Developer Information)
+* **저작자 / 개발자**: **권혁재 M.D., Ph.D. (Hyeokjae Kwon, M.D., Ph.D.)**
+* **공식 홈페이지**: [https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/)
 
 ---
 
@@ -23,7 +30,7 @@
 
 ### ☀️ 3. 실시간 자외선(UV) 감소율(%) 표시 & 4D 시공간 주행 예측
 * **4D 시공간(Spatio-Temporal) 동적 태양광 연산**: 출발 시각 스냅샷이 아닌, 차량이 각 도로 세그먼트($i$)를 실제로 통과하는 미래 통과 시각($T_i = T_{\text{start}} + \Delta t_i$)의 태양 방위각/고도각을 구간별로 개별 연산하여 30분~1시간 이상 장거리 주행 시의 태양 이동(시간당 약 15°)을 완벽히 반영합니다.
-* **최단 경로 대비 자외선 감소율 정밀 산출**: 일반 최단 경로 대비 추천 우회 경로 주행 시 운전자에게 도달하는 **누적 자외선/직사광선 수신량이 몇 % 감소하는지**를 정밀 연산하여 경로 카드 뱃지(`자외선 -42% ☂️`)에 실시간 표기합니다.
+* **일관된 표준 지표 실시간 표기**: 특정 경로로의 편향된 유도를 지양하고, **모든 경로 옵션 카드에 역광 위험도(%)와 자외선 감소율(%)을 일관된 표준 지표로 실시간 표기**합니다.
 * **단일 경로/야간 자동 분기**: 대안 우회로가 없는 단일 최적 경로인 경우 해당 도로의 실제 그늘율/역광 지수를 표기하며, 일몰 후에는 `일몰 후 (자외선 0% 🌙)`로 자동 전환됩니다.
 * **💡 자외선 절대량이 아닌 상대적 감축률(%) 산출 배경**: 차량 유리의 종류(전면 이중접합유리, 측면 강화유리, 파노라마 선루프) 및 썬팅(틴팅) 필름의 종류·농도에 따라 탑승자 피부에 도달하는 실제 자외선 흡수량은 차량마다 크게 달라집니다. 따라서 본 시스템은 특정 차량의 개별 썬팅 상태에 구애받지 않도록 **차량 창문으로 유입되는 자연 자외선 총량을 표준 기준치(Baseline)**로 두고, 최단 경로 대비 **"자외선 노출량이 얼마나 줄어드는지(감축률 %)"**를 객관적 비교 지표로 계산합니다.
 
@@ -36,7 +43,11 @@
 * 경로 시작 시 자외선 감소 혜택에 맞추어 **`"자외선 노출을 42% 줄인 그늘 우선 경로로 안내를 시작합니다"`, `"자외선 노출을 35% 줄인 역광 회피 경로로 안내를 시작합니다"`, `"최단 시간 경로로 안내를 시작합니다"`**로 정확하게 동적 음성 안내합니다.
 * 과속 및 200m 앞 강한 역광 위험 구간 진입 시 자동차 전용 2톤 경고음(Dong-Dong)을 재생합니다.
 
-### ⚙️ 6. 기타 주행 편의 기능 (Convenience Features)
+### ⚙️ 6. 스마트 주행 편의 기능 (Smart Convenience Features)
+* **근처 5분 그늘 쉼터 / 주차장 원터치 경유지 탐색 (Shaded Rest Spot)**: 상단 헤더 원터치로 주변 그늘진 공원·주차장을 즉시 찾아 경유지로 추가하는 기능.
+* **사용자 선호 경로 자동 기억 (Smart Preference Memory)**: 마지막 주행에서 선택한 경로 모드(최단/역광회피/그늘)를 기억하여 다음 주행 시 해당 모드를 기본 안내 경로로 자동 지정.
+* **25초 자동 복귀 링 HUD (Auto-Recenter HUD)**: 주행 중 지도를 탐색하더라도 조작 중단 25초 후 차량 중심 위치로 부드럽게 자동 복귀.
+* **100% 로컬 번들링 & 완전 오프라인 지원 (Zero External CDN Dependency)**: 모든 폰트, 아이콘, 지도 렌더러가 앱 내부에 번들링되어 인터넷 연결이 불안정한 환경에서도 100% 선명하고 즉각적으로 작동.
 * **고화질 항공 위성 지도 뷰**: ESRI World Imagery 고화질 항공 위성 사진 레이어 1-터치 전환 지원.
 * **야간/터널 자동 다크모드**: 일몰 후 및 터널 진입 시 어두운 야간 내비게이션 테마로 자동 전환.
 * **무료 도로 우선 (통행료 회피)**: 고속도로 통행료를 회피하는 국도/일반도로 우선 탐색 옵션.
@@ -53,18 +64,20 @@ $$T_i = T_{\text{start}} + \left( \frac{\sum_{k=1}^{i-1} d_k + \frac{d_i}{2}}{D_
 
 * $(\theta_{s, i}, \phi_{\text{sun}, i}) = \text{SunCalc}(T_i, \text{lat}_i, \text{lng}_i)$
 
-### 2. 자외선/직사광선 수신 감소율 연산 수식
-최단 경로 대비 추천 경로의 누적 자외선 수신 감소 비율($\Delta E_{\text{UV}, \%}$):
+### 2. 자외선/직사광선 수신 감소율 연산 수식 ($\Delta E_{\text{UV}}$)
+최단 경로 대비 추천 경로의 누적 자외선 수신 감소 비율:
 
-$$\Delta E_{\text{UV}, \%} = \left( 1 - \frac{\sum_{i \in \text{추천경로}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{최단경로}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100\%$$
+$$\Delta E_{\text{UV}} = \left( 1 - \frac{\sum_{i \in \text{Alternative}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{Fastest}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100$$
 
+* $\text{Alternative}$ / $\text{Fastest}$: 추천 우회 경로 / 최단 기본 경로
 * $\theta_{s, i}$: 구간 $i$ 통과 시점의 실시간 태양 고도각 (Solar Elevation Angle at $T_i$)
 * $S_i$: 도로 구간 건물/지형 그늘 차광율 (Shade Coverage, $0.0 \sim 1.0$)
 * $\Delta t_i$: 해당 도로 구간 주행 소요 시간 (초)
 
-### 3. 전면 유리창 역광 위험도 연산 수식 (\text{GlareRisk}_i)
-$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right) \quad \left(\text{단, } |\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ \text{ 및 } 0^\circ < \theta_{s, i} < 25^\circ\right)$$
+### 3. 전면 유리창 역광 위험도 연산 수식 ($\text{GlareRisk}_i$)
+$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right)$$
 
+* **적용 조건**: 주행 방향과 태양 방위각 차이 $|\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ$ 및 태양 고도 $0^\circ < \theta_{s, i} < 25^\circ$ (조건 미충족 시 $\text{GlareRisk}_i = 0$)
 * $\phi_{\text{road}, i}$: 차량 주행 도로 방위각 / $\phi_{\text{sun}, i}$: $T_i$ 시점의 실시간 태양 방위각 (Sun Azimuth)
 
 ---
@@ -74,7 +87,8 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | 구분 | 기술 / 오픈 API 명세 |
 | :--- | :--- |
 | **Framework** | Ionic Capacitor 6 (Native Android Wrapper) |
-| **Map Rendering** | Leaflet.js 1.9.4 |
+| **Map Rendering** | Leaflet.js 1.9.4 (100% Local Bundled) |
+| **Icons & Fonts** | FontAwesome 6 (Local WebFonts Asset Packaging) |
 | **Routing Engine** | Open Source Routing Machine (`OSRM Driving API`) |
 | **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
 | **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
@@ -105,6 +119,7 @@ cmd /c "build_apk.bat"
 
 본 프로젝트는 **[Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)** 라이선스를 적용합니다.
 
+* **저작자**: **권혁재 M.D., Ph.D. (Hyeokjae Kwon, M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
 * **개인적/비상업적 목적**: 소스코드 조회, 공유, 개인적 이용 및 수정이 자유롭게 허용됩니다.
 * **상업적 이용 금지 (NonCommercial)**: 본 프로그램, 소스코드, APK 설치 파일 및 유래 파생물을 **상업적 목적(유료 판매, 광고 수익화, 기업 상용 제품 탑재 등)으로 이용하는 것은 엄격히 금지**됩니다.
 * Open Data provided by © OpenStreetMap contributors under ODbL.
@@ -116,11 +131,18 @@ cmd /c "build_apk.bat"
 [🇰🇷 한국어](#-solarless-navi---햇빛을-피하는-스마트-내비게이션-android) | [🇺🇸 English](#-solarless-navi---sun-glare--shade-aware-smart-navigation-android)
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-blue.svg?style=for-the-badge&logo=android)](https://developer.android.com)
+[![Author](https://img.shields.io/badge/Author-Hyeokjae%20Kwon%2C%20M.D.%2C%20Ph.D.-orange.svg?style=for-the-badge)](https://hyeokjaekwon26.github.io/)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-red.svg?style=for-the-badge)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 > **"Avoid blinding low-angle sun glare and drive under cool building & terrain shadows!"**
 > 
 > **SolarLess Navi** is a smart Android navigation application that calculates real-time astronomical solar positions (Azimuth & Elevation) and OpenStreetMap road vectors to route drivers along **① Shade-Priority Routes** and **② Glare-Free Avoidance Routes**.
+
+---
+
+## 👨‍💻 Developer Information
+* **Author / Developer**: **Hyeokjae Kwon, M.D., Ph.D. (권혁재 M.D., Ph.D.)**
+* **Official Website**: [https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/)
 
 ---
 
@@ -136,7 +158,7 @@ cmd /c "build_apk.bat"
 
 ### ☀️ 3. Real-Time Solar UV Exposure Reduction (%) & 4D Spatio-Temporal Simulation
 * **4D Spatio-Temporal Solar Simulation**: Dynamically computes future solar azimuth and elevation angles for each road segment at its exact projected vehicle arrival timestamp ($T_i = T_{\text{start}} + \Delta t_i$), fully modeling solar trajectory changes (~15°/hr) during long-distance trips (30m - 1hr+).
-* **Precise Relative UV Reduction**: Accurately calculates percentage reduction in cumulative UV/solar radiation exposure when choosing a shaded/glare-avoidance detour compared to the fastest baseline (e.g. `UV -42% ☂️`).
+* **Standardized Objective Metrics**: Displays **Glare Risk (%) and UV Reduction (%) consistently across all route cards** as standardized, neutral objective metrics without biased recommendation badges.
 * **Single Route & Night Mode**: Displays intrinsic shade/glare metrics if no alternative detour exists, and automatically transitions to `Night (No UV 🌙)` after sunset.
 * **💡 Rationale for Relative Reduction (%) vs. Absolute UV Dose**: The actual amount of UV radiation absorbed by an occupant's skin varies significantly depending on vehicle glass types (laminated front windshield vs. tempered side windows, sunroofs) and aftermarket window tinting films. To ensure objective, vehicle-agnostic guidance, SolarLess Navi establishes the incident solar UV radiation reaching vehicle windows as the **Standard Baseline**, and computes the **relative percentage reduction (%) in exposure** compared to the fastest baseline route rather than estimating uncertain absolute skin dosages.
 
@@ -149,7 +171,11 @@ cmd /c "build_apk.bat"
 * Announces tailored navigation prompts reflecting UV benefits ("Starting guidance on Shade-Priority Route, reducing UV exposure by 42%", "Starting guidance on Glare-Free Avoidance Route, reducing UV exposure by 35%").
 * Alerts driver with two-tone automotive chimes when approaching severe glare zones or exceeding speed limits.
 
-### ⚙️ 6. Additional Smart Convenience Features
+### ⚙️ 6. Smart Convenience Features
+* **One-Touch Shaded Rest Spot / Parking Finder**: Instantly locates nearby shaded parks, rest stops, and structures within a 5-minute radius and adds them as waypoints.
+* **Smart Route Mode Memory**: Memorizes the driver's last selected route mode (Fastest, Glare-Free, Shade) and automatically sets it as the default for subsequent trips.
+* **25s Auto-Recenter Ring HUD**: Automatically recenters the map to the vehicle position after 25 seconds of inactivity.
+* **100% Local Asset Bundling (Zero External CDN Dependency)**: All fonts, icons, and map rendering engines are locally bundled into the APK for instant, offline-reliable rendering.
 * **High-Resolution Aerial Satellite Map View**: ESRI World Imagery high-resolution aerial satellite layer toggle.
 * **Night & Tunnel Auto Dark Mode**: Automatically shifts to dark navigation theme after sunset or in tunnels.
 * **Toll-Free Preference**: Avoid toll roads and highways with dedicated routing filters.
@@ -166,16 +192,18 @@ $$T_i = T_{\text{start}} + \left( \frac{\sum_{k=1}^{i-1} d_k + \frac{d_i}{2}}{D_
 
 * $(\theta_{s, i}, \phi_{\text{sun}, i}) = \text{SunCalc}(T_i, \text{lat}_i, \text{lng}_i)$
 
-### 2. Cumulative UV Exposure Reduction Formula (\Delta E_{\text{UV}, \%})
-$$\Delta E_{\text{UV}, \%} = \left( 1 - \frac{\sum_{i \in \text{AlternativeRoute}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{FastestRoute}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100\%$$
+### 2. Cumulative UV Exposure Reduction Formula ($\Delta E_{\text{UV}}$)
+$$\Delta E_{\text{UV}} = \left( 1 - \frac{\sum_{i \in \text{Alternative}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{Fastest}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100$$
 
+* $\text{Alternative}$ / $\text{Fastest}$: Recommended Alternative Route / Baseline Fastest Route
 * $\theta_{s, i}$: Real-time Solar Elevation Angle at $T_i$
 * $S_i$: Road segment building/terrain shade coverage ($0.0 \sim 1.0$)
 * $\Delta t_i$: Travel duration on segment $i$ (seconds)
 
-### 3. Front Windshield Glare Risk Formula (\text{GlareRisk}_i)
-$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right) \quad \left(\text{where } |\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ \text{ and } 0^\circ < \theta_{s, i} < 25^\circ\right)$$
+### 3. Front Windshield Glare Risk Formula ($\text{GlareRisk}_i$)
+$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right)$$
 
+* **Conditions**: Evaluated when $|\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ$ and $0^\circ < \theta_{s, i} < 25^\circ$ (otherwise $\text{GlareRisk}_i = 0$)
 * $\phi_{\text{road}, i}$: Vehicle Road Bearing / $\phi_{\text{sun}, i}$: Solar Azimuth Angle at $T_i$
 
 ---
@@ -185,7 +213,8 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | Category | Specifications |
 | :--- | :--- |
 | **Framework** | Ionic Capacitor 6 (Native Android Wrapper) |
-| **Map Rendering** | Leaflet.js 1.9.4 |
+| **Map Rendering** | Leaflet.js 1.9.4 (100% Local Bundled) |
+| **Icons & Fonts** | FontAwesome 6 (Local WebFonts Asset Packaging) |
 | **Routing Engine** | Open Source Routing Machine (`OSRM Driving API`) |
 | **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
 | **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
@@ -211,3 +240,7 @@ The compiled APK will be generated at **`SolarLessNavi_v1.0.apk`**.
 ## 🛑 License (Non-Commercial Use Only)
 
 Distributed under **[Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)**. Commercial use, paid distribution, or monetization is strictly prohibited.
+
+* **Author**: **Hyeokjae Kwon, M.D., Ph.D. (권혁재 M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
+* **NonCommercial**: Commercial use, monetization, or selling of this application/source code is strictly prohibited.
+* Open Data provided by © OpenStreetMap contributors under ODbL.

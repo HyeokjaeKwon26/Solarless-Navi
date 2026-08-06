@@ -64,18 +64,20 @@ $$T_i = T_{\text{start}} + \left( \frac{\sum_{k=1}^{i-1} d_k + \frac{d_i}{2}}{D_
 
 * $(\theta_{s, i}, \phi_{\text{sun}, i}) = \text{SunCalc}(T_i, \text{lat}_i, \text{lng}_i)$
 
-### 2. 자외선/직사광선 수신 감소율 연산 수식
-최단 경로 대비 추천 경로의 누적 자외선 수신 감소 비율($\Delta E_{\text{UV}, \%}$):
+### 2. 자외선/직사광선 수신 감소율 연산 수식 ($\Delta E_{\text{UV}}$)
+최단 경로 대비 추천 경로의 누적 자외선 수신 감소 비율:
 
-$$\Delta E_{\text{UV}, \%} = \left( 1 - \frac{\sum_{i \in \text{추천경로}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{최단경로}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100\%$$
+$$\Delta E_{\text{UV}} = \left( 1 - \frac{\sum_{i \in \text{Alternative}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{Fastest}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100$$
 
+* $\text{Alternative}$ / $\text{Fastest}$: 추천 우회 경로 / 최단 기본 경로
 * $\theta_{s, i}$: 구간 $i$ 통과 시점의 실시간 태양 고도각 (Solar Elevation Angle at $T_i$)
 * $S_i$: 도로 구간 건물/지형 그늘 차광율 (Shade Coverage, $0.0 \sim 1.0$)
 * $\Delta t_i$: 해당 도로 구간 주행 소요 시간 (초)
 
-### 3. 전면 유리창 역광 위험도 연산 수식 (\text{GlareRisk}_i)
-$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right) \quad \left(\text{단, } |\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ \text{ 및 } 0^\circ < \theta_{s, i} < 25^\circ\right)$$
+### 3. 전면 유리창 역광 위험도 연산 수식 ($\text{GlareRisk}_i$)
+$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right)$$
 
+* **적용 조건**: 주행 방향과 태양 방위각 차이 $|\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ$ 및 태양 고도 $0^\circ < \theta_{s, i} < 25^\circ$ (조건 미충족 시 $\text{GlareRisk}_i = 0$)
 * $\phi_{\text{road}, i}$: 차량 주행 도로 방위각 / $\phi_{\text{sun}, i}$: $T_i$ 시점의 실시간 태양 방위각 (Sun Azimuth)
 
 ---
@@ -190,16 +192,18 @@ $$T_i = T_{\text{start}} + \left( \frac{\sum_{k=1}^{i-1} d_k + \frac{d_i}{2}}{D_
 
 * $(\theta_{s, i}, \phi_{\text{sun}, i}) = \text{SunCalc}(T_i, \text{lat}_i, \text{lng}_i)$
 
-### 2. Cumulative UV Exposure Reduction Formula (\Delta E_{\text{UV}, \%})
-$$\Delta E_{\text{UV}, \%} = \left( 1 - \frac{\sum_{i \in \text{AlternativeRoute}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{FastestRoute}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100\%$$
+### 2. Cumulative UV Exposure Reduction Formula ($\Delta E_{\text{UV}}$)
+$$\Delta E_{\text{UV}} = \left( 1 - \frac{\sum_{i \in \text{Alternative}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{Fastest}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100$$
 
+* $\text{Alternative}$ / $\text{Fastest}$: Recommended Alternative Route / Baseline Fastest Route
 * $\theta_{s, i}$: Real-time Solar Elevation Angle at $T_i$
 * $S_i$: Road segment building/terrain shade coverage ($0.0 \sim 1.0$)
 * $\Delta t_i$: Travel duration on segment $i$ (seconds)
 
-### 3. Front Windshield Glare Risk Formula (\text{GlareRisk}_i)
-$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right) \quad \left(\text{where } |\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ \text{ and } 0^\circ < \theta_{s, i} < 25^\circ\right)$$
+### 3. Front Windshield Glare Risk Formula ($\text{GlareRisk}_i$)
+$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right)$$
 
+* **Conditions**: Evaluated when $|\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ$ and $0^\circ < \theta_{s, i} < 25^\circ$ (otherwise $\text{GlareRisk}_i = 0$)
 * $\phi_{\text{road}, i}$: Vehicle Road Bearing / $\phi_{\text{sun}, i}$: Solar Azimuth Angle at $T_i$
 
 ---
