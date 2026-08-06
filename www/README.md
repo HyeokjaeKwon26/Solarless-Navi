@@ -115,6 +115,19 @@ cmd /c "build_apk.bat"
 
 ---
 
+## 📜 오픈소스 및 데이터 출처 고지 (Open Source Credits)
+
+본 프로젝트는 아래의 오픈소스 프로젝트 및 오픈 API를 활용하여 개발되었습니다.
+
+* **지도 데이터 및 경로 검색:** Map data © [OpenStreetMap](https://openstreetmap.org) contributors ([ODbL 라이선스](https://opendatacommons.org/licenses/odbl/) 준수)
+* **지도 렌더링 엔진:** [Leaflet.js](https://leafletjs.com/) (BSD 2-Clause 라이선스)
+* **하이브리드 앱 프레임워크:** [Ionic Capacitor](https://capacitorjs.com/) (MIT 라이선스)
+* **아이콘 및 폰트:** [FontAwesome 6](https://fontawesome.com/) (CC BY 4.0 / SIL OFL 1.1 / MIT 라이선스)
+* **위치 검색 API:** [Photon Komoot API](https://photon.komoot.io/) (Apache 2.0 라이선스) & OSM Nominatim
+* **태양 고도/방위각 계산:** [SunCalc.js](https://github.com/mourner/suncalc) (BSD 2-Clause 라이선스)
+
+---
+
 ## 🛑 라이선스 및 상업적 이용 금지 (License)
 
 본 프로젝트는 **[Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)** 라이선스를 적용합니다.
@@ -122,7 +135,6 @@ cmd /c "build_apk.bat"
 * **저작자**: **권혁재 M.D., Ph.D. (Hyeokjae Kwon, M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
 * **개인적/비상업적 목적**: 소스코드 조회, 공유, 개인적 이용 및 수정이 자유롭게 허용됩니다.
 * **상업적 이용 금지 (NonCommercial)**: 본 프로그램, 소스코드, APK 설치 파일 및 유래 파생물을 **상업적 목적(유료 판매, 광고 수익화, 기업 상용 제품 탑재 등)으로 이용하는 것은 엄격히 금지**됩니다.
-* Open Data provided by © OpenStreetMap contributors under ODbL.
 
 <br><hr><br>
 
@@ -237,10 +249,22 @@ The compiled APK will be generated at **`SolarLessNavi_v1.0.apk`**.
 
 ---
 
+## 📜 Open Source & Data Credits
+
+This project is built using the following open-source libraries and open data APIs:
+
+* **Map Data & Road Network:** Map data © [OpenStreetMap](https://openstreetmap.org) contributors ([ODbL License](https://opendatacommons.org/licenses/odbl/))
+* **Map Rendering Engine:** [Leaflet.js](https://leafletjs.com/) (BSD 2-Clause License)
+* **Hybrid App Framework:** [Ionic Capacitor](https://capacitorjs.com/) (MIT License)
+* **Icons & Web Fonts:** [FontAwesome 6](https://fontawesome.com/) (CC BY 4.0 / SIL OFL 1.1 / MIT License)
+* **Place Search & Geocoding:** [Photon by Komoot](https://photon.komoot.io/) (Apache 2.0 License) & OSM Nominatim
+* **Solar Astronomical Calculations:** [SunCalc.js](https://github.com/mourner/suncalc) (BSD 2-Clause License)
+
+---
+
 ## 🛑 License (Non-Commercial Use Only)
 
 Distributed under **[Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)**. Commercial use, paid distribution, or monetization is strictly prohibited.
 
 * **Author**: **Hyeokjae Kwon, M.D., Ph.D. (권혁재 M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
 * **NonCommercial**: Commercial use, monetization, or selling of this application/source code is strictly prohibited.
-* Open Data provided by © OpenStreetMap contributors under ODbL.
