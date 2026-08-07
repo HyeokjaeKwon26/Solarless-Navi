@@ -216,6 +216,49 @@
                 </div>
             </div>
 
+            <!-- Arrival Destination Summary Modal Overlay (Z-Index 9500) -->
+            <div class="start-search-overlay hidden" id="arrival-modal">
+                <div class="start-search-card arrival-card">
+                    <div class="start-card-title">
+                        <div class="arrival-badge-icon">
+                            <i class="fa-solid fa-flag-checkered"></i>
+                        </div>
+                        <div>
+                            <h2 id="arrival-modal-title">🏁 목적지 부근에 도착했습니다!</h2>
+                            <p id="arrival-modal-sub">안전하게 목적지에 도달하여 안내를 마칩니다.</p>
+                        </div>
+                    </div>
+
+                    <div class="arrival-dest-banner">
+                        <i class="fa-solid fa-location-dot" style="color: #38bdf8;"></i>
+                        <span id="arrival-dest-name">목적지</span>
+                    </div>
+
+                    <div class="arrival-stats-grid">
+                        <div class="arrival-stat-box">
+                            <span class="lbl" id="arrival-lbl-time">주행 시간</span>
+                            <span class="val" id="arrival-val-time">-- 분</span>
+                        </div>
+                        <div class="arrival-stat-box">
+                            <span class="lbl" id="arrival-lbl-dist">주행 거리</span>
+                            <span class="val" id="arrival-val-dist">-- km</span>
+                        </div>
+                        <div class="arrival-stat-box">
+                            <span class="lbl" id="arrival-lbl-mode">선택 경로 모드</span>
+                            <span class="val highlight" id="arrival-val-mode">그늘 우선</span>
+                        </div>
+                        <div class="arrival-stat-box">
+                            <span class="lbl" id="arrival-lbl-score">쾌적도 보호</span>
+                            <span class="val comfort" id="arrival-val-score">자외선 차단 완료</span>
+                        </div>
+                    </div>
+
+                    <button type="button" class="confirm-start-btn" id="btn-close-arrival-modal" style="background: linear-gradient(135deg, #10b981, #059669); margin-top: 14px;">
+                        <i class="fa-solid fa-check"></i> <span id="arrival-btn-confirm-text">안내 종료 확인</span>
+                    </button>
+                </div>
+            </div>
+
             <!-- Left/Bottom Panel Controls & HUD -->
             <aside class="sidebar-panel" id="sidebar-panel">
                 <!-- Mobile Swipe-Down Drag Handle Bar -->
@@ -263,8 +306,16 @@
                                 <span class="slider"></span>
                             </label>
                         </div>
+                    </div>
+                </div>
 
-                        <div class="option-row" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(255, 255, 255, 0.1);">
+                <!-- Map Layers & Styles Sub-Card -->
+                <div class="card settings-card" style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(255, 255, 255, 0.08);">
+                    <div class="card-header" style="border-bottom: 1px solid rgba(255, 255, 255, 0.06); padding-bottom: 8px;">
+                        <h3 id="map-layer-subtitle" style="font-size: 13.5px; color: #94a3b8;"><i class="fa-solid fa-layer-group"></i> 지도 레이어 하위 설정</h3>
+                    </div>
+                    <div class="card-body" style="padding-top: 10px;">
+                        <div class="option-row">
                             <div class="option-label-group">
                                 <span class="option-title" id="satellite-title">🛰️ 위성 사진 지도 뷰</span>
                                 <span class="option-desc" id="satellite-desc">고화질 항공/위성 사진 리얼 타일 지도</span>
@@ -411,7 +462,7 @@
             </aside>
 
             <!-- 2D Map View Column -->
-            <main class="map-container" id="map-perspective-wrapper">
+            <main class="map-container heading-up-active" id="map-perspective-wrapper">
                 <!-- Top Floating Destination Bar on Map -->
                 <div class="map-top-bar" id="map-top-bar">
                     <div class="bar-route-text" id="bar-route-summary">
@@ -486,7 +537,7 @@
                     </button>
 
                     <!-- Compass Mode Toggle Button (Heading-Up vs North-Up) -->
-                    <button class="map-floating-btn compass-btn" id="btn-toggle-compass" title="방위 모드 변경 (주행 방향 / 북쪽 정렬)">
+                    <button class="map-floating-btn compass-btn heading-up" id="btn-toggle-compass" title="방위 모드 변경 (주행 방향 / 북쪽 정렬)">
                         <i class="fa-solid fa-compass" id="compass-btn-icon"></i>
                         <span class="compass-mode-tag" id="compass-mode-tag">주행방향</span>
                     </button>

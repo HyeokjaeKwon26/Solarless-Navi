@@ -57,12 +57,14 @@ window.ShadowRouter = (function () {
 
     function snapPositionAndHeadingToRoad(carLat, carLng, rawHeading, coordinates) {
         if (!coordinates || coordinates.length < 2) {
-            return { lat: carLat, lng: carLng, heading: rawHeading, isSnapped: false };
+            return { lat: carLat, lng: carLng, heading: rawHeading, isSnapped: false, segmentIndex: 0, t: 0, distMeters: 0 };
         }
 
         let minDistance = Infinity;
         let bestSnappedPoint = { lat: carLat, lng: carLng };
         let bestRoadBearing = rawHeading;
+        let bestIndex = 0;
+        let bestT = 0;
 
         for (let i = 0; i < coordinates.length - 1; i++) {
             const aLat = coordinates[i][1];
@@ -88,10 +90,12 @@ window.ShadowRouter = (function () {
                 minDistance = distMeters;
                 bestSnappedPoint = { lat: projLat, lng: projLng };
                 bestRoadBearing = calculateBearing(aLat, aLng, bLat, bLng);
+                bestIndex = i;
+                bestT = t;
             }
         }
 
-        if (minDistance <= 30) {
+        if (minDistance <= 40) {
             let angleDiff = Math.abs(rawHeading - bestRoadBearing);
             if (angleDiff > 180) angleDiff = 360 - angleDiff;
             const finalHeading = (angleDiff < 75 || rawHeading === 0) ? bestRoadBearing : rawHeading;
@@ -101,11 +105,31 @@ window.ShadowRouter = (function () {
                 lng: bestSnappedPoint.lng,
                 heading: finalHeading,
                 isSnapped: true,
-                distMeters: minDistance
+                distMeters: minDistance,
+                segmentIndex: bestIndex,
+                t: bestT
             };
         }
 
-        return { lat: carLat, lng: carLng, heading: rawHeading, isSnapped: false, distMeters: minDistance };
+        return { lat: carLat, lng: carLng, heading: rawHeading, isSnapped: false, distMeters: minDistance, segmentIndex: bestIndex, t: bestT };
+    }
+
+    function calculateRemainingRouteDistance(carLat, carLng, coordinates, segmentIndex) {
+        if (!coordinates || coordinates.length < 2) return 0;
+        let total = 0;
+        const startIndex = Math.max(0, Math.min(coordinates.length - 2, segmentIndex || 0));
+
+        // Distance from current position to next route waypoint
+        total += calculateDistanceMeters(carLat, carLng, coordinates[startIndex + 1][1], coordinates[startIndex + 1][0]);
+
+        // Remaining route segments to destination
+        for (let i = startIndex + 1; i < coordinates.length - 1; i++) {
+            total += calculateDistanceMeters(
+                coordinates[i][1], coordinates[i][0],
+                coordinates[i + 1][1], coordinates[i + 1][0]
+            );
+        }
+        return total;
     }
 
     function snapHeadingToRoad(carLat, carLng, rawHeading, coordinates) {
@@ -425,8 +449,11 @@ window.ShadowRouter = (function () {
         distanceToRoute: distanceToRoute,
         snapHeadingToRoad: snapHeadingToRoad,
         snapPositionAndHeadingToRoad: snapPositionAndHeadingToRoad,
+        calculateRemainingRouteDistance: calculateRemainingRouteDistance,
         calculateSegmentGlare: calculateSegmentGlare,
+        estimateSegmentShade: estimateSegmentShade,
         calculateSolarUvIntensity: calculateSolarUvIntensity,
+        analyzeRouteSegments: analyzeRouteSegments,
         fetchAndAnalyzeRoutes: fetchAndAnalyzeRoutes
     };
 })();

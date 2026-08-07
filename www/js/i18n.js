@@ -81,7 +81,8 @@ window.I18n = (function () {
             recenterToastSub: "3초 후 차량 위치 중심으로 자동 복귀합니다.",
             recenterNow: "지금 복귀",
             compassHeading: "주행방향",
-            compassNorth: "북쪽정렬",
+            compassNorth: "북쪽고정",
+            mapLayerSubtitle: "🗺️ 지도 레이어 하위 설정",
             rerouteConfirm: "🔄 선택하신 경로로 변경하여 재안내를 시작하시겠습니까?",
             rerouteBtn: "선택한 경로로 재안내",
             updateTitle: "🚀 최신 버전 업데이트 안내",
@@ -102,11 +103,16 @@ window.I18n = (function () {
             roadBadgeHighway: "고속도로",
             roadBadgeToll: "유료",
             roadBadgeTollbooth: "요금소",
-            shadedRestBtnText: "그늘 쉼터",
-            timeLive: "실시간 (Live)",
-            etaPlaceholder: "⏱️ --분",
             bannerDistPlaceholder: "--m 앞",
-            titleUseGps: "내 GPS 위치로 재설정"
+            titleUseGps: "내 GPS 위치로 재설정",
+            arrivalTitle: "🏁 목적지 부근에 도착했습니다!",
+            arrivalSub: "안전하게 목적지에 도달하여 안내를 마칩니다.",
+            arrivalLblTime: "주행 시간",
+            arrivalLblDist: "주행 거리",
+            arrivalLblMode: "선택 경로 모드",
+            arrivalLblScore: "쾌적도 보호",
+            arrivalScoreComfort: "자외선/눈부심 차단 완료 ✨",
+            arrivalBtnConfirm: "안내 종료 확인"
         },
         'en-US': {
             docTitle: "SolarLess Navi | Smart Solar-Glare Avoidance Navigation",
@@ -175,6 +181,7 @@ window.I18n = (function () {
             recenterNow: "Recenter Now",
             compassHeading: "HEADING-UP",
             compassNorth: "NORTH-UP",
+            mapLayerSubtitle: "🗺️ Map Layer Settings",
             rerouteConfirm: "🔄 Change navigation guidance to the selected route?",
             rerouteBtn: "Reroute to Selected",
             updateTitle: "🚀 New Version Available",
@@ -195,11 +202,16 @@ window.I18n = (function () {
             roadBadgeHighway: "Highway",
             roadBadgeToll: "Toll",
             roadBadgeTollbooth: "Toll Booth",
-            shadedRestBtnText: "Shaded Rest",
-            timeLive: "Live (Real-Time)",
-            etaPlaceholder: "⏱️ -- min",
             bannerDistPlaceholder: "--m ahead",
-            titleUseGps: "Reset to My GPS Location"
+            titleUseGps: "Reset to My GPS Location",
+            arrivalTitle: "🏁 Arrived at Destination!",
+            arrivalSub: "You have arrived safely. Guidance completed.",
+            arrivalLblTime: "Trip Time",
+            arrivalLblDist: "Distance",
+            arrivalLblMode: "Selected Route",
+            arrivalLblScore: "Comfort Level",
+            arrivalScoreComfort: "UV & Glare Shielded ✨",
+            arrivalBtnConfirm: "End Guidance"
         }
     };
 
@@ -282,6 +294,7 @@ window.I18n = (function () {
         setElemText('toll-free-desc', dict.tollFreeDesc);
         setElemText('satellite-title', dict.satelliteTitle);
         setElemText('satellite-desc', dict.satelliteDesc);
+        setElemText('map-layer-subtitle', dict.mapLayerSubtitle);
         setElemText('btn-about-app', dict.aboutAppBtn);
 
         setElemHtml('time-card-title', `<i class="fa-solid fa-clock"></i> ${dict.timeCardTitle}`);
@@ -344,6 +357,15 @@ window.I18n = (function () {
         setElemText('update-info-msg', dict.updateMsg);
         setElemText('update-download-btn-text', dict.updateDownloadBtn);
         setElemText('update-later-btn-text', dict.updateLaterBtn);
+
+        setElemText('arrival-modal-title', dict.arrivalTitle);
+        setElemText('arrival-modal-sub', dict.arrivalSub);
+        setElemText('arrival-lbl-time', dict.arrivalLblTime);
+        setElemText('arrival-lbl-dist', dict.arrivalLblDist);
+        setElemText('arrival-lbl-mode', dict.arrivalLblMode);
+        setElemText('arrival-lbl-score', dict.arrivalLblScore);
+        setElemText('arrival-val-score', dict.arrivalScoreComfort);
+        setElemText('arrival-btn-confirm-text', dict.arrivalBtnConfirm);
 
         const compassTag = document.getElementById('compass-mode-tag');
         if (compassTag) {

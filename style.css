@@ -492,17 +492,40 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 .sim-btn.reset { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }
 
 /* 2D Map View Container & Rotation Bounds Fix */
-.map-container { flex: 1; position: relative; overflow: hidden; }
+.map-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+}
 
 #map {
-    width: 100%; height: 100%; background: #f1f5f9;
-    transform-origin: center center; transition: transform 0.3s ease;
+    width: 100%;
+    height: 100%;
+    background: #f1f5f9;
+    transform-origin: 50% 50%;
+    transition: transform 0.12s linear;
 }
 
 /* Expanded Map Container when Heading-Up mode is active so tile edges/corners are never cut off */
 .map-container.heading-up-active #map {
-    width: 170%; height: 170%;
-    position: absolute; top: -35%; left: -35%;
+    width: 250vmax;
+    height: 250vmax;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    margin-top: -125vmax;
+    margin-left: -125vmax;
+    transform-origin: 50% 50%;
+}
+
+/* Counter-rotate map markers and icons so text & icons always stay upright (0deg relative to screen) in Heading-Up mode */
+.heading-up-active .custom-map-marker,
+.heading-up-active .leaflet-popup-content-wrapper,
+.heading-up-active .leaflet-tooltip {
+    transform: rotate(var(--map-counter-rotation, 0deg));
+    transition: transform 0.12s linear;
 }
 
 /* Bottom-Left Speedometer HUD & Country Sign Badges */
@@ -602,24 +625,47 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 .speed-unit { font-family: var(--font-mono); font-size: 11px; font-weight: 800; color: #cbd5e1; text-shadow: 0 2px 6px rgba(0,0,0,0.9); }
 
 /* Dynamic Automotive Vehicle Location Pointer Marker on Map */
-.vehicle-marker-container {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(2, 132, 199, 0.4) 0%, rgba(2, 132, 199, 0.05) 70%);
-    border: 2px solid #0284c7;
-    box-shadow: 0 0 25px rgba(2, 132, 199, 0.8);
+.custom-vehicle-marker {
+    background: transparent !important;
+    border: none !important;
+}
+.vehicle-marker-wrapper {
+    position: relative;
+    width: 48px;
+    height: 48px;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform 0.2s ease-out;
+    pointer-events: none;
 }
-
-.vehicle-arrow-icon {
-    font-size: 22px;
-    color: #0284c7;
-    filter: drop-shadow(0 0 6px rgba(2, 132, 199, 0.6));
-    transform-origin: center;
+.vehicle-radar-cone {
+    position: absolute;
+    top: -24px;
+    left: 4px;
+    width: 40px;
+    height: 48px;
+    background: radial-gradient(circle at 50% 100%, rgba(56, 189, 248, 0.45) 0%, rgba(56, 189, 248, 0) 75%);
+    clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+    pointer-events: none;
+}
+.vehicle-marker-core {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #0284c7 0%, #0369a1 70%);
+    border: 2.5px solid #ffffff;
+    box-shadow: 0 0 18px rgba(2, 132, 199, 0.95), 0 2px 8px rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    z-index: 2;
+}
+.vehicle-svg-arrow {
+    width: 20px;
+    height: 20px;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
+    display: block;
 }
 
 .map-top-bar {
@@ -852,3 +898,63 @@ body.battery-saver-active .route-summary-floating {
     .mobile-toggle-btn { width: 28px; height: 28px; font-size: 13px; }
     .stat-val { font-size: 10px; }
 }
+
+/* Arrival Destination Summary Card Modal */
+.arrival-card {
+    border: 2px solid #10b981 !important;
+    background: linear-gradient(180deg, #091e17 0%, #0f172a 100%) !important;
+    box-shadow: 0 20px 50px rgba(16, 185, 129, 0.3) !important;
+}
+.arrival-badge-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    box-shadow: 0 0 16px rgba(16, 185, 129, 0.6);
+}
+.arrival-dest-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin: 14px 0 10px 0;
+}
+.arrival-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin: 10px 0 14px 0;
+}
+.arrival-stat-box {
+    background: rgba(30, 41, 59, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 10px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.arrival-stat-box .lbl {
+    font-size: 11px;
+    color: #94a3b8;
+    font-weight: 600;
+}
+.arrival-stat-box .val {
+    font-size: 15px;
+    color: #f8fafc;
+    font-weight: 800;
+    font-family: var(--font-heading);
+}
+.arrival-stat-box .val.highlight { color: #38bdf8; }
+.arrival-stat-box .val.comfort { color: #34d399; }

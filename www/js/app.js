@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const nowD = new Date();
     let selectedTimeMinutes = nowD.getHours() * 60 + nowD.getMinutes();
 
-    let compassMode = 'heading-up'; // 'heading-up' | 'north-up'
+    let compassMode = 'heading-up'; // 'heading-up' (standard default for vehicle navigation) | 'north-up'
     let isAutoDarkModeEnabled = true;
     let isTollFreeOnly = false;
     let isSatelliteViewActive = false;
@@ -1130,17 +1130,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 currentHeading = currentSmoothHeading;
 
+                const vehicleMarkerRotation = currentSmoothHeading;
+
                 const vehicleIconHtml = `
-                    <div class="vehicle-marker-container">
-                        <i class="fa-solid fa-location-arrow vehicle-arrow-icon" style="transform: rotate(${currentSmoothHeading}deg);"></i>
+                    <div class="vehicle-marker-wrapper">
+                        <div class="vehicle-radar-cone" style="transform: rotate(${vehicleMarkerRotation}deg); transform-origin: 50% 100%;"></div>
+                        <div class="vehicle-marker-core" style="transform: rotate(${vehicleMarkerRotation}deg);">
+                            <svg class="vehicle-svg-arrow" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="#ffffff" stroke="#0369a1" stroke-width="1.5" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
                     </div>
                 `;
 
                 const vehicleIcon = L.divIcon({
                     className: 'custom-vehicle-marker',
                     html: vehicleIconHtml,
-                    iconSize: [44, 44],
-                    iconAnchor: [22, 22]
+                    iconSize: [48, 48],
+                    iconAnchor: [24, 24]
                 });
 
                 if (startMarker) {
@@ -1154,7 +1161,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (carArrow) carArrow.style.transform = `translate(-50%, -50%) rotate(${currentSmoothHeading}deg)`;
 
                 if (isLiveNavActive && !isUserMapPanning && map) {
-                    map.setView([currentSmoothLat, currentSmoothLng], 17, { animate: false });
+                    map.setView([currentSmoothLat, currentSmoothLng], 17.5, { animate: false });
                     applyMapRotation(currentSmoothHeading);
                 }
             }
@@ -1165,8 +1172,66 @@ document.addEventListener('DOMContentLoaded', () => {
         vehicleAnimFrameId = requestAnimationFrame(animateFrame);
     }
 
+    function renderDynamicRemainingPath(carLat, carLng, carHeading) {
+        if (!selectedRouteObj || !selectedRouteObj.analyzed || !selectedRouteObj.analyzed.segments || !activeRoutePolylineGroup) {
+            return;
+        }
+
+        const coords = selectedRouteObj.analyzed.coordinates;
+        const snap = ShadowRouter.snapPositionAndHeadingToRoad(carLat, carLng, carHeading, coords);
+        const segIdx = Math.max(0, Math.min(selectedRouteObj.analyzed.segments.length - 1, snap.segmentIndex || 0));
+        const segments = selectedRouteObj.analyzed.segments;
+
+        activeRoutePolylineGroup.clearLayers();
+
+        // 1. Current segment (from vehicle snapped position to end of this segment)
+        if (segIdx < segments.length) {
+            const curSeg = segments[segIdx];
+            let curColor = '#0284c7';
+            if (curSeg.glareRisk > 0.45) curColor = '#f59e0b';
+            else if (curSeg.shadeScore > 0.5) curColor = '#7c3aed';
+
+            L.polyline([[snap.lat, snap.lng], curSeg.p2], {
+                color: curColor,
+                weight: 8,
+                opacity: 0.95,
+                lineCap: 'round',
+                lineJoin: 'round'
+            }).addTo(activeRoutePolylineGroup);
+        }
+
+        // 2. All remaining forward segments to destination
+        for (let i = segIdx + 1; i < segments.length; i++) {
+            const seg = segments[i];
+            let segColor = '#0284c7';
+            if (seg.glareRisk > 0.45) segColor = '#f59e0b';
+            else if (seg.shadeScore > 0.5) segColor = '#7c3aed';
+
+            L.polyline([seg.p1, seg.p2], {
+                color: segColor,
+                weight: 8,
+                opacity: 0.95,
+                lineCap: 'round',
+                lineJoin: 'round'
+            }).addTo(activeRoutePolylineGroup);
+        }
+
+        // 3. Dynamic remaining distance and ETA calculation
+        const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(snap.lat, snap.lng, coords, segIdx);
+        const totalDist = selectedRouteObj.distanceMeters || 1;
+        const remSec = Math.max(30, Math.round((remDistMeters / totalDist) * selectedRouteObj.durationSec));
+        const isKo = I18n.getLanguage().startsWith('ko');
+        const durMin = Math.max(1, Math.round(remSec / 60));
+        const distKm = (remDistMeters / 1000).toFixed(1);
+
+        const sumTimeEl = document.getElementById('sum-time');
+        const sumDistEl = document.getElementById('sum-dist');
+        if (sumTimeEl) sumTimeEl.innerText = `${durMin}${isKo ? '분' : 'm'}`;
+        if (sumDistEl) sumDistEl.innerText = `${distKm} km`;
+    }
+
     function updateVehicleMarkerPosition(lat, lng, heading = 0) {
-        let snapResult = { lat, lng, heading, isSnapped: false };
+        let snapResult = { lat, lng, heading, isSnapped: false, segmentIndex: 0 };
 
         if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
             snapResult = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, selectedRouteObj.analyzed.coordinates);
@@ -1177,6 +1242,10 @@ document.addEventListener('DOMContentLoaded', () => {
         targetSnapHeading = snapResult.heading;
 
         startVehicleMarkerAnimationLoop();
+
+        if (isLiveNavActive && selectedRouteObj) {
+            renderDynamicRemainingPath(snapResult.lat, snapResult.lng, snapResult.heading);
+        }
     }
 
     function toggleCompassMode() {
@@ -1187,15 +1256,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (compassMode === 'heading-up') {
             compassMode = 'north-up';
             if (btn) btn.classList.remove('heading-up');
-            if (tag) tag.innerText = isKo ? "북쪽정렬" : "NORTH-UP";
+            if (tag) tag.innerText = isKo ? "북쪽고정" : "NORTH-UP";
             applyMapRotation(0);
-            TTSVoice.speak(isKo ? "북쪽 정렬 모드입니다." : "North-up mode activated.");
+            TTSVoice.speak(isKo ? "북쪽 고정 모드입니다." : "North-up mode activated.");
         } else {
             compassMode = 'heading-up';
             if (btn) btn.classList.add('heading-up');
             if (tag) tag.innerText = isKo ? "주행방향" : "HEADING-UP";
             applyMapRotation(currentHeading);
-            TTSVoice.speak(isKo ? "주행 방향 정렬 모드입니다." : "Heading-up mode activated.");
+            TTSVoice.speak(isKo ? "주행 방향 모드입니다." : "Heading-up mode activated.");
         }
     }
 
@@ -1205,15 +1274,23 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!mapElement || !mapWrapper) return;
 
         if (compassMode === 'heading-up' && heading !== undefined) {
-            mapWrapper.classList.add('heading-up-active');
-            // Rotation deadband filter: Only update DOM transform if angular delta is >= 2.0 degrees
-            if (lastAppliedMapRotation === null || Math.abs(((heading - lastAppliedMapRotation + 540) % 360) - 180) >= 2.0) {
+            if (!mapWrapper.classList.contains('heading-up-active')) {
+                mapWrapper.classList.add('heading-up-active');
+                if (map) map.invalidateSize();
+            }
+            // Rotation deadband filter: Only update DOM transform if angular delta is >= 1.0 degrees
+            if (lastAppliedMapRotation === null || Math.abs(((heading - lastAppliedMapRotation + 540) % 360) - 180) >= 1.0) {
                 lastAppliedMapRotation = heading;
                 mapElement.style.transform = `rotate(${-heading}deg)`;
+                mapWrapper.style.setProperty('--map-counter-rotation', `${heading}deg`);
             }
         } else {
-            mapWrapper.classList.remove('heading-up-active');
+            if (mapWrapper.classList.contains('heading-up-active')) {
+                mapWrapper.classList.remove('heading-up-active');
+                if (map) map.invalidateSize();
+            }
             mapElement.style.transform = 'none';
+            mapWrapper.style.setProperty('--map-counter-rotation', '0deg');
             lastAppliedMapRotation = null;
         }
     }
@@ -1355,7 +1432,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return sunPos;
     }
 
-    async function updateRoute() {
+    async function updateRoute(isMidDrive = false) {
         if (!currentEnd) return;
 
         const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
@@ -1378,9 +1455,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         selectedRouteObj = routeData.routes[currentMode] || routeData.routes.glareFree;
 
-        renderMapMarkersAndPolyline(selectedRouteObj);
+        renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
         updateSummaryBox(selectedRouteObj);
         updateHUDWithRoute(selectedRouteObj, sunPos);
+
+        if (isMidDrive || isLiveNavActive) {
+            if (currentStart) {
+                updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
+                if (!isUserMapPanning && map) {
+                    map.setView([currentStart.lat, currentStart.lng], 17.5, { animate: true });
+                }
+            }
+        }
     }
 
     function updateRouteOptionButtons(routeData) {
@@ -1479,8 +1565,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function renderMapMarkersAndPolyline(selectedRouteObj) {
-        activeRoutePolylineGroup.clearLayers();
+    function renderMapMarkersAndPolyline(selectedRouteObj, isLiveDrive = false) {
+        if (!selectedRouteObj || !selectedRouteObj.analyzed || !selectedRouteObj.analyzed.coordinates) return;
+
+        if (activeRoutePolylineGroup) {
+            activeRoutePolylineGroup.clearLayers();
+        } else {
+            activeRoutePolylineGroup = L.featureGroup().addTo(map);
+        }
 
         const endIcon = L.divIcon({
             className: 'custom-map-marker end',
@@ -1494,17 +1586,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
 
-        routeData.routes.all.forEach(rt => {
-            if (rt !== selectedRouteObj) {
-                const inactiveCoords = rt.analyzed.coordinates.map(c => [c[1], c[0]]);
-                L.polyline(inactiveCoords, {
-                    color: '#64748b',
-                    weight: 5,
-                    opacity: 0.5,
-                    dashArray: '6, 8'
-                }).addTo(activeRoutePolylineGroup);
-            }
-        });
+        if (!isLiveDrive && routeData && routeData.routes && routeData.routes.all) {
+            routeData.routes.all.forEach(rt => {
+                if (rt !== selectedRouteObj && rt.analyzed && rt.analyzed.coordinates) {
+                    const inactiveCoords = rt.analyzed.coordinates.map(c => [c[1], c[0]]);
+                    L.polyline(inactiveCoords, {
+                        color: '#64748b',
+                        weight: 5,
+                        opacity: 0.5,
+                        dashArray: '6, 8'
+                    }).addTo(activeRoutePolylineGroup);
+                }
+            });
+        }
 
         const segments = selectedRouteObj.analyzed.segments;
         if (segments) {
@@ -1523,8 +1617,11 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        const allCoords = selectedRouteObj.analyzed.coordinates.map(c => [c[1], c[0]]);
-        map.fitBounds(L.polyline(allCoords).getBounds(), { padding: [40, 40] });
+        // Camera auto-framing: only fit bounds when planning/previewing route, NOT when actively navigating
+        if (!isLiveDrive && !isLiveNavActive) {
+            const allCoords = selectedRouteObj.analyzed.coordinates.map(c => [c[1], c[0]]);
+            map.fitBounds(L.polyline(allCoords).getBounds(), { padding: [40, 40] });
+        }
     }
 
     /* CLEAR ALL MAP POLYLINES, DESTINATION MARKERS, & BANNER WHEN GUIDANCE ENDS */
@@ -1841,6 +1938,53 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
+        if (gpsWatchId) navigator.geolocation.clearWatch(gpsWatchId);
+        gpsWatchId = null;
+        isLiveNavActive = false;
+
+        const isKo = I18n.getLanguage().startsWith('ko');
+        TTSVoice.speak(isKo ? "목적지 부근에 도착했습니다. 안내를 종료합니다." : "You have arrived at your destination. Navigation guidance completed.", true);
+
+        const durTotalMin = Math.max(1, Math.round((Date.now() - (navStartTime || Date.now())) / 60000));
+        const distTotalKm = ((navStartDistanceMeters || 0) / 1000).toFixed(1);
+
+        const destNameEl = document.getElementById('arrival-dest-name');
+        if (destNameEl) destNameEl.innerText = destinationName || (isKo ? "목적지" : "Destination");
+
+        const timeValEl = document.getElementById('arrival-val-time');
+        if (timeValEl) timeValEl.innerText = `${durTotalMin} ${isKo ? '분' : 'min'}`;
+
+        const distValEl = document.getElementById('arrival-val-dist');
+        if (distValEl) distValEl.innerText = `${distTotalKm} km`;
+
+        const modeValEl = document.getElementById('arrival-val-mode');
+        if (modeValEl) {
+            if (currentMode === 'glareFree') modeValEl.innerText = isKo ? "역광 회피 (눈부심 차단)" : "Glare-Free";
+            else if (currentMode === 'shade') modeValEl.innerText = isKo ? "그늘·구조물 우선" : "Shade Priority";
+            else modeValEl.innerText = isKo ? "최단 시간" : "Fastest";
+        }
+
+        const arrivalModal = document.getElementById('arrival-modal');
+        if (arrivalModal) arrivalModal.classList.remove('hidden');
+
+        const liveNavBtn = document.getElementById('live-gps-nav-btn');
+        const directMapNavBtn = document.getElementById('btn-map-start-nav');
+        if (liveNavBtn) {
+            liveNavBtn.innerHTML = `<i class="fa-solid fa-location-arrow"></i> ${I18n.getText('liveNavStart')}`;
+            liveNavBtn.classList.remove('active', 'reroute-mode');
+        }
+        if (directMapNavBtn) {
+            directMapNavBtn.innerHTML = `<i class="fa-solid fa-play"></i> ${I18n.getText('mapStartNav')}`;
+            directMapNavBtn.classList.remove('active', 'reroute-mode');
+        }
+
+        disableKeepAwake();
+        applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
+        clearRouteFromMap();
+        recenterMapToVehicle();
+    }
+
     function toggleLiveGpsNavigation() {
         const btn = document.getElementById('live-gps-nav-btn');
         const directMapBtn = document.getElementById('btn-map-start-nav');
@@ -1848,6 +1992,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isLiveNavActive) {
             if (gpsWatchId) navigator.geolocation.clearWatch(gpsWatchId);
+            gpsWatchId = null;
             isLiveNavActive = false;
             recenterMapToVehicle();
 
@@ -1863,7 +2008,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 directMapBtn.classList.remove('active', 'reroute-mode');
             }
             disableKeepAwake();
-            applyMapRotation(0);
+            applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
             TTSVoice.speak(isKo ? "안내를 종료합니다." : "Ending navigation guidance.");
             return;
         }
@@ -1881,6 +2026,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         isLiveNavActive = true;
         recenterMapToVehicle();
+
+        const navStartTime = Date.now();
+        const navStartDistanceMeters = selectedRouteObj ? (selectedRouteObj.distanceMeters || 0) : 0;
+        let isArrived = false;
+        let consecutiveOffRouteCount = 0;
 
         if (btn) {
             btn.innerHTML = `<i class="fa-solid fa-square"></i> ${I18n.getText('liveNavStop')}`;
@@ -1905,10 +2055,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         gpsWatchId = navigator.geolocation.watchPosition(
             (pos) => {
+                if (isArrived) return;
+
                 const lat = pos.coords.latitude;
                 const lng = pos.coords.longitude;
                 const rawSpeedKmh = (pos.coords.speed !== null && !isNaN(pos.coords.speed) && pos.coords.speed > 0) ? (pos.coords.speed * 3.6) : 0;
                 const hasHwHeading = (pos.coords.heading !== null && !isNaN(pos.coords.heading) && pos.coords.heading >= 0);
+
+                // CRITICAL FOR DYNAMIC ROUTING: Keep currentStart synced to vehicle's actual coordinates!
+                currentStart = { lat, lng };
 
                 setGpsStatusIndicator(false, true);
                 updateGpsSpeedometer(pos);
@@ -1943,38 +2098,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 lastGpsPosition = { lat, lng };
                 lastGpsTimestamp = pos.timestamp;
-                // 1. Destination Arrival Proximity Check (within 35m)
-                if (isLiveNavActive && currentEnd) {
+
+                // 1. Destination Arrival Multi-Tier Proximity Check
+                if (isLiveNavActive && currentEnd && !isArrived) {
                     const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, currentEnd.lat, currentEnd.lng);
-                    if (distToDest <= 35) {
-                        TTSVoice.speak(isKo ? "목적지 부근에 도착했습니다. 안내를 종료합니다." : "You have arrived at your destination. Ending navigation guidance.", true);
-                        if (gpsWatchId) navigator.geolocation.clearWatch(gpsWatchId);
-                        isLiveNavActive = false;
-                        recenterMapToVehicle();
-                        clearRouteFromMap();
-                        const liveNavBtn = document.getElementById('live-gps-nav-btn');
-                        const directMapNavBtn = document.getElementById('btn-map-start-nav');
-                        if (liveNavBtn) {
-                            liveNavBtn.innerHTML = `<i class="fa-solid fa-location-arrow"></i> ${I18n.getText('liveNavStart')}`;
-                            liveNavBtn.classList.remove('active', 'reroute-mode');
+                    let isNearEndSegment = false;
+                    if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
+                        const coords = selectedRouteObj.analyzed.coordinates;
+                        const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, coords);
+                        if (snap.segmentIndex >= Math.max(0, coords.length - 3)) {
+                            isNearEndSegment = true;
                         }
-                        if (directMapNavBtn) {
-                            directMapNavBtn.innerHTML = `<i class="fa-solid fa-play"></i> ${I18n.getText('mapStartNav')}`;
-                            directMapNavBtn.classList.remove('active', 'reroute-mode');
-                        }
-                        disableKeepAwake();
-                        applyMapRotation(0);
+                    }
+
+                    if (distToDest <= 55 || (isNearEndSegment && distToDest <= 80 && rawSpeedKmh < 30)) {
+                        isArrived = true;
+                        handleDestinationArrival(navStartTime, navStartDistanceMeters);
                         return;
                     }
                 }
 
-                if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
+                // 2. Off-Route Detection & Auto Recalculation from Vehicle's Current Position
+                if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates && !isArrived) {
                     const offRouteDist = ShadowRouter.distanceToRoute(lat, lng, selectedRouteObj.analyzed.coordinates);
                     const now = Date.now();
-                    if (offRouteDist > 45 && (now - lastRerouteTime) > 10000) {
+
+                    if (offRouteDist > 45) {
+                        consecutiveOffRouteCount++;
+                    } else {
+                        consecutiveOffRouteCount = 0;
+                    }
+
+                    if ((consecutiveOffRouteCount >= 2 || offRouteDist > 65) && (now - lastRerouteTime) > 8000) {
                         lastRerouteTime = now;
+                        consecutiveOffRouteCount = 0;
                         TTSVoice.speak(isKo ? "경로를 이탈했습니다. 현재 위치에서 새로 탐색합니다." : "Off route. Recalculating from current position.", true);
-                        updateRoute();
+                        updateRoute(true);
                         return;
                     }
                 }
@@ -1982,8 +2141,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateVehicleMarkerPosition(lat, lng, heading);
 
                 // Only center map on vehicle if user is NOT panning manually!
-                if (!isUserMapPanning) {
-                    map.setView([lat, lng], 17, { animate: true });
+                if (!isUserMapPanning && !isArrived) {
+                    map.setView([lat, lng], 17.5, { animate: true });
                     applyMapRotation(currentHeading);
                 }
 
@@ -2005,6 +2164,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('btn-use-gps').addEventListener('click', () => requestUserGpsLocation(false));
     document.getElementById('btn-recenter-gps').addEventListener('click', recenterMapToVehicle);
+
+    const btnCloseArrival = document.getElementById('btn-close-arrival-modal');
+    if (btnCloseArrival) {
+        btnCloseArrival.addEventListener('click', () => {
+            const arrivalModal = document.getElementById('arrival-modal');
+            if (arrivalModal) arrivalModal.classList.add('hidden');
+        });
+    }
 
     /* Direct One-Tap Map Start Button Listener */
     const directMapStartBtn = document.getElementById('btn-map-start-nav');
