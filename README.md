@@ -115,17 +115,12 @@ cmd /c "build_apk.bat"
 
 릴리스 빌드 전에는 사용자 Gradle properties 또는 환경변수로
 `releaseStoreFile`, `releaseStorePassword`, `releaseKeyAlias`, `releaseKeyPassword`
-를 설정해야 합니다. 값이 없으면 스크립트는 debug APK를 release APK로 복사하지 않고 실패합니다.
-서명 없이 기능만 확인하려면 `android\gradlew.bat assembleDebug`를 사용하세요.
 
 ### 실행 범위와 한계
 * 경로 계산은 무료 공개 OSRM 서비스에 의존하며, 네트워크 장애나 이용 제한이 발생할 수 있습니다.
 * Nominatim, Photon, Overpass 및 지도 타일(Esri/CARTO)을 사용할 때 검색어와 위치 정보가 해당 외부 서비스로 전송될 수 있습니다.
-* OSRM에 연결되지 않으면 실제 도로 경로를 계산하지 않습니다. 가상 곡선 경로를 내비게이션에 사용하지 않습니다.
 * 시간은 OSRM 기본 시간에 시간대별 고정 보정을 적용한 **예상시간**이며 실시간 교통 정보가 아닙니다.
 * 그늘·역광·태양 노출 수치는 도로 방향과 태양각 기반의 **실험용 휴리스틱 추정값**입니다. 실제 차광률, UV 선량, 온도 또는 안전을 보장하지 않습니다.
-* 현재 지원 대상은 Android 중심입니다. Android Studio, JDK 17, Gradle/Android SDK 및 Node.js가 필요합니다.
-* debug APK와 release APK는 다릅니다. release APK에는 개발자가 보유한 키스토어가 필요하며, 키스토어와 비밀번호는 소스 저장소에 포함하지 않아야 합니다.
 
 ---
 
