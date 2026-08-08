@@ -5,11 +5,14 @@
 
 window.TTSVoice = (function () {
     let isMuted = false;
-    let currentLang = 'ko-KR'; // 'ko-KR' | 'en-US'
+    // Auto-detect browser language at load time to match I18n initial detection
+    let currentLang = (navigator.language || navigator.userLanguage || '').toLowerCase().startsWith('ko') ? 'ko-KR' : 'en-US';
     let lastSpokenText = '';
     let lastSpokenTime = 0;
     let lastAnnouncedBucket = "";
     let lastProactiveGlareTime = 0;
+    let lastTurnAnnounceBucket = '';
+    let lastTurnAnnounceTime = 0;
     let audioCtx = null;
 
     function getAudioContext() {
@@ -287,6 +290,138 @@ window.TTSVoice = (function () {
         }
     }
 
+    /**
+     * Convert OSRM maneuver type+modifier to localized turn instruction text.
+     */
+    function getManeuverText(type, modifier) {
+        const isKo = currentLang.startsWith('ko');
+
+        // Map OSRM modifier to i18n key
+        const modifierMap = {
+            'left': 'turnLeft',
+            'right': 'turnRight',
+            'slight left': 'turnSlightLeft',
+            'slight right': 'turnSlightRight',
+            'sharp left': 'turnSharpLeft',
+            'sharp right': 'turnSharpRight',
+            'uturn': 'turnUturn',
+            'straight': 'turnStraight'
+        };
+
+        const typeMap = {
+            'roundabout': 'turnRoundabout',
+            'rotary': 'turnRoundabout',
+            'merge': 'turnMerge',
+            'fork': 'turnFork',
+            'end of road': 'turnEndOfRoad',
+            'arrive': 'turnArrive'
+        };
+
+        // Priority: specific type overrides, then modifier-based
+        if (type === 'arrive') {
+            return window.I18n ? window.I18n.getText('turnArrive') : (isKo ? '도착' : 'Arrive');
+        }
+
+        if (typeMap[type] && !modifier) {
+            return window.I18n ? window.I18n.getText(typeMap[type]) : type;
+        }
+
+        const modKey = modifierMap[modifier];
+        if (modKey) {
+            return window.I18n ? window.I18n.getText(modKey) : modifier;
+        }
+
+        // Fallback for roundabout with modifier
+        if (type === 'roundabout' || type === 'rotary') {
+            const base = window.I18n ? window.I18n.getText('turnRoundabout') : (isKo ? '로터리' : 'Roundabout');
+            if (modifier && modifierMap[modifier]) {
+                const dir = window.I18n ? window.I18n.getText(modifierMap[modifier]) : modifier;
+                return `${base} ${dir}`;
+            }
+            return base;
+        }
+
+        return window.I18n ? window.I18n.getText('turnStraight') : (isKo ? '직진' : 'Continue straight');
+    }
+
+    /**
+     * 3-Tier Turn-by-Turn Voice Announcement Engine.
+     * Announces at 300m (preview), 100m (prepare), and 30m (execute) from the turn point.
+     * Each distance bucket for a given maneuver is announced only once.
+     */
+    function announceTurnManeuver(maneuver, distanceMeters) {
+        if (isMuted || !maneuver) return;
+
+        const now = Date.now();
+        // Global cooldown: minimum 2.5s between any turn announcements
+        if (now - lastTurnAnnounceTime < 2500) return;
+
+        // Determine distance bucket
+        let bucket = '';
+        if (distanceMeters <= 50) {
+            bucket = 'exec';
+        } else if (distanceMeters <= 150) {
+            bucket = 'prep';
+        } else if (distanceMeters <= 400) {
+            bucket = 'prev';
+        } else {
+            return; // Too far for announcement
+        }
+
+        // Deduplicate: same maneuver location + bucket = skip
+        const maneuverKey = `${maneuver.type}_${maneuver.modifier}_${bucket}`;
+        const locKey = maneuver.location ? `${maneuver.location[0].toFixed(4)}_${maneuver.location[1].toFixed(4)}` : '';
+        const fullKey = `${locKey}_${maneuverKey}`;
+        if (fullKey === lastTurnAnnounceBucket) return;
+        lastTurnAnnounceBucket = fullKey;
+        lastTurnAnnounceTime = now;
+
+        const isKo = currentLang.startsWith('ko');
+        const turnText = getManeuverText(maneuver.type, maneuver.modifier);
+        const roadName = maneuver.name || '';
+
+        let msg = '';
+
+        if (bucket === 'prev') {
+            // 300m preview: "300미터 앞에서 [도로명] 방면으로 [좌회전]입니다"
+            const distText = distanceMeters >= 1000
+                ? `${(distanceMeters / 1000).toFixed(1)}km`
+                : `${Math.round(distanceMeters / 50) * 50}m`;
+
+            if (isKo) {
+                msg = roadName
+                    ? `${distText} 앞에서 ${roadName} 방면으로 ${turnText}입니다.`
+                    : `${distText} 앞에서 ${turnText}입니다.`;
+            } else {
+                msg = roadName
+                    ? `In ${distText}, ${turnText} onto ${roadName}.`
+                    : `In ${distText}, ${turnText}.`;
+            }
+        } else if (bucket === 'prep') {
+            // 100m prepare: "잠시 후 [좌회전]입니다"
+            if (isKo) {
+                msg = roadName
+                    ? `잠시 후 ${roadName} 방면으로 ${turnText}입니다.`
+                    : `잠시 후 ${turnText}입니다.`;
+            } else {
+                msg = roadName
+                    ? `Shortly, ${turnText} onto ${roadName}.`
+                    : `Shortly, ${turnText}.`;
+            }
+        } else if (bucket === 'exec') {
+            // 30m execute: "[좌회전] 하세요"
+            if (isKo) {
+                msg = `${turnText} 하세요.`;
+            } else {
+                msg = `${turnText} now.`;
+            }
+        }
+
+        if (msg) {
+            speak(msg, true);
+        }
+    }
+
     return {
         setLanguage: setLanguage,
         toggleMute: toggleMute,
@@ -295,6 +430,8 @@ window.TTSVoice = (function () {
         announceProactiveGlareWarning: announceProactiveGlareWarning,
         announceNavHazard: announceNavHazard,
         announceRoadEnvironment: announceRoadEnvironment,
+        announceTurnManeuver: announceTurnManeuver,
+        getManeuverText: getManeuverText,
         isMuted: () => isMuted,
         getLanguage: () => currentLang
     };

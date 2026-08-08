@@ -112,7 +112,25 @@ window.I18n = (function () {
             arrivalLblMode: "선택 경로 모드",
             arrivalLblScore: "쾌적도 보호",
             arrivalScoreComfort: "자외선/눈부심 차단 완료 ✨",
-            arrivalBtnConfirm: "안내 종료 확인"
+            arrivalBtnConfirm: "안내 종료 확인",
+            // Turn-by-turn maneuver keys
+            turnLeft: "좌회전",
+            turnRight: "우회전",
+            turnSlightLeft: "좌측 방향",
+            turnSlightRight: "우측 방향",
+            turnSharpLeft: "급좌회전",
+            turnSharpRight: "급우회전",
+            turnUturn: "유턴",
+            turnStraight: "직진",
+            turnRoundabout: "로터리",
+            turnMerge: "합류",
+            turnArrive: "도착",
+            turnFork: "분기점",
+            turnEndOfRoad: "도로 끝",
+            turnAhead: "앞에서",
+            turnToward: "방면으로",
+            turnBannerSafe: "안전 주행 중",
+            turnBannerGlare: "⚠️ 전방 역광 위험!"
         },
         'en-US': {
             docTitle: "SolarLess Navi | Smart Solar-Glare Avoidance Navigation",
@@ -211,7 +229,25 @@ window.I18n = (function () {
             arrivalLblMode: "Selected Route",
             arrivalLblScore: "Comfort Level",
             arrivalScoreComfort: "UV & Glare Shielded ✨",
-            arrivalBtnConfirm: "End Guidance"
+            arrivalBtnConfirm: "End Guidance",
+            // Turn-by-turn maneuver keys
+            turnLeft: "Turn left",
+            turnRight: "Turn right",
+            turnSlightLeft: "Bear left",
+            turnSlightRight: "Bear right",
+            turnSharpLeft: "Sharp left",
+            turnSharpRight: "Sharp right",
+            turnUturn: "U-turn",
+            turnStraight: "Continue straight",
+            turnRoundabout: "Roundabout",
+            turnMerge: "Merge",
+            turnArrive: "Arrive",
+            turnFork: "Fork",
+            turnEndOfRoad: "End of road",
+            turnAhead: "ahead",
+            turnToward: "onto",
+            turnBannerSafe: "Safe driving",
+            turnBannerGlare: "⚠️ Sun Glare Warning!"
         }
     };
 

@@ -197,6 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         I18n.applyUiLanguage();
+        TTSVoice.setLanguage(I18n.getLanguage()); // Sync TTS voice language with detected UI language on startup
         updateSunInfo();
         renderFavorites();
         renderRecentDestinationHistory();
@@ -482,7 +483,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 // Update Mobile Turn Banner Language if Active
-                updateTurnBannerText(300, currentHeading, 0.05);
+                updateTurnBannerText(null, 0.05);
 
                 // Refresh Active Route Cards & Summary Text if Routes Exist
                 if (routeData) {
@@ -517,8 +518,62 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    /* TURN BANNER FULL INTERNATIONALIZATION (KO <-> EN) WITH ACCURATE DISTANCE & INSTRUCTION */
-    function updateTurnBannerText(distMeters, heading, glareRisk) {
+    /* FIND NEXT UPCOMING TURN MANEUVER FROM CURRENT VEHICLE POSITION */
+    function findNextManeuver(carLat, carLng) {
+        if (!selectedRouteObj || !selectedRouteObj.maneuvers || selectedRouteObj.maneuvers.length === 0) {
+            return null;
+        }
+
+        const maneuvers = selectedRouteObj.maneuvers;
+        let bestManeuver = null;
+        let bestDist = Infinity;
+
+        for (let i = 0; i < maneuvers.length; i++) {
+            const m = maneuvers[i];
+            if (!m.location || m.location.length < 2) continue;
+
+            // Distance from car to maneuver point
+            const dist = ShadowRouter.calculateDistanceMeters(carLat, carLng, m.location[1], m.location[0]);
+
+            // Only consider maneuvers AHEAD of us (within 2km, but skip ones behind us)
+            if (dist < bestDist && dist < 2000) {
+                // Check if maneuver is ahead by comparing bearing from car to maneuver vs current heading
+                const bearingToManeuver = ShadowRouter.calculateBearing(carLat, carLng, m.location[1], m.location[0]);
+                const headingDiff = Math.abs(((bearingToManeuver - currentHeading) % 360 + 540) % 360 - 180);
+
+                // Accept if maneuver is roughly ahead (within 120° arc) OR very close (< 60m)
+                if (headingDiff < 120 || dist < 60) {
+                    bestDist = dist;
+                    bestManeuver = { ...m, distanceFromCar: dist };
+                }
+            }
+        }
+
+        return bestManeuver;
+    }
+
+    /* MANEUVER TYPE+MODIFIER → FONTAWESOME ICON MAPPING */
+    function getManeuverIcon(type, modifier) {
+        if (type === 'arrive') return '<i class="fa-solid fa-flag-checkered"></i>';
+        if (type === 'roundabout' || type === 'rotary') return '<i class="fa-solid fa-rotate-right"></i>';
+        if (type === 'merge') return '<i class="fa-solid fa-code-merge"></i>';
+        if (type === 'fork') return '<i class="fa-solid fa-code-fork"></i>';
+
+        switch (modifier) {
+            case 'left': return '<i class="fa-solid fa-arrow-turn-down" style="transform:scaleX(-1) rotate(90deg)"></i>';
+            case 'right': return '<i class="fa-solid fa-arrow-turn-down" style="transform:rotate(-90deg)"></i>';
+            case 'slight left': return '<i class="fa-solid fa-arrow-up" style="transform:rotate(-30deg)"></i>';
+            case 'slight right': return '<i class="fa-solid fa-arrow-up" style="transform:rotate(30deg)"></i>';
+            case 'sharp left': return '<i class="fa-solid fa-arrow-turn-down" style="transform:scaleX(-1) rotate(45deg)"></i>';
+            case 'sharp right': return '<i class="fa-solid fa-arrow-turn-down" style="transform:rotate(-45deg)"></i>';
+            case 'uturn': return '<i class="fa-solid fa-arrow-turn-up" style="transform:scaleX(-1)"></i>';
+            case 'straight': return '<i class="fa-solid fa-arrow-up"></i>';
+            default: return '<i class="fa-solid fa-arrow-up"></i>';
+        }
+    }
+
+    /* TURN BANNER WITH REAL-TIME MANEUVER + GLARE/SAFE OVERLAY */
+    function updateTurnBannerText(nextManeuver, glareRisk) {
         const banner = document.getElementById('mobile-turn-banner');
         if (!banner) return;
 
@@ -527,19 +582,54 @@ document.addEventListener('DOMContentLoaded', () => {
         const bannerDesc = document.getElementById('banner-desc');
         const bannerIcon = document.getElementById('banner-turn-icon');
 
-        const formattedDist = distMeters > 0 ? (distMeters >= 1000 ? (distMeters/1000).toFixed(1) + 'km' : Math.round(distMeters) + 'm') : '300m';
-        const distPrefix = isKo ? `${formattedDist} 앞` : `In ${formattedDist}`;
+        if (nextManeuver && nextManeuver.type !== 'arrive') {
+            const dist = nextManeuver.distanceFromCar || 0;
+            const formattedDist = dist >= 1000
+                ? (dist / 1000).toFixed(1) + 'km'
+                : Math.round(dist) + 'm';
+            const distPrefix = isKo ? `${formattedDist} 앞` : `In ${formattedDist}`;
 
-        if (bannerDist) bannerDist.innerText = distPrefix;
+            if (bannerDist) bannerDist.innerText = distPrefix;
 
-        if (glareRisk > 0.45) {
-            if (bannerDesc) bannerDesc.innerText = isKo ? `⚠️ 전방 역광 위험! (${Math.round(heading)}° 직사광선)` : `⚠️ Sun Glare Warning! (Direct sun at ${Math.round(heading)}°)`;
-            banner.classList.add('hazard');
-            if (bannerIcon) bannerIcon.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i>`;
+            // Turn instruction text
+            const turnText = TTSVoice.getManeuverText(nextManeuver.type, nextManeuver.modifier);
+            const roadName = nextManeuver.name || '';
+
+            let descText;
+            if (isKo) {
+                descText = roadName
+                    ? `${roadName} ${I18n.getText('turnToward')} ${turnText}`
+                    : turnText;
+            } else {
+                descText = roadName
+                    ? `${turnText} ${I18n.getText('turnToward')} ${roadName}`
+                    : turnText;
+            }
+
+            // Glare overlay warning
+            if (glareRisk > 0.45) {
+                descText += isKo ? ' ☀️ 역광주의' : ' ☀️ Glare';
+                banner.classList.add('hazard');
+            } else {
+                banner.classList.remove('hazard');
+            }
+
+            if (bannerDesc) bannerDesc.innerText = descText;
+            if (bannerIcon) bannerIcon.innerHTML = getManeuverIcon(nextManeuver.type, nextManeuver.modifier);
         } else {
-            if (bannerDesc) bannerDesc.innerText = isKo ? `안전 주행 중 (태양 각도 쾌적 ${Math.round(glareRisk * 100)}%)` : `Safe Driving (Comfortable sun angle ${Math.round(glareRisk * 100)}%)`;
-            banner.classList.remove('hazard');
-            if (bannerIcon) bannerIcon.innerHTML = `<i class="fa-solid fa-arrow-turn-up"></i>`;
+            // No upcoming maneuver or arrived — show glare/safe status
+            const formattedDist = '—';
+            if (bannerDist) bannerDist.innerText = formattedDist;
+
+            if (glareRisk > 0.45) {
+                if (bannerDesc) bannerDesc.innerText = I18n.getText('turnBannerGlare');
+                banner.classList.add('hazard');
+                if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
+            } else {
+                if (bannerDesc) bannerDesc.innerText = I18n.getText('turnBannerSafe');
+                banner.classList.remove('hazard');
+                if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
+            }
         }
     }
 
@@ -2149,13 +2239,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 const sunPos = SunCalc.getPosition(new Date(), lat, lng);
                 const glareRisk = ShadowRouter.calculateSegmentGlare(currentHeading, sunPos);
 
-                updateTurnBannerText(200, currentHeading, glareRisk);
+                // Real-time turn-by-turn: find next maneuver and update banner + voice
+                const nextManeuver = findNextManeuver(lat, lng);
+                updateTurnBannerText(nextManeuver, glareRisk);
+
+                // Turn-by-turn voice announcement (3-tier: 300m/100m/30m)
+                if (nextManeuver) {
+                    TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar);
+                }
 
                 if (glareRisk > 0.45) {
                     TTSVoice.announceProactiveGlareWarning(currentHeading, glareRisk);
                 }
 
-                TTSVoice.announceNavHazard(200, currentHeading, glareRisk);
+                TTSVoice.announceNavHazard(nextManeuver ? nextManeuver.distanceFromCar : 200, currentHeading, glareRisk);
             },
             (err) => { setGpsStatusIndicator(false, false); },
             { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }

@@ -167,16 +167,19 @@ window.ShadowRouter = (function () {
     }
 
     function calculateSegmentGlare(segmentHeading, sunPosition) {
+        // Guard: invalid inputs
+        if (!sunPosition || !isFinite(sunPosition.altitude) || !isFinite(sunPosition.azimuth)) return 0;
+        if (!isFinite(segmentHeading)) return 0;
         // Direct windshield glare requires sun disc to be physically visible above horizon (altitude > -0.833°)
-        if (!sunPosition || sunPosition.altitude <= -0.833) return 0;
+        if (sunPosition.altitude <= -0.833) return 0;
         // Sun high above roofline (>45 deg) rarely causes direct front windshield glare
         if (sunPosition.altitude > 45) return 0.04;
 
         const sunAzimuthDeg = sunPosition.azimuth;
         const sunElevationDeg = Math.max(0, sunPosition.altitude + 0.833);
 
-        let angleDiff = Math.abs(segmentHeading - sunAzimuthDeg);
-        if (angleDiff > 180) angleDiff = 360 - angleDiff;
+        // 360° periodic minimum angular difference
+        let angleDiff = Math.abs(((segmentHeading - sunAzimuthDeg) % 360 + 540) % 360 - 180);
 
         if (angleDiff <= 45 && sunElevationDeg < 25) {
             const headingFactor = 1 - (angleDiff / 45);
@@ -188,13 +191,15 @@ window.ShadowRouter = (function () {
     }
 
     function estimateSegmentShade(p1, p2, sunPosition) {
-        if (!sunPosition || sunPosition.altitude <= -6.0) return 1.0;
+        // Guard: invalid sun position
+        if (!sunPosition || !isFinite(sunPosition.altitude) || !isFinite(sunPosition.azimuth)) return 0.5;
+        if (sunPosition.altitude <= -6.0) return 1.0;
         const sunElevationDeg = sunPosition.altitude;
         const sunAzimuthDeg = sunPosition.azimuth;
 
         const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
-        let diff = Math.abs(heading - sunAzimuthDeg);
-        if (diff > 180) diff = 360 - diff;
+        // 360° periodic minimum angular difference
+        let diff = Math.abs(((heading - sunAzimuthDeg) % 360 + 540) % 360 - 180);
 
         // Perpendicular factor: Road perpendicular to sun azimuth receives lateral building/tree shadow across lanes
         const perpFactor = Math.sin(diff * Math.PI / 180);
@@ -214,7 +219,60 @@ window.ShadowRouter = (function () {
         }
     }
 
-    function analyzeRouteSegments(coordinates, dateObj, durationSec = 0) {
+    /**
+     * Build a cumulative time lookup from OSRM step durations.
+     * Returns an array mapping coordinate index → elapsed seconds from route start.
+     * Falls back to uniform speed assumption if steps data is unavailable.
+     */
+    function buildStepTimeLookup(coordinates, steps, totalDurationSec) {
+        const n = coordinates.length;
+        const timeLookup = new Float64Array(n); // timeLookup[i] = elapsed seconds at coordinate i
+        if (!steps || steps.length === 0 || totalDurationSec <= 0) {
+            // Fallback: uniform speed distribution
+            let totalDist = 0;
+            const dists = [];
+            for (let i = 0; i < n - 1; i++) {
+                const d = calculateDistanceMeters(coordinates[i][1], coordinates[i][0], coordinates[i + 1][1], coordinates[i + 1][0]);
+                dists.push(d);
+                totalDist += d;
+            }
+            let cumDist = 0;
+            for (let i = 0; i < n - 1; i++) {
+                timeLookup[i] = totalDist > 0 ? (cumDist / totalDist) * totalDurationSec : 0;
+                cumDist += dists[i];
+            }
+            timeLookup[n - 1] = totalDurationSec;
+            return timeLookup;
+        }
+
+        // Map step geometry coordinates to overall route coordinate indices
+        let coordIdx = 0;
+        let elapsedSec = 0;
+        for (const step of steps) {
+            const stepCoords = step.geometry ? step.geometry.coordinates : [];
+            const stepDur = step.duration || 0;
+            const stepDist = step.distance || 0;
+            let stepCumDist = 0;
+
+            for (let j = 0; j < stepCoords.length && coordIdx < n; j++) {
+                timeLookup[coordIdx] = Math.min(elapsedSec + (stepDist > 0 ? (stepCumDist / stepDist) * stepDur : 0), totalDurationSec);
+                if (j < stepCoords.length - 1) {
+                    stepCumDist += calculateDistanceMeters(stepCoords[j][1], stepCoords[j][0], stepCoords[j + 1][1], stepCoords[j + 1][0]);
+                }
+                coordIdx++;
+            }
+            // Avoid double-counting shared coordinate between consecutive steps
+            if (coordIdx > 0 && coordIdx < n) coordIdx--;
+            elapsedSec += stepDur;
+        }
+        // Fill any remaining coordinates
+        for (let i = coordIdx; i < n; i++) {
+            timeLookup[i] = totalDurationSec;
+        }
+        return timeLookup;
+    }
+
+    function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null) {
         const segments = [];
         let totalGlareWeighted = 0;
         let totalShadeWeighted = 0;
@@ -228,18 +286,21 @@ window.ShadowRouter = (function () {
             totalPathMeters += d;
         }
 
+        // 4D Time Estimation: Use per-step durations from OSRM if available
+        const timeLookup = buildStepTimeLookup(coordinates, steps, durationSec);
         const startTimestamp = dateObj.getTime();
-        let cumulativeDist = 0;
 
         for (let i = 0; i < coordinates.length - 1; i++) {
             const p1 = [coordinates[i][1], coordinates[i][0]];
             const p2 = [coordinates[i + 1][1], coordinates[i + 1][0]];
             const segDist = segmentDistances[i];
 
-            // 4D Spatio-Temporal: Calculate exact timestamp when vehicle physically arrives at segment i
-            const elapsedSec = (totalPathMeters > 0 && durationSec > 0)
-                ? ((cumulativeDist + segDist / 2) / totalPathMeters) * durationSec
-                : 0;
+            // Skip zero-length degenerate segments
+            if (segDist < 0.5) continue;
+
+            // 4D Spatio-Temporal: Use midpoint time of this segment
+            const segMidTimeSec = (timeLookup[i] + timeLookup[i + 1]) / 2;
+            const elapsedSec = Math.min(segMidTimeSec, durationSec || 0);
             const segmentPassTime = new Date(startTimestamp + elapsedSec * 1000);
 
             // Dynamic solar azimuth & altitude for this specific geographic point at that exact future arrival time
@@ -251,13 +312,10 @@ window.ShadowRouter = (function () {
             const shadeScore = estimateSegmentShade(p1, p2, segSunPos);
 
             // Direct UV Exposure Factor per segment:
-            // Shade blocks ~85% of direct UV-A/B radiation (leaving ~15% diffuse).
-            // Facing the sun directly through windshield increases direct driver UV exposure to 100%,
-            // while lateral or rear sun angles are partially roof/window-pillar blocked (~35% baseline).
             const unshadedFraction = (1.0 - (shadeScore * 0.85));
             const vehicleExposureFactor = (0.35 + 0.65 * glareRisk);
             const directSunExposure = unshadedFraction * vehicleExposureFactor;
-            const segmentUvScore = sunIntensity * directSunExposure;
+            const segmentUvScore = isFinite(sunIntensity) ? sunIntensity * directSunExposure : 0;
 
             segments.push({
                 p1: p1,
@@ -272,15 +330,17 @@ window.ShadowRouter = (function () {
             totalGlareWeighted += glareRisk * segDist;
             totalShadeWeighted += shadeScore * segDist;
             totalUvExposureWeighted += segmentUvScore * segDist;
-            cumulativeDist += segDist;
         }
 
         const denom = totalPathMeters || 1;
+        const avgGlare = totalGlareWeighted / denom;
+        const avgShade = totalShadeWeighted / denom;
+        const totalUv = totalUvExposureWeighted / denom;
         return {
             segments: segments,
-            avgGlareRisk: totalGlareWeighted / denom,
-            avgShadeCoverage: totalShadeWeighted / denom,
-            totalUvExposureUnits: totalUvExposureWeighted / denom,
+            avgGlareRisk: isFinite(avgGlare) ? avgGlare : 0,
+            avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
+            totalUvExposureUnits: isFinite(totalUv) ? totalUv : 0,
             coordinates: coordinates
         };
     }
@@ -298,8 +358,8 @@ window.ShadowRouter = (function () {
 
         const trafficMult = getTrafficMultiplier(dateObj);
         
-        // 1. Direct OSRM query
-        let directUrl = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson&alternatives=3`;
+        // 1. Direct OSRM query (with steps=true for turn-by-turn maneuver data)
+        let directUrl = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson&alternatives=3&steps=true`;
         if (isTollFreeOnly) {
             directUrl += `&exclude=toll`;
         }
@@ -327,7 +387,7 @@ window.ShadowRouter = (function () {
 
         const urls = [
             directUrl,
-            ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true`)
+            ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true`)
         ];
 
         const responses = await Promise.allSettled(urls.map(u => fetch(u).then(r => r.ok ? r.json() : null)));
@@ -359,7 +419,38 @@ window.ShadowRouter = (function () {
         const analyzedRoutes = uniqueRoutes.map((r, idx) => {
             const baseDuration = r.duration;
             const liveDuration = Math.round(baseDuration * trafficMult);
-            const analyzed = analyzeRouteSegments(r.geometry.coordinates, dateObj, liveDuration);
+
+            // Extract OSRM step maneuver data for turn-by-turn navigation
+            let routeSteps = null;
+            let maneuvers = [];
+            if (r.legs && r.legs.length > 0) {
+                routeSteps = [];
+                let cumulativeStepDist = 0;
+                for (const leg of r.legs) {
+                    if (leg.steps) {
+                        for (const step of leg.steps) {
+                            routeSteps.push(step);
+                            if (step.maneuver && step.maneuver.type !== 'depart') {
+                                maneuvers.push({
+                                    type: step.maneuver.type,
+                                    modifier: step.maneuver.modifier || '',
+                                    location: step.maneuver.location,
+                                    bearingBefore: step.maneuver.bearing_before,
+                                    bearingAfter: step.maneuver.bearing_after,
+                                    name: step.name || '',
+                                    ref: step.ref || '',
+                                    distance: step.distance,
+                                    duration: step.duration,
+                                    cumulativeDistance: cumulativeStepDist
+                                });
+                            }
+                            cumulativeStepDist += (step.distance || 0);
+                        }
+                    }
+                }
+            }
+
+            const analyzed = analyzeRouteSegments(r.geometry.coordinates, dateObj, liveDuration, routeSteps);
 
             return {
                 id: 'route_opt_' + idx,
@@ -367,7 +458,8 @@ window.ShadowRouter = (function () {
                 distanceMeters: r.distance,
                 durationSec: liveDuration,
                 baseDurationSec: baseDuration,
-                analyzed: analyzed
+                analyzed: analyzed,
+                maneuvers: maneuvers
             };
         });
 
@@ -443,6 +535,76 @@ window.ShadowRouter = (function () {
         };
     }
 
+    /* Web Worker for background solar analysis (UI thread offloading) */
+    let solarWorker = null;
+    let workerCallId = 0;
+    const workerCallbacks = new Map();
+
+    function initSolarWorker() {
+        if (solarWorker) return true;
+        try {
+            solarWorker = new Worker('js/solar-worker.js');
+            solarWorker.onmessage = function (e) {
+                const { id, result } = e.data;
+                const cb = workerCallbacks.get(id);
+                if (cb) {
+                    workerCallbacks.delete(id);
+                    cb.resolve(result);
+                }
+            };
+            solarWorker.onerror = function (err) {
+                console.warn('Solar Worker error, falling back to sync:', err);
+                solarWorker = null;
+            };
+            return true;
+        } catch (e) {
+            console.warn('Web Worker not supported, using sync fallback:', e);
+            return false;
+        }
+    }
+
+    /**
+     * Async version of analyzeRouteSegments that runs in a Web Worker.
+     * Falls back to synchronous main-thread computation if Worker is unavailable.
+     */
+    function analyzeRouteSegmentsAsync(coordinates, dateObj, durationSec, steps) {
+        // Build time lookup on main thread (lightweight) so Worker gets it ready
+        const timeLookup = buildStepTimeLookup(coordinates, steps, durationSec);
+
+        if (initSolarWorker() && solarWorker) {
+            return new Promise((resolve) => {
+                const id = ++workerCallId;
+                workerCallbacks.set(id, { resolve });
+
+                solarWorker.postMessage({
+                    id,
+                    coordinates,
+                    startTimestamp: dateObj.getTime(),
+                    durationSec,
+                    timeLookup: Array.from(timeLookup)
+                });
+
+                // Safety timeout: if Worker doesn't respond in 8s, fallback to sync
+                setTimeout(() => {
+                    if (workerCallbacks.has(id)) {
+                        workerCallbacks.delete(id);
+                        const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps);
+                        result.coordinates = coordinates;
+                        resolve(result);
+                    }
+                }, 8000);
+            }).then(result => {
+                // Worker returns segments without coordinates; add them back
+                result.coordinates = coordinates;
+                return result;
+            });
+        }
+
+        // Sync fallback
+        const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps);
+        return Promise.resolve(result);
+    }
+
     return {
         calculateBearing: calculateBearing,
         calculateDistanceMeters: calculateDistanceMeters,
@@ -454,6 +616,7 @@ window.ShadowRouter = (function () {
         estimateSegmentShade: estimateSegmentShade,
         calculateSolarUvIntensity: calculateSolarUvIntensity,
         analyzeRouteSegments: analyzeRouteSegments,
+        analyzeRouteSegmentsAsync: analyzeRouteSegmentsAsync,
         fetchAndAnalyzeRoutes: fetchAndAnalyzeRoutes
     };
 })();
