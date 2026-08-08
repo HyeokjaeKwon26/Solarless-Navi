@@ -114,7 +114,14 @@ window.TTSVoice = (function () {
         }
 
         if (toast) {
-            toast.innerHTML = `<i class="fa-solid fa-volume-high"></i> <span>${text}</span>`;
+            toast.replaceChildren();
+            const icon = document.createElement('i');
+            icon.className = 'fa-solid fa-volume-high';
+            const message = document.createElement('span');
+            // Voice text may include an external road/place name. Keep it as
+            // text so it cannot become executable markup in the toast.
+            message.textContent = String(text);
+            toast.append(icon, document.createTextNode(' '), message);
             toast.classList.add('active');
 
             clearTimeout(toast.timer);

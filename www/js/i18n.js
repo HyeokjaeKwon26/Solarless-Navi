@@ -20,7 +20,7 @@ window.I18n = (function () {
             logoTagline: "햇빛을 피하는 스마트 내비게이션",
             shadedRestBtn: "그늘 쉼터",
             searchTitle: "어디로 가시나요?",
-            searchSub: "실시간 태양 위치와 그늘을 계산해 최적 경로를 안내합니다.",
+            searchSub: "태양 위치와 도로 방향을 바탕으로 실험용 노출 지표를 계산합니다.",
             originLabel: "출발지",
             destLabel: "목적지 (필수)",
             originPlaceholder: "🎯 내 위치 (현재 GPS)",
@@ -36,6 +36,7 @@ window.I18n = (function () {
             lblAppDev: "개발자 정보",
             lblAppWeb: "개발자 홈페이지",
             lblAppCert: "보안 서명",
+            aboutDisclaimer: "실험용 추정값입니다. 경로·장소·도로 규칙 조회를 위해 위치와 검색어가 외부 공개 API로 전송될 수 있으며, 오프라인에서는 실제 도로 경로를 계산하지 않습니다.",
             btnCloseAbout: "닫기",
             drawerResetTitle: "장소 재설정",
             openSearchBtn: "출발지 / 목적지 변경하기",
@@ -55,26 +56,26 @@ window.I18n = (function () {
             sunset: "일몰",
             azimuthLbl: "태양 방위각 (Azimuth)",
             elevationLbl: "태양 고도 (Elevation)",
-            trafficCardTitle: "실시간 교통 소요시간 비교",
+            trafficCardTitle: "시간대 보정 예상시간 비교",
             fastestTitle: "최단 시간 경로",
             glareTitle: "역광(눈부심) 회피 경로",
             shadeTitle: "그늘·구조물 우선 경로",
-            fastestDesc: "일반 탐색 경로",
-            glareDesc: "태양 직사광선 정면 우회",
-            shadeDesc: "건물 그림자 / 터널 구간",
+            fastestDesc: "OSRM 기준 일반 경로",
+            glareDesc: "역광 가능성 추정이 낮은 경로",
+            shadeDesc: "그늘 가능성 추정이 높은 경로",
             badgeRec: "추천",
             hudTitle: "모바일 주행 HUD 계기판",
             meterLabel: "정면 역광(눈부심) 위험도",
-            hazardAdvice: "실시간 시각 기준 태양 각도 연산 중.",
-            liveNavStart: "실시간 GPS 내비 시작",
+            hazardAdvice: "태양각·도로방향 기반 실험용 추정 지표입니다.",
+            liveNavStart: "GPS 내비 시작",
             liveNavStop: "안내 종료",
             origChip: "🎯 내 위치",
             barDestDefault: "목적지를 설정하세요",
             btnTopBarChange: "변경",
             sumTimeLbl: "소요 시간",
             sumDistLbl: "거리",
-            sumGlareLbl: "역광 위험",
-            sumShadeLbl: "그늘 비율",
+            sumGlareLbl: "역광 위험 추정",
+            sumShadeLbl: "그늘 가능성 추정",
             mapStartNav: "안내 시작",
             mapStopNav: "안내 종료",
             recenterToastTitle: "📍 내 위치로 자동 복귀",
@@ -111,7 +112,7 @@ window.I18n = (function () {
             arrivalLblDist: "주행 거리",
             arrivalLblMode: "선택 경로 모드",
             arrivalLblScore: "쾌적도 보호",
-            arrivalScoreComfort: "자외선/눈부심 차단 완료 ✨",
+            arrivalScoreComfort: "태양 노출 추정 지표 ✨",
             arrivalBtnConfirm: "안내 종료 확인",
             // Turn-by-turn maneuver keys
             turnLeft: "좌회전",
@@ -130,14 +131,21 @@ window.I18n = (function () {
             turnAhead: "앞에서",
             turnToward: "방면으로",
             turnBannerSafe: "안전 주행 중",
-            turnBannerGlare: "⚠️ 전방 역광 위험!"
+            turnBannerGlare: "⚠️ 전방 역광 가능성 추정!",
+            estimateNote: "실험용 추정값",
+            offlineRouteUnavailable: "오프라인에서는 실제 도로 경로를 계산할 수 없습니다.",
+            routeNetworkError: "경로 서버에 연결할 수 없습니다. 오프라인에서는 실제 도로 경로를 계산할 수 없습니다.",
+            existingRouteKept: "이전 경로를 유지합니다.",
+            searchNetworkError: "장소 검색 서버에 연결할 수 없습니다.",
+            roadDataUnavailable: "도로 규칙 데이터를 불러오지 못했습니다. 제한속도/표지판 표시가 일시적으로 제한됩니다.",
+            mapAttribution: "지도 출처"
         },
         'en-US': {
             docTitle: "SolarLess Navi | Smart Solar-Glare Avoidance Navigation",
             logoTagline: "Mobile Sun & Glare-Aware Navigation",
             shadedRestBtn: "Shaded Rest",
             searchTitle: "Where to go?",
-            searchSub: "Calculates real-time solar glare & shade for optimal routes.",
+            searchSub: "Uses solar position and road direction for experimental exposure estimates.",
             originLabel: "Origin",
             destLabel: "Destination (Required)",
             originPlaceholder: "🎯 My Location (Current GPS)",
@@ -153,6 +161,7 @@ window.I18n = (function () {
             lblAppDev: "Developer",
             lblAppWeb: "Developer Website",
             lblAppCert: "Security Signature",
+            aboutDisclaimer: "Experimental estimates only. Your location and search terms may be sent to public APIs for routing, place search, and road-rule lookup; real road routing is unavailable offline.",
             btnCloseAbout: "Close",
             drawerResetTitle: "Change Location",
             openSearchBtn: "Change Origin / Destination",
@@ -172,26 +181,26 @@ window.I18n = (function () {
             sunset: "Sunset",
             azimuthLbl: "Sun Azimuth Angle",
             elevationLbl: "Sun Elevation Angle",
-            trafficCardTitle: "Real-Time Traffic ETA Comparison",
+            trafficCardTitle: "Time-of-Day Adjusted ETA Estimates",
             fastestTitle: "Fastest Route",
             glareTitle: "Glare-Free Route",
             shadeTitle: "Shade-Priority Route",
-            fastestDesc: "Standard driving route",
-            glareDesc: "Detours direct sunlight glare",
-            shadeDesc: "Leverages building shadows & tunnels",
+            fastestDesc: "OSRM baseline route",
+            glareDesc: "Lower estimated glare possibility",
+            shadeDesc: "Higher estimated shade possibility",
             badgeRec: "RECOMMENDED",
             hudTitle: "Mobile Driving HUD Dashboard",
             meterLabel: "Front Sun Glare Risk Level",
-            hazardAdvice: "Calculating real-time solar elevation.",
-            liveNavStart: "Start Live GPS Nav",
+            hazardAdvice: "Experimental estimate based on sun angle and road direction.",
+            liveNavStart: "Start GPS Navigation",
             liveNavStop: "Stop Navigation",
             origChip: "🎯 My Location",
             barDestDefault: "Set Destination",
             btnTopBarChange: "Change",
             sumTimeLbl: "Duration",
             sumDistLbl: "Distance",
-            sumGlareLbl: "Glare Risk",
-            sumShadeLbl: "Shade Ratio",
+            sumGlareLbl: "Estimated Glare Risk",
+            sumShadeLbl: "Estimated Shade Possibility",
             mapStartNav: "Start Nav",
             mapStopNav: "Stop Nav",
             recenterToastTitle: "📍 Recenter Map",
@@ -228,7 +237,7 @@ window.I18n = (function () {
             arrivalLblDist: "Distance",
             arrivalLblMode: "Selected Route",
             arrivalLblScore: "Comfort Level",
-            arrivalScoreComfort: "UV & Glare Shielded ✨",
+            arrivalScoreComfort: "Estimated solar exposure metric ✨",
             arrivalBtnConfirm: "End Guidance",
             // Turn-by-turn maneuver keys
             turnLeft: "Turn left",
@@ -247,7 +256,14 @@ window.I18n = (function () {
             turnAhead: "ahead",
             turnToward: "onto",
             turnBannerSafe: "Safe driving",
-            turnBannerGlare: "⚠️ Sun Glare Warning!"
+            turnBannerGlare: "⚠️ Estimated sun-glare risk ahead!",
+            estimateNote: "Experimental estimate",
+            offlineRouteUnavailable: "A real road route cannot be calculated while offline.",
+            routeNetworkError: "The routing service could not be reached. A real road route cannot be calculated offline.",
+            existingRouteKept: "Keeping the previous route.",
+            searchNetworkError: "The place-search services could not be reached.",
+            roadDataUnavailable: "Road-rule data is unavailable; speed-limit and sign indicators may be incomplete.",
+            mapAttribution: "Map data"
         }
     };
 
@@ -319,6 +335,7 @@ window.I18n = (function () {
         setElemText('lbl-app-dev', dict.lblAppDev);
         setElemText('lbl-app-web', dict.lblAppWeb);
         setElemText('lbl-app-cert', dict.lblAppCert);
+        setElemText('about-disclaimer', dict.aboutDisclaimer);
         setElemText('btn-close-about-modal', dict.btnCloseAbout);
 
         setElemHtml('drawer-reset-title', `<i class="fa-solid fa-location-arrow"></i> ${dict.drawerResetTitle}`);
@@ -339,6 +356,7 @@ window.I18n = (function () {
         setElemText('elevation-lbl', dict.elevationLbl);
 
         setElemHtml('traffic-card-title', `<i class="fa-solid fa-route"></i> ${dict.trafficCardTitle}`);
+        setElemText('estimate-note', dict.estimateNote);
         setElemText('fastest-title-text', dict.fastestTitle);
         setElemText('glare-title-text', dict.glareTitle);
         setElemText('shade-title-text', dict.shadeTitle);

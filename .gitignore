@@ -18,7 +18,7 @@ android/app/build/
 android/.idea/
 android/local.properties
 *.keystore
-!android/app/solarless-release-key.jks
+*.jks
 
 # OS / Editor Files
 .DS_Store

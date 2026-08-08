@@ -252,6 +252,7 @@ body {
 .about-lbl { color: var(--text-secondary); font-weight: 500; }
 .about-val { color: #fff; font-weight: 700; font-family: var(--font-mono); }
 .about-val.highlight { color: #38bdf8; font-family: var(--font-heading); font-size: 13px; }
+.about-disclaimer { margin: 14px 0 0; padding: 9px 10px; border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 8px; color: #cbd5e1; background: rgba(251, 191, 36, 0.08); font-size: 11px; line-height: 1.45; }
 .about-val.cert { color: #4ade80; }
 
 .confirm-start-btn.close-about {
@@ -433,6 +434,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 .metric-value { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: #fff; }
 
 .mode-options { display: flex; flex-direction: column; gap: 10px; }
+.estimate-note { margin-left: auto; font-size: 9px; color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 5px; padding: 2px 5px; white-space: nowrap; }
 .mode-btn { background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; cursor: pointer; text-align: left; transition: all 0.2s ease; }
 .mode-btn.active { background: rgba(2, 132, 199, 0.25); border-color: #38bdf8; box-shadow: 0 0 15px rgba(56, 189, 248, 0.3); }
 .mode-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
@@ -778,11 +780,61 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
     transform: scale(0.95);
 }
 
+.map-direct-start-btn:disabled,
+.nav-btn:disabled {
+    opacity: 0.48;
+    cursor: not-allowed;
+    filter: grayscale(0.7);
+    box-shadow: none;
+}
+
 .map-direct-start-btn.active {
     background: linear-gradient(135deg, #dc2626, #b91c1c);
     border-color: #f87171;
     box-shadow: 0 4px 14px rgba(220, 38, 38, 0.5);
 }
+
+/* Small, persistent source notice for the external tile providers and OSM data. */
+.map-attribution {
+    position: absolute;
+    right: max(6px, env(safe-area-inset-right));
+    bottom: max(5px, env(safe-area-inset-bottom));
+    z-index: 1200;
+    max-width: min(78vw, 360px);
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.78);
+    color: #cbd5e1;
+    font-size: 9px;
+    line-height: 1.25;
+    pointer-events: auto;
+    text-align: right;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.map-attribution a { color: #bae6fd; text-decoration: underline; }
+
+.api-status-banner {
+    position: fixed;
+    left: 50%;
+    bottom: max(18px, env(safe-area-inset-bottom));
+    transform: translate(-50%, 16px);
+    z-index: 5000;
+    max-width: min(88vw, 440px);
+    padding: 9px 12px;
+    border: 1px solid rgba(251, 191, 36, 0.55);
+    border-radius: 9px;
+    background: rgba(30, 41, 59, 0.96);
+    color: #fef3c7;
+    font-size: 12px;
+    line-height: 1.35;
+    text-align: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.api-status-banner.active { opacity: 1; transform: translate(-50%, 0); }
 
 /* OLED Heat & Battery Saver Theme Overrides */
 body.battery-saver-active #map { filter: grayscale(100%) contrast(150%) brightness(75%); }

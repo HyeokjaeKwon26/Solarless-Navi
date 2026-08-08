@@ -16,22 +16,33 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Release credentials must come from user Gradle properties or environment
+    // variables. Never commit a keystore or its passwords to this repository.
+    def releaseStoreFile = project.findProperty('releaseStoreFile') ?: System.getenv('RELEASE_STORE_FILE')
+    def releaseStorePassword = project.findProperty('releaseStorePassword') ?: System.getenv('RELEASE_STORE_PASSWORD')
+    def releaseKeyAlias = project.findProperty('releaseKeyAlias') ?: System.getenv('RELEASE_KEY_ALIAS')
+    def releaseKeyPassword = project.findProperty('releaseKeyPassword') ?: System.getenv('RELEASE_KEY_PASSWORD')
+    def hasReleaseSigning = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it != null && it.toString().trim() }
+
     signingConfigs {
         release {
-            storeFile file('../solaris.keystore')
-            storePassword 'solaris1234'
-            keyAlias 'solariskey'
-            keyPassword 'solaris1234'
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
         }
     }
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
         debug {
-            signingConfig signingConfigs.release
         }
     }
 }

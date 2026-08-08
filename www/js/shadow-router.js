@@ -1,12 +1,64 @@
 /**
- * ShadowRouter - Solar Glare & Building Shadow Routing Engine
- * Calculates Live Traffic ETAs, Glare Risk Scores, Road Bearing Snapping, Toll-Free Exclusions, Trans-Oceanic Route Validation,
- * and Cumulative Solar UV Irradiance Exposure Reduction (%) Physics Model.
+ * ShadowRouter - solar exposure/glare possibility estimation over real OSRM routes.
+ * Travel times use an explicit time-of-day adjustment, not live traffic data.
+ * Shade and exposure values are experimental heuristics, not building/terrain simulation.
  */
 
 window.ShadowRouter = (function () {
 
-    function getTrafficMultiplier(dateObj) {
+    function createApiError(code, messageKey, details, cause) {
+        const error = new Error(code);
+        error.code = code;
+        error.messageKey = messageKey;
+        error.details = details || '';
+        if (cause) error.cause = cause;
+        return error;
+    }
+
+    async function fetchJsonWithTimeout(url, options = {}) {
+        const timeoutMs = options.timeoutMs || 10000;
+        const externalSignal = options.signal || null;
+        const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        let timeoutId = null;
+        let timedOut = false;
+        let abortHandler = null;
+
+        if (controller) {
+            timeoutId = setTimeout(() => {
+                timedOut = true;
+                controller.abort();
+            }, timeoutMs);
+            if (externalSignal) {
+                abortHandler = () => controller.abort();
+                if (externalSignal.aborted) controller.abort();
+                else externalSignal.addEventListener('abort', abortHandler, { once: true });
+            }
+        }
+
+        try {
+            const response = await fetch(url, controller ? { signal: controller.signal } : {});
+            if (!response.ok) {
+                throw createApiError('HTTP_ERROR', 'routeNetworkError', `${response.status} ${url}`);
+            }
+            try {
+                return await response.json();
+            } catch (e) {
+                throw createApiError('INVALID_JSON', 'routeNetworkError', url, e);
+            }
+        } catch (e) {
+            if (externalSignal && externalSignal.aborted) throw e;
+            if (timedOut || (e && e.name === 'AbortError')) {
+                throw createApiError('TIMEOUT', 'routeNetworkError', url, e);
+            }
+            if (e && e.code) throw e;
+            throw createApiError('NETWORK_ERROR', 'routeNetworkError', url, e);
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+            if (externalSignal && abortHandler) externalSignal.removeEventListener('abort', abortHandler);
+        }
+    }
+
+    function getTimeOfDayAdjustment(dateObj) {
         const hour = dateObj.getHours();
         const mins = dateObj.getMinutes();
         const timeVal = hour + mins / 60;
@@ -18,6 +70,7 @@ window.ShadowRouter = (function () {
     }
 
     function calculateBearing(lat1, lon1, lat2, lon2) {
+        if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return 0;
         const toRad = Math.PI / 180;
         const toDeg = 180 / Math.PI;
 
@@ -33,6 +86,7 @@ window.ShadowRouter = (function () {
     }
 
     function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+        if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return 0;
         const R = 6371000;
         const dLat = (lat2 - lat1) * Math.PI / 180;
         const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -147,6 +201,7 @@ window.ShadowRouter = (function () {
      * - Altitude < -6.0° (True Astronomical Night): Earth curvature completely blocks solar rays. UV = 0.
      */
     function calculateSolarUvIntensity(altitudeDeg) {
+        if (!Number.isFinite(altitudeDeg)) return 0;
         const apparentAltitude = altitudeDeg + 0.833; // Astronomical horizon refraction correction (-50 arcmin)
         const horizonDiffuseBaseline = Math.sin(0.833 * Math.PI / 180); // ~0.0145 (Diffuse UV skylight at sunrise/sunset horizon)
 
@@ -286,7 +341,8 @@ window.ShadowRouter = (function () {
             totalPathMeters += d;
         }
 
-        // 4D Time Estimation: Use per-step durations from OSRM if available
+        // 4D time estimate: use OSRM step durations, then apply only the
+        // documented time-of-day adjustment (not live traffic telemetry).
         const timeLookup = buildStepTimeLookup(coordinates, steps, durationSec);
         const startTimestamp = dateObj.getTime();
 
@@ -311,7 +367,7 @@ window.ShadowRouter = (function () {
             const glareRisk = calculateSegmentGlare(heading, segSunPos);
             const shadeScore = estimateSegmentShade(p1, p2, segSunPos);
 
-            // Direct UV Exposure Factor per segment:
+            // Experimental solar-exposure estimate per segment:
             const unshadedFraction = (1.0 - (shadeScore * 0.85));
             const vehicleExposureFactor = (0.35 + 0.65 * glareRisk);
             const directSunExposure = unshadedFraction * vehicleExposureFactor;
@@ -345,7 +401,7 @@ window.ShadowRouter = (function () {
         };
     }
 
-    async function fetchAndAnalyzeRoutes(start, end, dateObj, isTollFreeOnly = false) {
+    async function fetchAndAnalyzeRoutes(start, end, dateObj, isTollFreeOnly = false, options = {}) {
         // Trans-Oceanic / Cross-Continental Driving Distance Check (> 1500 km)
         const straightDistMeters = calculateDistanceMeters(start.lat, start.lng, end.lat, end.lng);
         if (straightDistMeters > 1500000) {
@@ -356,7 +412,7 @@ window.ShadowRouter = (function () {
             throw err;
         }
 
-        const trafficMult = getTrafficMultiplier(dateObj);
+        const timeOfDayAdjustment = getTimeOfDayAdjustment(dateObj);
         
         // 1. Direct OSRM query (with steps=true for turn-by-turn maneuver data)
         let directUrl = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson&alternatives=3&steps=true`;
@@ -390,7 +446,10 @@ window.ShadowRouter = (function () {
             ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true`)
         ];
 
-        const responses = await Promise.allSettled(urls.map(u => fetch(u).then(r => r.ok ? r.json() : null)));
+        const responses = await Promise.allSettled(urls.map(u => fetchJsonWithTimeout(u, {
+            signal: options.signal,
+            timeoutMs: 10000
+        })));
         const rawCandidates = [];
         responses.forEach(res => {
             if (res.status === 'fulfilled' && res.value && res.value.routes) {
@@ -398,7 +457,9 @@ window.ShadowRouter = (function () {
             }
         });
 
-        if (rawCandidates.length === 0) throw new Error("No routes found.");
+        if (rawCandidates.length === 0) {
+            throw createApiError('ROUTE_UNAVAILABLE', 'routeNetworkError', 'OSRM returned no usable routes');
+        }
 
         // Deduplicate route candidates by distance and duration, skipping excessive detours (> 1.60x)
         const uniqueRoutes = [];
@@ -418,7 +479,7 @@ window.ShadowRouter = (function () {
 
         const analyzedRoutes = uniqueRoutes.map((r, idx) => {
             const baseDuration = r.duration;
-            const liveDuration = Math.round(baseDuration * trafficMult);
+            const liveDuration = Math.round(baseDuration * timeOfDayAdjustment);
 
             // Extract OSRM step maneuver data for turn-by-turn navigation
             let routeSteps = null;
@@ -493,7 +554,9 @@ window.ShadowRouter = (function () {
                 : sortedByShade[0];
         }
 
-        // Cumulative UV Exposure Reduction % compared to Standard Fastest Route
+        // Cumulative estimated solar-exposure reduction compared to the OSRM
+        // baseline route. This is an experimental relative indicator, not a
+        // measured UV dose.
         const sunPos = SunCalc.getPosition(dateObj, start.lat, start.lng);
         const startUvIntensity = calculateSolarUvIntensity(sunPos.altitude);
         const hasSolarUv = startUvIntensity > 0 || fastestRoute.analyzed.totalUvExposureUnits > 0.0001;
@@ -525,7 +588,7 @@ window.ShadowRouter = (function () {
         });
 
         return {
-            trafficMultiplier: trafficMult,
+            timeOfDayAdjustment: timeOfDayAdjustment,
             routes: {
                 fastest: fastestRoute,
                 glareFree: glareFreeRoute,
@@ -620,4 +683,3 @@ window.ShadowRouter = (function () {
         fetchAndAnalyzeRoutes: fetchAndAnalyzeRoutes
     };
 })();
-

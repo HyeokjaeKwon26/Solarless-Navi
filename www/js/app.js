@@ -2,7 +2,7 @@
  * SOLARIS NAV - Main Application Controller
  * Pure 2D High-Performance Navigation System,
  * Dynamic Specific Route Voice Announcements ("최단 시간 경로로 안내를 시작합니다", "눈부심 방지 역광 회피 경로로 안내를 시작합니다", "그늘 우선 경로로 안내를 시작합니다"),
- * Real-Time GPS Solar Sunrise/Sunset & Elevation Dark Mode Synchronization,
+ * GPS Solar Sunrise/Sunset & Elevation Dark Mode Synchronization,
  * Toll-Free Route Avoidance Option, High-Res Satellite Imagery Layer.
  */
 
@@ -57,6 +57,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastGpsPosition = null;
     let lastGpsTimestamp = null;
     let lastRerouteTime = 0;
+    let routeAbortController = null;
+    let wakeLockSentinel = null;
+    let apiNoticeTimer = null;
 
     /* Free Map Panning & 8-Second Auto Recenter Toast Variables */
     let isUserMapPanning = false;
@@ -67,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentCountry = 'KR';
     let currentSpeedLimit = null; // null if no road speed limit data exists
     let lastSpeedLimitFetchTime = 0;
+    let lastRoadDataErrorNotice = 0;
     let isSpeedingWarningActive = false;
     let lastSpeedingAnnounceTime = 0;
     let isAmbientLightDark = false;
@@ -77,6 +81,41 @@ document.addEventListener('DOMContentLoaded', () => {
         noonMins: 750,
         sunsetMins: 1180
     };
+
+    function setNavigationButtonsEnabled(isEnabled) {
+        ['live-gps-nav-btn', 'btn-map-start-nav'].forEach((id) => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            const shouldDisable = !isEnabled && !isLiveNavActive;
+            button.disabled = shouldDisable;
+            button.setAttribute('aria-disabled', shouldDisable ? 'true' : 'false');
+        });
+    }
+
+    function showRouteFailureMessage(error, keptPreviousRoute = false) {
+        const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+        const messageKey = isOffline ? 'offlineRouteUnavailable' : (error && error.messageKey);
+        const base = messageKey
+            ? I18n.getText(messageKey)
+            : I18n.getText('routeNetworkError');
+        const suffix = keptPreviousRoute ? `\n\n${I18n.getText('existingRouteKept')}` : '';
+        alert(`${base}${suffix}`);
+    }
+
+    function showApiNotice(message) {
+        if (!message) return;
+        let notice = document.getElementById('api-status-banner');
+        if (!notice) {
+            notice = document.createElement('div');
+            notice.id = 'api-status-banner';
+            notice.className = 'api-status-banner';
+            document.body.appendChild(notice);
+        }
+        notice.textContent = String(message);
+        notice.classList.add('active');
+        clearTimeout(apiNoticeTimer);
+        apiNoticeTimer = setTimeout(() => notice.classList.remove('active'), 5500);
+    }
 
     function getRouteAnnouncementText(mode, isReroute = false) {
         const isKo = I18n.getLanguage().startsWith('ko');
@@ -113,12 +152,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (uvCut > 0 && !isNight) {
             if (isReroute) {
                 return isKo ?
-                    `자외선 노출을 ${uvCut}% 줄인 ${modeNameKo}로 새로 탐색하여 안내를 시작합니다.` :
-                    `Rerouting guidance to ${modeNameEn}, reducing UV exposure by ${uvCut}%.`;
+                    `태양 노출 추정치를 ${uvCut}% 낮춘 ${modeNameKo}로 새로 탐색하여 안내를 시작합니다.` :
+                    `Rerouting guidance to ${modeNameEn}, with an estimated ${uvCut}% lower solar exposure.`;
             } else {
                 return isKo ?
-                    `자외선 노출을 ${uvCut}% 줄인 ${modeNameKo}로 안내를 시작합니다.` :
-                    `Starting guidance on ${modeNameEn}, reducing UV exposure by ${uvCut}%.`;
+                    `태양 노출 추정치를 ${uvCut}% 낮춘 ${modeNameKo}로 안내를 시작합니다.` :
+                    `Starting guidance on ${modeNameEn}, with an estimated ${uvCut}% lower solar exposure.`;
             }
         } else {
             if (isReroute) {
@@ -177,6 +216,8 @@ document.addEventListener('DOMContentLoaded', () => {
         activeRoutePolylineGroup = L.featureGroup().addTo(map);
 
         disableMapEventsOnUI();
+        const attribution = document.getElementById('map-attribution');
+        if (attribution) L.DomEvent.disableClickPropagation(attribution);
 
         setupHardwareBackButtonHandler();
         setupAppResumeListener();
@@ -202,6 +243,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderFavorites();
         renderRecentDestinationHistory();
         updateModeButtonsHighlight();
+        setNavigationButtonsEnabled(false);
         requestUserGpsLocation(true);
 
         setTimeout(checkGitHubLatestVersion, 2500);
@@ -572,7 +614,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    /* TURN BANNER WITH REAL-TIME MANEUVER + GLARE/SAFE OVERLAY */
+    /* TURN BANNER WITH MANEUVER + ESTIMATED GLARE POSSIBILITY OVERLAY */
     function updateTurnBannerText(nextManeuver, glareRisk) {
         const banner = document.getElementById('mobile-turn-banner');
         if (!banner) return;
@@ -749,7 +791,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>${I18n.getText('shadedRestBtn')}</span>`;
 
         const restQuery = "parking garage rest stop shelter 쉼터 주차장";
-        const results = await Geocoder.searchPlaces(restQuery, currentStart);
+        let results = [];
+        try {
+            results = await Geocoder.searchPlaces(restQuery, currentStart, { includeNominatim: true });
+        } catch (e) {
+            if (btn) btn.innerHTML = `<i class="fa-solid fa-umbrella"></i> <span>${I18n.getText('shadedRestBtn')}</span>`;
+            alert(I18n.getText(e && e.messageKey ? e.messageKey : 'searchNetworkError'));
+            return;
+        }
 
         if (btn) btn.innerHTML = `<i class="fa-solid fa-umbrella"></i> <span>${I18n.getText('shadedRestBtn')}</span>`;
 
@@ -818,9 +867,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'fav-chip-btn';
-            const iconClass = fav.icon || 'fa-star';
+            const iconClass = String(fav.icon || 'fa-star').replace(/[^a-z0-9-]/gi, '');
             const displayName = getLocalizedFavName(fav);
-            chip.innerHTML = `<i class="fa-solid ${iconClass}"></i> <span>${displayName}</span>`;
+            const icon = document.createElement('i');
+            icon.className = `fa-solid ${iconClass || 'fa-star'}`;
+            const label = document.createElement('span');
+            label.textContent = displayName;
+            chip.append(icon, document.createTextNode(' '), label);
 
             chip.addEventListener('click', async () => {
                 const targetName = getLocalizedFavName(fav);
@@ -837,7 +890,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         const btn = document.getElementById('btn-confirm-destination');
                         if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${isKo ? '장소 확인 중...' : 'Verifying place...'}`;
 
-                        const results = await Geocoder.searchPlaces(place.trim(), currentStart);
+                        let results = [];
+                        try {
+                            results = await Geocoder.searchPlaces(place.trim(), currentStart, { includeNominatim: true });
+                        } catch (e) {
+                            if (btn) btn.innerHTML = `<i class="fa-solid fa-route"></i> ${I18n.getText('confirmStartBtn')}`;
+                            alert(I18n.getText(e && e.messageKey ? e.messageKey : 'searchNetworkError'));
+                            return;
+                        }
                         if (results && results.length > 0) {
                             fav.coords = { lat: results[0].lat, lng: results[0].lng };
                             fav.name = `${promptName.split('(')[0].trim()} (${(results[0].shortTitle || results[0].displayName).split(',')[0]})`;
@@ -870,7 +930,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const addr = prompt(isKo ? `'${name}'의 주소 또는 건물명을 입력하세요:` : `Enter address or building name for '${name}':`);
             if (!addr) return;
 
-            const results = await Geocoder.searchPlaces(addr.trim(), currentStart);
+            let results = [];
+            try {
+                results = await Geocoder.searchPlaces(addr.trim(), currentStart, { includeNominatim: true });
+            } catch (e) {
+                alert(I18n.getText(e && e.messageKey ? e.messageKey : 'searchNetworkError'));
+                return;
+            }
             if (results && results.length > 0) {
                 const list = getFavorites();
                 list.push({
@@ -996,15 +1062,24 @@ document.addEventListener('DOMContentLoaded', () => {
             const row = document.createElement('div');
             row.className = 'history-item';
             const isKo = I18n.getLanguage().startsWith('ko');
-            row.innerHTML = `
-                <div class="history-item-info">
-                    <i class="fa-solid fa-clock-rotate-left"></i>
-                    <span class="history-item-name">${item.name}</span>
-                </div>
-                <button type="button" class="remove-history-btn" title="${isKo ? '삭제' : 'Delete'}"><i class="fa-solid fa-xmark"></i></button>
-            `;
+            const info = document.createElement('div');
+            info.className = 'history-item-info';
+            const historyIcon = document.createElement('i');
+            historyIcon.className = 'fa-solid fa-clock-rotate-left';
+            const historyName = document.createElement('span');
+            historyName.className = 'history-item-name';
+            historyName.textContent = String(item.name || '');
+            info.append(historyIcon, historyName);
+            const removeButton = document.createElement('button');
+            removeButton.type = 'button';
+            removeButton.className = 'remove-history-btn';
+            removeButton.title = isKo ? '삭제' : 'Delete';
+            const removeIcon = document.createElement('i');
+            removeIcon.className = 'fa-solid fa-xmark';
+            removeButton.appendChild(removeIcon);
+            row.append(info, removeButton);
 
-            row.querySelector('.history-item-info').addEventListener('click', () => {
+            info.addEventListener('click', () => {
                 currentEnd = item.coords;
                 destinationName = item.name;
                 document.getElementById('destination-input').value = item.name;
@@ -1012,7 +1087,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 startNavigationFlow();
             });
 
-            row.querySelector('.remove-history-btn').addEventListener('click', (e) => {
+            removeButton.addEventListener('click', (e) => {
                 e.stopPropagation();
                 removeDestinationHistoryItem(item.name);
             });
@@ -1021,27 +1096,66 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function enableKeepAwake() {
+    function stopGpsWatch() {
+        if (gpsWatchId !== null && navigator.geolocation) {
+            navigator.geolocation.clearWatch(gpsWatchId);
+        }
+        gpsWatchId = null;
+    }
+
+    async function enableKeepAwake() {
+        if (!navigator.wakeLock || document.visibilityState === 'hidden' || !isLiveNavActive) return;
+        if (wakeLockSentinel && !wakeLockSentinel.released) return;
+
         try {
-            if (navigator.wakeLock) {
-                navigator.wakeLock.request('screen').catch(e => {});
+            const sentinel = await navigator.wakeLock.request('screen');
+            if (!isLiveNavActive || document.visibilityState === 'hidden') {
+                await sentinel.release().catch(() => {});
+                return;
             }
+            wakeLockSentinel = sentinel;
+            wakeLockSentinel.addEventListener('release', () => {
+                wakeLockSentinel = null;
+            }, { once: true });
         } catch (e) {
+            wakeLockSentinel = null;
             console.warn("KeepAwake warning:", e);
         }
     }
 
-    function disableKeepAwake() {}
+    async function disableKeepAwake() {
+        const sentinel = wakeLockSentinel;
+        wakeLockSentinel = null;
+        if (!sentinel || sentinel.released) return;
+        try {
+            await sentinel.release();
+        } catch (e) {
+            console.warn("KeepAwake release warning:", e);
+        }
+    }
 
     function setupAppResumeListener() {
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
             window.Capacitor.Plugins.App.addListener('appStateChange', (state) => {
-                if (state.isActive && currentEnd) {
-                    console.log("App resumed to foreground. Recalculating route from live GPS...");
+                if (!state.isActive) {
+                    // Android may revoke a screen WakeLock when the WebView is
+                    // backgrounded. Release our sentinel explicitly as well.
+                    disableKeepAwake();
+                    return;
+                }
+                if (isLiveNavActive) enableKeepAwake();
+                if (currentEnd) {
+                    console.log("App resumed to foreground. Refreshing GPS position...");
                     requestUserGpsLocation(false);
                 }
             });
         }
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') disableKeepAwake();
+            else if (isLiveNavActive) enableKeepAwake();
+        });
+        window.addEventListener('pagehide', () => disableKeepAwake());
     }
 
     function setupHardwareBackButtonHandler() {
@@ -1399,7 +1513,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const btn = document.getElementById('btn-confirm-destination');
             if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${isKo ? '스마트 위치 검색 중...' : 'Searching place...'}`;
 
-            const results = await Geocoder.searchPlaces(typedText, currentStart);
+            let results = [];
+            try {
+                // Explicit submit: use both providers, including Nominatim.
+                results = await Geocoder.searchPlaces(typedText, currentStart, { includeNominatim: true });
+            } catch (e) {
+                if (btn) btn.innerHTML = `<i class="fa-solid fa-route"></i> ${I18n.getText('confirmStartBtn')}`;
+                alert(I18n.getText(e && e.messageKey ? e.messageKey : 'searchNetworkError'));
+                return;
+            }
             if (results && results.length > 0) {
                 currentEnd = { lat: results[0].lat, lng: results[0].lng };
                 destinationName = results[0].shortTitle || results[0].displayName;
@@ -1416,6 +1538,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function startNavigationFlow() {
         if (!currentEnd) return;
+        if (!currentStart) {
+            const isKo = I18n.getLanguage().startsWith('ko');
+            alert(isKo ? '출발지 GPS 위치를 먼저 확인할 수 있어야 실제 경로를 계산할 수 있습니다.' : 'A GPS origin is required before a real road route can be calculated.');
+            requestUserGpsLocation(false);
+            return;
+        }
 
         saveDestinationHistory(destinationName, currentEnd);
 
@@ -1426,6 +1554,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('start-search-modal').classList.add('hidden');
         document.getElementById('bar-dest-text').innerText = destinationName || "Destination Set";
 
+        // Do not allow navigation to start while a first real route is still pending.
+        setNavigationButtonsEnabled(!!selectedRouteObj);
         updateRoute();
     }
 
@@ -1523,14 +1653,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function updateRoute(isMidDrive = false) {
-        if (!currentEnd) return;
+        if (!currentEnd || !currentStart) {
+            setNavigationButtonsEnabled(false);
+            return;
+        }
+
+        // Cancel an older route request before starting a new one.  This avoids
+        // a slow response overwriting a newer destination or route selection.
+        if (routeAbortController) {
+            routeAbortController.abort();
+        }
+        const requestController = new AbortController();
+        routeAbortController = requestController;
 
         const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
         const sunPos = updateSunInfo();
 
         try {
-            routeData = await ShadowRouter.fetchAndAnalyzeRoutes(currentStart, currentEnd, dateObj, isTollFreeOnly);
+            const nextRouteData = await ShadowRouter.fetchAndAnalyzeRoutes(
+                currentStart,
+                currentEnd,
+                dateObj,
+                isTollFreeOnly,
+                { signal: requestController.signal }
+            );
+
+            if (requestController.signal.aborted || routeAbortController !== requestController) return;
+            routeData = nextRouteData;
         } catch (e) {
+            if (requestController.signal.aborted || routeAbortController !== requestController) return;
             if (e && e.code === "TRANS_OCEANIC") {
                 const km = e.distanceKm ? e.distanceKm.toLocaleString() : "1,500+";
                 const isKo = I18n.getLanguage().startsWith('ko');
@@ -1538,12 +1689,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 openSearchModal();
                 return;
             }
-            routeData = OfflineMap.generateStandaloneRoute(currentStart, currentEnd, dateObj);
+
+            const hadPreviousRoute = !!(routeData && selectedRouteObj);
+            if (!hadPreviousRoute) {
+                routeData = null;
+                selectedRouteObj = null;
+                clearRouteFromMap(true);
+                setNavigationButtonsEnabled(false);
+            } else {
+                // Keep the last verified OSRM route visible. Never replace it
+                // with a synthetic line when the network is unavailable.
+                setNavigationButtonsEnabled(true);
+            }
+            showRouteFailureMessage(e, hadPreviousRoute);
+            return;
+        } finally {
+            if (routeAbortController === requestController) {
+                routeAbortController = null;
+            }
         }
 
         updateRouteOptionButtons(routeData);
 
         selectedRouteObj = routeData.routes[currentMode] || routeData.routes.glareFree;
+        setNavigationButtonsEnabled(!!selectedRouteObj);
 
         renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
         updateSummaryBox(selectedRouteObj);
@@ -1584,9 +1753,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const hasDistDiff = Math.abs(diffKmVal) >= 0.05;
 
             if (diffMin > 0) {
-                return `+${diffMin}${isKo ? '분 우회' : 'm detour'}`;
+                return `+${diffMin}${isKo ? '분 우회' : 'min detour'}`;
             } else if (diffMin < 0) {
-                return `${diffMin}${isKo ? '분 단축' : 'm faster'}`;
+                return `${diffMin}${isKo ? '분 단축' : 'min faster'}`;
             } else {
                 if (hasDistDiff) {
                     const sign = diffKmVal > 0 ? `+${diffKmStr}km` : `-${diffKmStr}km`;
@@ -1604,53 +1773,53 @@ document.addEventListener('DOMContentLoaded', () => {
         const glrUvCut = glr.uvReductionPct || 0;
         const shdUvCut = shd.uvReductionPct || 0;
 
-        // 1. Fastest Route (기준 탐색 경로: 역광위험도 n%, 자외선 기준치)
+        // 1. Fastest Route (OSRM baseline: estimated glare and solar exposure)
         document.getElementById('eta-fastest').innerText = `⏱️ ${fstMin}${isKo ? '분' : 'm'} (${fstKm}km)`;
         const fstDesc = document.getElementById('desc-fastest');
         if (fstDesc) {
             fstDesc.innerText = isKo
-                ? `역광 위험도 ${fstGlarePct}% | 자외선 기준치`
-                : `Glare Risk ${fstGlarePct}% | UV Baseline`;
+                ? `역광 위험 추정 ${fstGlarePct}% | 태양 노출 추정 기준`
+                : `Estimated glare ${fstGlarePct}% | Solar exposure baseline`;
         }
         const fstTraffic = document.getElementById('traffic-fastest');
         if (fstTraffic) {
             fstTraffic.classList.remove('hidden');
-            if (routeData.trafficMultiplier > 1.3) {
-                fstTraffic.innerText = isKo ? "서행/혼잡 🟡" : "Moderate 🟡";
+            if (routeData.timeOfDayAdjustment > 1.3) {
+                fstTraffic.innerText = isKo ? "시간대 보정 🟡" : "Time-adjusted 🟡";
                 fstTraffic.className = "traffic-chip mod";
             } else {
-                fstTraffic.innerText = isKo ? "교통원활 🟢" : "Smooth 🟢";
+                fstTraffic.innerText = isKo ? "기본 보정 🟢" : "Baseline 🟢";
                 fstTraffic.className = "traffic-chip smooth";
             }
         }
 
-        // 2. Glare-Free Route (역광/눈부심 회피 경로: 우회정보 | 역광위험도 n% | 자외선 n% 감소)
+        // 2. Glare-Free Route (estimated glare possibility and solar exposure)
         const glrDiffText = formatRouteDetourText(glrMin, glrKmNum, fstMin, fstKmNum);
         document.getElementById('eta-glare').innerText = `⏱️ ${glrMin}${isKo ? '분' : 'm'} (${glrKm}km)`;
 
         const glrDesc = document.getElementById('desc-glare');
         if (glrDesc) {
             if (glr.isNight) {
-                glrDesc.innerText = `${glrDiffText} | ${isKo ? '역광 위험도 0% | 야간 (자외선 0% 🌙)' : 'Glare Risk 0% | Night (UV 0% 🌙)'}`;
+                glrDesc.innerText = `${glrDiffText} | ${isKo ? '역광 위험 추정 0% | 야간 (태양 노출 0% 🌙)' : 'Estimated glare 0% | Night (solar exposure 0% 🌙)'}`;
             } else if (glrUvCut > 0) {
-                glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험도 ${glrGlarePct}% | 자외선 ${glrUvCut}% 감소 🛡️` : `Glare Risk ${glrGlarePct}% | UV -${glrUvCut}% 🛡️`}`;
+                glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험 추정 ${glrGlarePct}% | 태양 노출 추정 ${glrUvCut}% 감소 🛡️` : `Estimated glare ${glrGlarePct}% | Estimated solar exposure -${glrUvCut}% 🛡️`}`;
             } else {
-                glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험도 ${glrGlarePct}% | 자외선 기준치 🛡️` : `Glare Risk ${glrGlarePct}% | UV Baseline 🛡️`}`;
+                glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험 추정 ${glrGlarePct}% | 태양 노출 추정 기준 🛡️` : `Estimated glare ${glrGlarePct}% | Solar exposure baseline 🛡️`}`;
             }
         }
 
-        // 3. Shade Route (그늘·구조물 우선 경로: 우회정보 | 역광위험도 n% | 자외선 n% 감소)
+        // 3. Shade Route (estimated shade possibility and solar exposure)
         const shdDiffText = formatRouteDetourText(shdMin, shdKmNum, fstMin, fstKmNum);
         document.getElementById('eta-shade').innerText = `⏱️ ${shdMin}${isKo ? '분' : 'm'} (${shdKm}km)`;
 
         const shdDesc = document.getElementById('desc-shade');
         if (shdDesc) {
             if (shd.isNight) {
-                shdDesc.innerText = `${shdDiffText} | ${isKo ? '역광 위험도 0% | 야간 (자외선 0% 🌙)' : 'Glare Risk 0% | Night (UV 0% 🌙)'}`;
+                shdDesc.innerText = `${shdDiffText} | ${isKo ? '역광 위험 추정 0% | 야간 (태양 노출 0% 🌙)' : 'Estimated glare 0% | Night (solar exposure 0% 🌙)'}`;
             } else if (shdUvCut > 0) {
-                shdDesc.innerText = `${shdDiffText} | ${isKo ? `역광 위험도 ${shdGlarePct}% | 자외선 ${shdUvCut}% 감소 ☂️` : `Glare Risk ${shdGlarePct}% | UV -${shdUvCut}% ☂️`}`;
+                shdDesc.innerText = `${shdDiffText} | ${isKo ? `역광 위험 추정 ${shdGlarePct}% | 태양 노출 추정 ${shdUvCut}% 감소 ☂️` : `Estimated glare ${shdGlarePct}% | Estimated solar exposure -${shdUvCut}% ☂️`}`;
             } else {
-                shdDesc.innerText = `${shdDiffText} | ${isKo ? `역광 위험도 ${shdGlarePct}% | 자외선 기준치 ☂️` : `Glare Risk ${shdGlarePct}% | UV Baseline ☂️`}`;
+                shdDesc.innerText = `${shdDiffText} | ${isKo ? `역광 위험 추정 ${shdGlarePct}% | 태양 노출 추정 기준 ☂️` : `Estimated glare ${shdGlarePct}% | Solar exposure baseline ☂️`}`;
             }
         }
     }
@@ -1715,7 +1884,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* CLEAR ALL MAP POLYLINES, DESTINATION MARKERS, & BANNER WHEN GUIDANCE ENDS */
-    function clearRouteFromMap() {
+    function clearRouteFromMap(keepDestination = false) {
         if (activeRoutePolylineGroup) {
             activeRoutePolylineGroup.clearLayers();
         }
@@ -1724,13 +1893,13 @@ document.addEventListener('DOMContentLoaded', () => {
             endMarker = null;
         }
 
-        currentEnd = null;
+        if (!keepDestination) currentEnd = null;
         routeData = null;
         selectedRouteObj = null;
 
         const isKo = I18n.getLanguage().startsWith('ko');
         const destChip = document.getElementById('bar-dest-text');
-        if (destChip) destChip.innerText = isKo ? "목적지를 설정하세요" : "Set Destination";
+        if (destChip && !keepDestination) destChip.innerText = isKo ? "목적지를 설정하세요" : "Set Destination";
 
         const turnBanner = document.getElementById('mobile-turn-banner');
         if (turnBanner) turnBanner.classList.remove('active', 'hazard');
@@ -1739,6 +1908,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('sum-dist').innerText = "-- km";
         document.getElementById('sum-glare').innerText = "--%";
         document.getElementById('sum-shade').innerText = "--%";
+        setNavigationButtonsEnabled(false);
     }
 
     function updateSummaryBox(selectedRouteObj) {
@@ -1798,7 +1968,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             debounceTimer = setTimeout(async () => {
-                const results = await Geocoder.searchPlaces(val, currentStart);
+                // Photon-only autocomplete keeps Nominatim for explicit submit
+                // searches, avoiding one request per partial keystroke.
+                let results = [];
+                try {
+                    results = await Geocoder.searchPlaces(val, currentStart, { includeNominatim: false });
+                } catch (e) {
+                    console.warn('Autocomplete search unavailable:', e);
+                    dropdown.classList.remove('active');
+                    return;
+                }
                 dropdown.innerHTML = '';
                 if (!results || results.length === 0) {
                     dropdown.classList.remove('active');
@@ -1808,17 +1987,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 results.forEach(res => {
                     const item = document.createElement('div');
                     item.className = 'result-item';
-                    const distTag = res.distKm !== null ? `<span class="dist-tag" style="color:#fbbf24; font-size:11px; font-weight:700;">📍 ${res.distKm < 1 ? Math.round(res.distKm * 1000) + 'm' : res.distKm.toFixed(1) + 'km'}</span>` : '';
-                    item.innerHTML = `
-                        <i class="fa-solid fa-location-dot" style="color:var(--accent-cyan)"></i>
-                        <div style="flex:1; overflow:hidden;">
-                            <div style="font-weight:700; color:#fff; display:flex; align-items:center; justify-content:space-between; gap:6px;">
-                                <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${res.shortTitle || res.displayName}</span>
-                                ${distTag}
-                            </div>
-                            <div style="font-size:11px; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${res.displayName}</div>
-                        </div>
-                    `;
+                    const icon = document.createElement('i');
+                    icon.className = 'fa-solid fa-location-dot';
+                    icon.style.color = 'var(--accent-cyan)';
+                    const content = document.createElement('div');
+                    content.style.cssText = 'flex:1; overflow:hidden;';
+                    const titleRow = document.createElement('div');
+                    titleRow.style.cssText = 'font-weight:700; color:#fff; display:flex; align-items:center; justify-content:space-between; gap:6px;';
+                    const title = document.createElement('span');
+                    title.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+                    title.textContent = res.shortTitle || res.displayName;
+                    titleRow.appendChild(title);
+                    if (res.distKm !== null && Number.isFinite(res.distKm)) {
+                        const distTag = document.createElement('span');
+                        distTag.className = 'dist-tag';
+                        distTag.style.cssText = 'color:#fbbf24; font-size:11px; font-weight:700;';
+                        distTag.textContent = `📍 ${res.distKm < 1 ? Math.round(res.distKm * 1000) + 'm' : res.distKm.toFixed(1) + 'km'}`;
+                        titleRow.appendChild(distTag);
+                    }
+                    const address = document.createElement('div');
+                    address.style.cssText = 'font-size:11px; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+                    address.textContent = res.displayName;
+                    content.append(titleRow, address);
+                    item.append(icon, content);
                     item.addEventListener('click', () => {
                         input.value = res.shortTitle || res.displayName;
                         dropdown.classList.remove('active');
@@ -1828,7 +2019,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
 
                 dropdown.classList.add('active');
-            }, 250);
+            }, 600);
         });
 
         input.addEventListener('keydown', (e) => {
@@ -1905,8 +2096,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const roadData = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(lat, lng);
         currentCountry = roadData.country;
+        if (roadData.errorCode && now - lastRoadDataErrorNotice > 60000) {
+            lastRoadDataErrorNotice = now;
+            showApiNotice(I18n.getText('roadDataUnavailable'));
+        }
 
-        // Real-Time Road Tunnel Status Update & Automatic Theme Refresh
+        // Nearby OSM road-tunnel tag and automatic theme refresh
         if (isCurrentRoadTunnel !== !!roadData.isTunnel) {
             isCurrentRoadTunnel = !!roadData.isTunnel;
             checkAndUpdateMapTileTheme();
@@ -1947,7 +2142,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (badgeUs) badgeUs.classList.add('hidden');
         }
 
-        // Highway, Toll Road & Toll Booth Real-Time Badges
+        // Highway, toll-road and toll-booth badges from nearby OSM tags
         const badgeHwy = document.getElementById('road-badge-highway');
         const badgeToll = document.getElementById('road-badge-toll');
         const badgeBooth = document.getElementById('road-badge-tollbooth');
@@ -1996,7 +2191,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const displaySpeed = currentCountry === 'US' ? Math.round(kmh * 0.621371) : kmh;
         speedEl.innerText = displaySpeed;
 
-        // Fetch real-time country & speed limit for current road
+        // Fetch nearby OSM country and speed-limit data for the current road
         updateSpeedLimitDisplay(lat, lng);
 
         checkSpeedingHazard(displaySpeed);
@@ -2029,8 +2224,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
-        if (gpsWatchId) navigator.geolocation.clearWatch(gpsWatchId);
-        gpsWatchId = null;
+        stopGpsWatch();
         isLiveNavActive = false;
 
         const isKo = I18n.getLanguage().startsWith('ko');
@@ -2081,8 +2275,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isKo = I18n.getLanguage().startsWith('ko');
 
         if (isLiveNavActive) {
-            if (gpsWatchId) navigator.geolocation.clearWatch(gpsWatchId);
-            gpsWatchId = null;
+            stopGpsWatch();
             isLiveNavActive = false;
             recenterMapToVehicle();
 
@@ -2239,7 +2432,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const sunPos = SunCalc.getPosition(new Date(), lat, lng);
                 const glareRisk = ShadowRouter.calculateSegmentGlare(currentHeading, sunPos);
 
-                // Real-time turn-by-turn: find next maneuver and update banner + voice
+                // GPS turn-by-turn: find next maneuver and update banner + voice
                 const nextManeuver = findNextManeuver(lat, lng);
                 updateTurnBannerText(nextManeuver, glareRisk);
 

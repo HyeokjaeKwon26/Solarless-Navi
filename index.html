@@ -93,7 +93,7 @@
                         <i class="fa-solid fa-compass"></i>
                         <div>
                             <h2 id="search-modal-title">어디로 가시나요?</h2>
-                            <p id="search-modal-sub">실시간 태양 위치와 그늘을 계산해 최적 경로를 안내합니다.</p>
+                            <p id="search-modal-sub">태양 위치와 도로 방향을 바탕으로 실험용 노출 지표를 계산합니다.</p>
                         </div>
                     </div>
 
@@ -175,14 +175,17 @@
                             </span>
                         </div>
                         <div class="about-row">
-                            <span class="about-lbl" id="lbl-app-cert">보안 서명</span>
-                            <span class="about-val cert">RSA 2048-bit Release Certified 🛡️</span>
+                            <span class="about-lbl" id="lbl-app-cert">빌드 서명 상태</span>
+                            <span class="about-val cert">릴리스 키스토어 설정에 따라 달라짐</span>
                         </div>
                         <div class="about-row">
                             <span class="about-lbl" id="lbl-app-license">라이선스</span>
                             <span class="about-val" style="color:#60a5fa; font-weight:600;">GNU AGPL-3.0 (Open Source)</span>
                         </div>
                     </div>
+                    <p class="about-disclaimer" id="about-disclaimer">
+                        실험용 추정값입니다. 경로·장소·도로 규칙 조회를 위해 위치와 검색어가 외부 공개 API로 전송될 수 있으며, 오프라인에서는 실제 도로 경로를 계산하지 않습니다.
+                    </p>
 
                     <button class="confirm-start-btn close-about" id="btn-close-about-modal">
                         닫기
@@ -359,10 +362,11 @@
                     </div>
                 </div>
 
-                <!-- Routing Mode Selector with Real-Time Traffic ETAs -->
+                <!-- Routing Mode Selector with time-of-day adjusted ETA estimates -->
                 <div class="card mode-card">
                     <div class="card-header">
-                        <h3 id="traffic-card-title"><i class="fa-solid fa-route"></i> 실시간 교통 소요시간 비교</h3>
+                        <h3 id="traffic-card-title"><i class="fa-solid fa-route"></i> 시간대 보정 예상시간 비교</h3>
+                        <span class="estimate-note" id="estimate-note">실험용 추정값</span>
                     </div>
                     <div class="card-body">
                         <div class="mode-options">
@@ -375,7 +379,7 @@
                                         <span class="mode-eta-val" id="eta-fastest">⏱️ --분</span>
                                     </div>
                                     <div class="mode-sub-row">
-                                        <span class="mode-desc" id="desc-fastest">일반 탐색 경로</span>
+                                        <span class="mode-desc" id="desc-fastest">OSRM 기준 일반 경로</span>
                                         <span class="traffic-chip smooth hidden" id="traffic-fastest"></span>
                                     </div>
                                 </div>
@@ -390,7 +394,7 @@
                                         <span class="mode-eta-val" id="eta-glare">⏱️ --분</span>
                                     </div>
                                     <div class="mode-sub-row">
-                                        <span class="mode-desc" id="desc-glare">태양 직사광선 정면 우회</span>
+                                        <span class="mode-desc" id="desc-glare">역광 가능성 추정이 낮은 경로</span>
                                     </div>
                                 </div>
                             </button>
@@ -404,7 +408,7 @@
                                         <span class="mode-eta-val" id="eta-shade">⏱️ --분</span>
                                     </div>
                                     <div class="mode-sub-row">
-                                        <span class="mode-desc" id="desc-shade">건물 그림자 / 터널 구간</span>
+                                        <span class="mode-desc" id="desc-shade">그늘 가능성 추정이 높은 경로</span>
                                     </div>
                                 </div>
                             </button>
@@ -444,13 +448,13 @@
                                 <div class="meter-fill" id="glare-meter-fill" style="width: 0%;"></div>
                             </div>
                             <div class="hazard-advice" id="hazard-advice-text">
-                                <i class="fa-solid fa-circle-info"></i> 실시간 시각 기준 태양 각도 연산 중.
+                                <i class="fa-solid fa-circle-info"></i> 태양각·도로방향 기반 실험용 추정 지표입니다.
                             </div>
                         </div>
 
                         <!-- Real Driving Control & App Info Link at Bottom of Drawer -->
                         <div class="action-buttons-group">
-                            <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> 실시간 GPS 내비 시작</button>
+                            <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> GPS 내비 시작</button>
                             <div class="about-menu-wrapper" style="margin-top: 8px; display: flex; justify-content: center;">
                                 <button type="button" class="about-app-link-btn" id="btn-about-app" style="font-size: 12px; color: #a78bfa; font-weight: 700;">
                                     ℹ️ 앱 정보 및 개발자 정보
@@ -485,6 +489,9 @@
                 </div>
 
                 <div id="map"></div>
+                <div class="map-attribution" id="map-attribution" aria-label="Map attribution">
+                    <span id="map-attribution-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · Tiles © <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a> / <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a></span>
+                </div>
 
                 <!-- Bottom-Left Speedometer HUD & Country-Specific Speed Limit & Stop Sign Badge Container -->
                 <div class="speedometer-bottom-left" id="speedometer-bottom-left">
@@ -571,7 +578,7 @@
                             <span class="stat-icon hazard"><i class="fa-solid fa-sun"></i></span>
                             <div>
                                 <div class="stat-val hazard" id="sum-glare">--%</div>
-                                <div class="stat-lbl" id="sum-glare-lbl">역광 위험</div>
+                                <div class="stat-lbl" id="sum-glare-lbl">역광 위험 추정</div>
                             </div>
                         </div>
                         <div class="summary-divider"></div>
@@ -579,7 +586,7 @@
                             <span class="stat-icon shade"><i class="fa-solid fa-umbrella"></i></span>
                             <div>
                                 <div class="stat-val shade" id="sum-shade">--%</div>
-                                <div class="stat-lbl" id="sum-shade-lbl">그늘 비율</div>
+                                <div class="stat-lbl" id="sum-shade-lbl">그늘 가능성 추정</div>
                             </div>
                         </div>
                     </div>

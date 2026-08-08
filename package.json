@@ -4,7 +4,8 @@
   "description": "Solaris Nav - Sun-Aware Automotive Navigation Mobile App",
   "main": "index.html",
   "scripts": {
-    "start": "serve -p 8080"
+    "start": "serve -p 8080",
+    "test": "node --test tests/*.test.js"
   },
   "author": "Hyeokjae Kwon, M.D., Ph.D. <https://hyeokjaekwon26.github.io/>",
   "license": "AGPL-3.0-only",

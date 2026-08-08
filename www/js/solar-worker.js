@@ -58,6 +58,7 @@ function calculateBearing(lat1, lon1, lat2, lon2) {
 }
 
 function calculateSolarUvIntensity(altitudeDeg) {
+    if (!Number.isFinite(altitudeDeg)) return 0;
     const apparentAltitude = altitudeDeg + 0.833;
     const horizonDiffuseBaseline = sin(0.833 * rad);
     if (apparentAltitude > 0) {
