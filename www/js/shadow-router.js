@@ -1,7 +1,8 @@
 /**
  * ShadowRouter - solar exposure/glare possibility estimation over real OSRM routes.
  * Travel times use an explicit time-of-day adjustment, not live traffic data.
- * Shade and exposure values are experimental heuristics, not building/terrain simulation.
+ * Shade and exposure values are experimental; optional scene data adds bounded
+ * building, tunnel, and terrain sun-ray checks, with a heuristic fallback.
  */
 
 window.ShadowRouter = (function () {
@@ -327,7 +328,7 @@ window.ShadowRouter = (function () {
         return timeLookup;
     }
 
-    function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null) {
+    function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null, scene = null) {
         const segments = [];
         let totalGlareWeighted = 0;
         let totalShadeWeighted = 0;
@@ -365,7 +366,12 @@ window.ShadowRouter = (function () {
 
             const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
             const glareRisk = calculateSegmentGlare(heading, segSunPos);
-            const shadeScore = estimateSegmentShade(p1, p2, segSunPos);
+            const sceneResult = scene && window.SceneShadow
+                ? window.SceneShadow.getSegmentOcclusion(p1, p2, segSunPos, scene, i)
+                : null;
+            const shadeScore = sceneResult && Number.isFinite(sceneResult.shadeScore)
+                ? sceneResult.shadeScore
+                : estimateSegmentShade(p1, p2, segSunPos);
 
             // Experimental solar-exposure estimate per segment:
             const unshadedFraction = (1.0 - (shadeScore * 0.85));
@@ -380,6 +386,8 @@ window.ShadowRouter = (function () {
                 passTime: segmentPassTime,
                 glareRisk: glareRisk,
                 shadeScore: shadeScore,
+                shadeSource: sceneResult && sceneResult.source ? sceneResult.source : 'heuristic',
+                sceneOcclusion: sceneResult || null,
                 uvScore: segmentUvScore
             });
 
@@ -397,7 +405,9 @@ window.ShadowRouter = (function () {
             avgGlareRisk: isFinite(avgGlare) ? avgGlare : 0,
             avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
             totalUvExposureUnits: isFinite(totalUv) ? totalUv : 0,
-            coordinates: coordinates
+            coordinates: coordinates,
+            sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
+            sceneSource: scene && scene.source ? scene.source : 'heuristic fallback'
         };
     }
 
@@ -477,7 +487,7 @@ window.ShadowRouter = (function () {
 
         if (uniqueRoutes.length === 0) uniqueRoutes.push(rawCandidates[0]);
 
-        const analyzedRoutes = uniqueRoutes.map((r, idx) => {
+        const analyzedRoutes = await Promise.all(uniqueRoutes.map(async (r, idx) => {
             const baseDuration = r.duration;
             const liveDuration = Math.round(baseDuration * timeOfDayAdjustment);
 
@@ -511,7 +521,19 @@ window.ShadowRouter = (function () {
                 }
             }
 
-            const analyzed = analyzeRouteSegments(r.geometry.coordinates, dateObj, liveDuration, routeSteps);
+            let scene = null;
+            if (window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
+                scene = await window.SceneShadow.fetchSceneForRoute(r.geometry.coordinates, {
+                    dateObj,
+                    durationSec: liveDuration,
+                    timeLookup: buildStepTimeLookup(r.geometry.coordinates, routeSteps, liveDuration),
+                    signal: options.signal,
+                    timeoutMs: 12000,
+                    terrainTimeoutMs: 10000
+                });
+            }
+            // Keep the OSRM route even when optional scene services are down.
+            const analyzed = await analyzeRouteSegmentsAsync(r.geometry.coordinates, dateObj, liveDuration, routeSteps, scene);
 
             return {
                 id: 'route_opt_' + idx,
@@ -520,9 +542,11 @@ window.ShadowRouter = (function () {
                 durationSec: liveDuration,
                 baseDurationSec: baseDuration,
                 analyzed: analyzed,
-                maneuvers: maneuvers
+                maneuvers: maneuvers,
+                sceneCoverage: analyzed.sceneCoverage,
+                sceneSource: analyzed.sceneSource
             };
-        });
+        }));
 
         // 1. Fastest Route: strictly minimum duration
         const sortedByDuration = [...analyzedRoutes].sort((a, b) => a.durationSec - b.durationSec);
@@ -630,7 +654,7 @@ window.ShadowRouter = (function () {
      * Async version of analyzeRouteSegments that runs in a Web Worker.
      * Falls back to synchronous main-thread computation if Worker is unavailable.
      */
-    function analyzeRouteSegmentsAsync(coordinates, dateObj, durationSec, steps) {
+    function analyzeRouteSegmentsAsync(coordinates, dateObj, durationSec, steps, scene = null) {
         // Build time lookup on main thread (lightweight) so Worker gets it ready
         const timeLookup = buildStepTimeLookup(coordinates, steps, durationSec);
 
@@ -644,14 +668,15 @@ window.ShadowRouter = (function () {
                     coordinates,
                     startTimestamp: dateObj.getTime(),
                     durationSec,
-                    timeLookup: Array.from(timeLookup)
+                    timeLookup: Array.from(timeLookup),
+                    scene
                 });
 
                 // Safety timeout: if Worker doesn't respond in 8s, fallback to sync
                 setTimeout(() => {
                     if (workerCallbacks.has(id)) {
                         workerCallbacks.delete(id);
-                        const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps);
+                        const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene);
                         result.coordinates = coordinates;
                         resolve(result);
                     }
@@ -664,7 +689,7 @@ window.ShadowRouter = (function () {
         }
 
         // Sync fallback
-        const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps);
+        const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene);
         return Promise.resolve(result);
     }
 

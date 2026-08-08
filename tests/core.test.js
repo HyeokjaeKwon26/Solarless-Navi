@@ -29,12 +29,13 @@ sandbox.window = sandbox;
 sandbox.self = sandbox;
 vm.createContext(sandbox);
 
-for (const file of ['js/suncalc.js', 'js/shadow-router.js', 'js/offline-map.js']) {
+for (const file of ['js/suncalc.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/offline-map.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), sandbox, { filename: file });
 }
 
 const ShadowRouter = sandbox.ShadowRouter;
 const OfflineMap = sandbox.OfflineMap;
+const SceneShadow = sandbox.SceneShadow;
 
 test('distance and bearing calculations handle normal and invalid inputs', () => {
     assert.equal(ShadowRouter.calculateDistanceMeters(0, 0, 0, 0), 0);
@@ -64,4 +65,44 @@ test('glare risk respects invalid, night, high-angle, and angular boundaries', (
 test('offline route fallback never returns a synthetic navigation route', () => {
     assert.equal(OfflineMap.canCalculateRouteOffline(), false);
     assert.equal(OfflineMap.generateStandaloneRoute({ lat: 0, lng: 0 }, { lat: 1, lng: 1 }, new Date()), null);
+});
+
+test('scene projection and polygon ray intersection are deterministic', () => {
+    const origin = { lat: 37.5, lng: 127.0 };
+    const local = SceneShadow.projectPoint(37.5, 127.001, origin);
+    assert.ok(local.x > 80 && local.x < 100);
+    assert.ok(Math.abs(local.y) < 0.001);
+
+    const square = [{ x: 20, y: -10 }, { x: 40, y: -10 }, { x: 40, y: 10 }, { x: 20, y: 10 }];
+    assert.equal(SceneShadow.pointInPolygon({ x: 30, y: 0 }, square), true);
+    assert.equal(SceneShadow.intersectRayWithPolygon({ x: 0, y: 0 }, { x: 1, y: 0 }, square), 20);
+    assert.equal(SceneShadow.intersectRayWithPolygon({ x: 0, y: 30 }, { x: 1, y: 0 }, square), null);
+});
+
+test('terrain ray obstruction respects night, invalid data, and horizon tolerance', () => {
+    assert.equal(SceneShadow.isTerrainRayOccluded(100, -1, [100, 200], [130, 160]), false);
+    assert.equal(SceneShadow.isTerrainRayOccluded(100, 10, [100, 200], [130, 160]), true);
+    assert.equal(SceneShadow.isTerrainRayOccluded(100, 10, [100], [101]), false);
+    assert.equal(SceneShadow.isTerrainRayOccluded(NaN, 10, [100], [300]), false);
+});
+
+test('scene occlusion reports building and tunnel sources without fabricating geometry', () => {
+    const scene = {
+        origin: { lat: 0, lng: 0 },
+        coverage: { buildings: true, terrain: false, tunnels: true },
+        buildings: [{
+            polygon: [{ x: 30, y: -10 }, { x: 60, y: -10 }, { x: 60, y: 10 }, { x: 30, y: 10 }],
+            bounds: { minX: 30, maxX: 60, minY: -10, maxY: 10 },
+            height: 30,
+            ground: 0
+        }],
+        tunnels: [{ line: [{ x: -10, y: 0 }, { x: 10, y: 0 }] }],
+        terrainSamples: [],
+        terrainProfiles: []
+    };
+    const blocked = SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], { altitude: 10, azimuth: 90 }, scene, 0);
+    assert.equal(blocked.source, 'tunnel');
+    const buildingScene = { ...scene, tunnels: [] };
+    const buildingBlocked = SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], { altitude: 10, azimuth: 90 }, buildingScene, 0);
+    assert.equal(buildingBlocked.source, 'building');
 });

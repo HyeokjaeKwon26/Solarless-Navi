@@ -1822,6 +1822,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 shdDesc.innerText = `${shdDiffText} | ${isKo ? `역광 위험 추정 ${shdGlarePct}% | 태양 노출 추정 기준 ☂️` : `Estimated glare ${shdGlarePct}% | Solar exposure baseline ☂️`}`;
             }
         }
+
+        // Make data provenance visible beside every route card. A route stays
+        // usable when public scene services fail, but it must not look as if a
+        // full building/terrain model was used in that case.
+        function sceneLabel(route) {
+            const coverage = route && route.analyzed && route.analyzed.sceneCoverage;
+            const hasScene = coverage && (coverage.buildings || coverage.terrain || coverage.tunnels);
+            return hasScene
+                ? (isKo ? '건물·지형 데이터 반영' : 'OSM/DEM scene data applied')
+                : (isKo ? '장면 데이터 없음 · 휴리스틱 추정' : 'Scene data unavailable · heuristic');
+        }
+        [[fstDesc, fst], [glrDesc, glr], [shdDesc, shd]].forEach(([element, route]) => {
+            if (element) element.innerText += ` | ${sceneLabel(route)}`;
+        });
     }
 
     function renderMapMarkersAndPolyline(selectedRouteObj, isLiveDrive = false) {

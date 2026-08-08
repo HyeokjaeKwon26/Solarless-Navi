@@ -4,6 +4,11 @@
  */
 'use strict';
 
+// The scene module is shared with the main thread.  If a WebView blocks
+// worker imports, the worker still completes with the documented heuristic
+// fallback instead of failing route analysis.
+try { importScripts('scene-shadow.js'); } catch (e) { /* optional scene data */ }
+
 /* ===== Inlined SunCalc getPosition (NOAA/AA+ Astronomical Algorithms) ===== */
 const PI = Math.PI, sin = Math.sin, cos = Math.cos, tan = Math.tan,
     asin = Math.asin, atan = Math.atan2, acos = Math.acos, rad = PI / 180;
@@ -100,7 +105,7 @@ function estimateSegmentShade(p1, p2, sunPos) {
 /* ===== Worker Message Handler ===== */
 
 self.onmessage = function (e) {
-    const { id, coordinates, startTimestamp, durationSec, timeLookup: timeLookupArr } = e.data;
+    const { id, coordinates, startTimestamp, durationSec, timeLookup: timeLookupArr, scene } = e.data;
 
     const n = coordinates.length;
     // Accept pre-computed timeLookup or build uniform fallback
@@ -144,13 +149,26 @@ self.onmessage = function (e) {
         const sunIntensity = calculateSolarUvIntensity(segSunPos.altitude);
         const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
         const glareRisk = calculateSegmentGlare(heading, segSunPos);
-        const shadeScore = estimateSegmentShade(p1, p2, segSunPos);
+        const sceneResult = scene && self.SceneShadow
+            ? self.SceneShadow.getSegmentOcclusion(p1, p2, segSunPos, scene, i)
+            : null;
+        const shadeScore = sceneResult && Number.isFinite(sceneResult.shadeScore)
+            ? sceneResult.shadeScore
+            : estimateSegmentShade(p1, p2, segSunPos);
         const unshadedFraction = 1.0 - shadeScore * 0.85;
         const vehicleExposureFactor = 0.35 + 0.65 * glareRisk;
         const segmentUvScore = isFinite(sunIntensity) ? sunIntensity * unshadedFraction * vehicleExposureFactor : 0;
 
         segments.push({
-            heading, glareRisk, shadeScore, uvScore: segmentUvScore
+            p1,
+            p2,
+            passTime: new Date(passTimeMs),
+            heading,
+            glareRisk,
+            shadeScore,
+            shadeSource: sceneResult && sceneResult.source ? sceneResult.source : 'heuristic',
+            sceneOcclusion: sceneResult || null,
+            uvScore: segmentUvScore
         });
 
         totalGlareWeighted += glareRisk * segDist;
@@ -169,7 +187,9 @@ self.onmessage = function (e) {
             segments,
             avgGlareRisk: isFinite(avgGlare) ? avgGlare : 0,
             avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
-            totalUvExposureUnits: isFinite(totalUv) ? totalUv : 0
+            totalUvExposureUnits: isFinite(totalUv) ? totalUv : 0,
+            sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
+            sceneSource: scene && scene.source ? scene.source : 'heuristic fallback'
         }
     });
 };
