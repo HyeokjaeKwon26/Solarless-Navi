@@ -1062,3 +1062,23 @@ test('initial search overlay cannot cover the global header controls', () => {
     assert.ok(css.includes('position: relative;'));
     assert.ok(css.includes('z-index: 10000;'));
 });
+
+test('rotated Leaflet input uses logical layout dimensions and document drag events', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('const layoutWidth = container.clientWidth || rect.width;'));
+    assert.ok(appSource.includes('const layoutHeight = container.clientHeight || rect.height;'));
+    assert.ok(appSource.includes('rect.left + (container.clientLeft || 0) + localX'));
+    assert.ok(appSource.includes('const patchDocumentEvent = event =>'));
+    assert.ok(appSource.includes("'touchmove', 'touchend', 'touchcancel'"));
+});
+
+test('GPS permission and GPS fix are separate, with one in-flight request', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes("let gpsPermissionState = 'unknown'"));
+    assert.ok(appSource.includes("let gpsFixState = 'idle'"));
+    assert.ok(appSource.includes('if (gpsFixPromise) return gpsFixPromise;'));
+    assert.ok(appSource.includes('gpsFixState = \'pending\';'));
+    assert.ok(appSource.includes('async function startNavigationFlow()'));
+    assert.ok(appSource.includes('await requestUserGpsLocation(false);'));
+    assert.ok(appSource.includes('The current GPS fix is not ready yet.'));
+});

@@ -23,6 +23,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentStart = null;
     let currentHeading = 0;
+    let gpsPermissionState = 'unknown'; // unknown | prompt | granted | denied
+    let gpsFixState = 'idle'; // idle | pending | ready | error | unavailable
+    let gpsFixPromise = null;
+    let navigationStartPending = false;
     let currentEnd = null;
     let destinationName = "";
     const SAVED_ROUTE_MODE_KEY = 'solarless_last_route_mode';
@@ -434,14 +438,23 @@ document.addEventListener('DOMContentLoaded', () => {
             const rect = container.getBoundingClientRect();
             const cx = rect.left + rect.width / 2;
             const cy = rect.top + rect.height / 2;
+            // getBoundingClientRect() is the axis-aligned box *after* CSS
+            // rotation. Leaflet, however, expects a point in the element's
+            // original layout box. Use clientWidth/clientHeight for that
+            // logical box, then add the transformed rect origin back so
+            // Leaflet's own rect subtraction produces the right local point.
+            const layoutWidth = container.clientWidth || rect.width;
+            const layoutHeight = container.clientHeight || rect.height;
             const radians = angleDeg * Math.PI / 180;
             const cos = Math.cos(radians);
             const sin = Math.sin(radians);
             const dx = x - cx;
             const dy = y - cy;
+            const localX = layoutWidth / 2 + dx * cos - dy * sin;
+            const localY = layoutHeight / 2 + dx * sin + dy * cos;
             return {
-                clientX: cx + dx * cos - dy * sin,
-                clientY: cy + dx * sin + dy * cos
+                clientX: rect.left + (container.clientLeft || 0) + localX,
+                clientY: rect.top + (container.clientTop || 0) + localY
             };
         };
 
@@ -456,8 +469,14 @@ document.addEventListener('DOMContentLoaded', () => {
             defineTemporary(point, 'pageY', rotated.clientY + scrollY, restore);
         };
 
+        const patchedEvents = new WeakSet();
+        let mouseGestureActive = false;
+        const activePointerIds = new Set();
+        let touchGestureActive = false;
+
         const patchEvent = (event) => {
             if (!event || lastAppliedMapRotation === null || (compassMode !== 'heading-up' && Math.abs(manualMapRotation) < 0.1)) return;
+            if (patchedEvents.has(event)) return;
             const angleDeg = Number(lastAppliedMapRotation) || 0;
             const restore = [];
             const touchLists = ['touches', 'targetTouches', 'changedTouches'];
@@ -473,11 +492,41 @@ document.addEventListener('DOMContentLoaded', () => {
                 patchedTouchList = defineTemporary(event, name, mapped, restore) || patchedTouchList;
             });
             if (!patchedTouchList) patchPoint(event, angleDeg, restore);
-            if (restore.length) restoreAfterDispatch(restore);
+            if (restore.length) {
+                patchedEvents.add(event);
+                restoreAfterDispatch(restore);
+            }
         };
 
         ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'mousedown', 'mousemove', 'mouseup', 'touchstart', 'touchmove', 'touchend', 'touchcancel']
             .forEach(type => container.addEventListener(type, patchEvent, { capture: true, passive: true }));
+
+        container.addEventListener('mousedown', () => { mouseGestureActive = true; }, { capture: true, passive: true });
+        container.addEventListener('mouseup', () => { mouseGestureActive = false; }, { capture: true, passive: true });
+        container.addEventListener('pointerdown', event => { if (event.pointerId !== undefined) activePointerIds.add(event.pointerId); }, { capture: true, passive: true });
+        ['pointerup', 'pointercancel'].forEach(type => container.addEventListener(type, event => {
+            if (event.pointerId !== undefined) activePointerIds.delete(event.pointerId);
+        }, { capture: true, passive: true }));
+        container.addEventListener('touchstart', () => { touchGestureActive = true; }, { capture: true, passive: true });
+        ['touchend', 'touchcancel'].forEach(type => container.addEventListener(type, event => {
+            if (!event.touches || event.touches.length === 0) touchGestureActive = false;
+        }, { capture: true, passive: true }));
+
+        // Leaflet promotes drag/pinch moves to document listeners. Patch those
+        // events too, but only while a gesture that started on this map is
+        // active, so buttons and drawers outside the map remain untouched.
+        const patchDocumentEvent = event => {
+            const type = event && event.type;
+            const active = type && type.startsWith('mouse') ? mouseGestureActive
+                : type && type.startsWith('pointer') ? activePointerIds.size > 0
+                    : touchGestureActive;
+            if (active) patchEvent(event);
+            if (type === 'mouseup') mouseGestureActive = false;
+            if ((type === 'touchend' || type === 'touchcancel') && (!event.touches || event.touches.length === 0)) touchGestureActive = false;
+            if ((type === 'pointerup' || type === 'pointercancel') && event.pointerId !== undefined) activePointerIds.delete(event.pointerId);
+        };
+        ['mousemove', 'mouseup', 'pointermove', 'pointerup', 'pointercancel', 'touchmove', 'touchend', 'touchcancel']
+            .forEach(type => document.addEventListener(type, patchDocumentEvent, { capture: true, passive: true }));
     }
 
     /**
@@ -1384,7 +1433,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
                 if (currentEnd) {
                     console.log("App resumed to foreground. Refreshing GPS position...");
-                    requestUserGpsLocation(false);
+                    requestUserGpsLocation(false).catch(() => {});
                 }
             });
         }
@@ -1418,17 +1467,21 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 if (navigator.permissions && navigator.permissions.query) state = (await navigator.permissions.query({ name: 'geolocation' })).state;
             } catch (e) { /* WebView may not expose Permissions API. */ }
+            gpsPermissionState = state;
             if (status) status.textContent = state === 'granted' ? I18n.getText('permissionAllowed') : (state === 'denied' ? I18n.getText('permissionDenied') : I18n.getText('permissionPrompt'));
             let seen = false;
             try { seen = localStorage.getItem('solarless_onboarding_seen') === '1'; } catch (e) {}
-            if (state === 'granted') { hide(); requestUserGpsLocation(true); }
+            if (state === 'granted') {
+                hide();
+                if (!currentStart && !gpsFixPromise) requestUserGpsLocation(true).catch(() => {});
+            }
             else if (state === 'denied' || !seen) overlay.classList.remove('hidden');
             else overlay.classList.add('hidden');
         };
         request.addEventListener('click', () => {
             try { localStorage.setItem('solarless_onboarding_seen', '1'); } catch (e) {}
             hide();
-            requestUserGpsLocation(true);
+            requestUserGpsLocation(true).catch(() => {});
         });
         skip.addEventListener('click', hide);
         await update();
@@ -1576,13 +1629,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function requestUserGpsLocation(isInitial = false) {
         if (!navigator.geolocation) {
+            gpsFixState = 'unavailable';
             setGpsStatusIndicator(false, false);
-            return;
+            const unavailable = new Error('Geolocation is not supported on this device.');
+            unavailable.code = 'UNAVAILABLE';
+            return Promise.reject(unavailable);
         }
+
+        if (gpsFixPromise) return gpsFixPromise;
+        gpsFixState = 'pending';
 
         setGpsStatusIndicator(true, false);
 
-        navigator.geolocation.getCurrentPosition(
+        gpsFixPromise = new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
             async (pos) => {
                 const lat = pos.coords.latitude;
                 const lng = pos.coords.longitude;
@@ -1591,9 +1650,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 currentStart = { lat: lat, lng: lng };
+                gpsPermissionState = 'granted';
+                gpsFixState = 'ready';
                 setGpsStatusIndicator(false, true);
+                // Resolve as soon as coordinates exist. Reverse geocoding is
+                // UI enrichment and must not block route-start readiness.
+                resolve(currentStart);
 
-                const addr = await Geocoder.reverseGeocode(lat, lng);
+                let addr = '';
+                try { addr = await Geocoder.reverseGeocode(lat, lng); } catch (e) { /* GPS fix remains valid if address lookup fails. */ }
                 const input = document.getElementById('origin-input');
                 const myLocLabel = I18n.getLanguage().startsWith('ko') ? "🎯 내 위치" : "🎯 My Location";
                 if (input) input.value = `${myLocLabel}: ${addr}`;
@@ -1601,23 +1666,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateSunInfo();
                 checkAndUpdateMapTileTheme();
 
-                if (currentEnd) {
-                    updateRoute();
-                } else {
+                // A route-start caller owns route calculation after this
+                // promise resolves. Do not also start a second request here;
+                // GPS refreshes with an existing destination keep the current
+                // verified route until the normal reroute flow decides to
+                // replace it.
+                if (!currentEnd) {
                     map.setView([lat, lng], 16);
                     updateVehicleMarkerPosition(lat, lng, currentHeading);
                 }
             },
             (err) => {
+                gpsFixState = 'error';
+                if (err && err.code === 1) gpsPermissionState = 'denied';
                 setGpsStatusIndicator(false, false);
                 if (isInitial) {
                     document.getElementById('origin-input').value = I18n.getLanguage().startsWith('ko') ? "🎯 내 위치 (현재 GPS)" : "🎯 My Location (Current GPS)";
                 }
                 updateSunInfo();
                 checkAndUpdateMapTileTheme();
+                const gpsError = new Error(err && err.code === 1 ? 'Location permission was denied.' : 'Current GPS position is not available yet.');
+                gpsError.code = err && err.code;
+                reject(gpsError);
             },
             { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-        );
+        )).finally(() => { gpsFixPromise = null; });
+        return gpsFixPromise;
     }
 
     let currentSmoothLat = null;
@@ -1906,12 +1980,38 @@ document.addEventListener('DOMContentLoaded', () => {
         startNavigationFlow();
     }
 
-    function startNavigationFlow() {
+    async function startNavigationFlow() {
+        if (!currentEnd) return;
+        if (currentStart) {
+            startNavigationFlowAfterGps();
+            return;
+        }
+        if (navigationStartPending) return;
+        navigationStartPending = true;
+        const isKo = I18n.getLanguage().startsWith('ko');
+        try {
+            await requestUserGpsLocation(false);
+        } catch (e) {
+            if (e && e.code === 1) {
+                alert(isKo ? '위치 권한이 거부되었습니다. Android 설정에서 위치 권한을 허용해 주세요.' : 'Location permission was denied. Allow it in Android settings.');
+            } else if (e && e.code === 'UNAVAILABLE') {
+                alert(isKo ? '이 기기에서는 위치 정보를 사용할 수 없습니다.' : 'Location is not available on this device.');
+            } else {
+                alert(isKo ? 'GPS 위치를 아직 받지 못했습니다. 잠시 후 다시 시도해 주세요.' : 'The current GPS fix is not ready yet. Please try again shortly.');
+            }
+            return;
+        } finally {
+            navigationStartPending = false;
+        }
+        if (currentStart) startNavigationFlowAfterGps();
+    }
+
+    function startNavigationFlowAfterGps() {
         if (!currentEnd) return;
         if (!currentStart) {
             const isKo = I18n.getLanguage().startsWith('ko');
             alert(isKo ? '출발지 GPS 위치를 먼저 확인할 수 있어야 실제 경로를 계산할 수 있습니다.' : 'A GPS origin is required before a real road route can be calculated.');
-            requestUserGpsLocation(false);
+            requestUserGpsLocation(false).catch(() => {});
             return;
         }
 
@@ -3108,7 +3208,19 @@ document.addEventListener('DOMContentLoaded', () => {
         );
     }
 
-    document.getElementById('btn-use-gps').addEventListener('click', () => requestUserGpsLocation(false));
+    const btnUseGps = document.getElementById('btn-use-gps');
+    if (btnUseGps) {
+        btnUseGps.addEventListener('click', () => {
+            const previousStart = currentStart;
+            requestUserGpsLocation(false).then(() => {
+                // Preserve the old “refresh origin” behavior without making
+                // the route-start flow issue a second request for the same fix.
+                if (currentEnd && currentStart !== previousStart && !navigationStartPending && !pendingRouteRequestKey) {
+                    updateRoute();
+                }
+            }).catch(() => {});
+        });
+    }
     document.getElementById('btn-recenter-gps').addEventListener('click', recenterMapToVehicle);
 
     const btnCloseArrival = document.getElementById('btn-close-arrival-modal');
