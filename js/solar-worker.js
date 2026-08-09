@@ -149,7 +149,8 @@ self.onmessage = function (e) {
         const sunIntensity = calculateSolarUvIntensity(segSunPos.altitude);
         const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
         const glareRisk = calculateSegmentGlare(heading, segSunPos);
-        const sceneResult = scene && self.SceneShadow
+        const useScene = !!scene && scene.precisionReady !== false;
+        const sceneResult = useScene && self.SceneShadow
             ? self.SceneShadow.getSegmentOcclusion(p1, p2, segSunPos, scene, i)
             : null;
         const shadeScore = sceneResult && Number.isFinite(sceneResult.shadeScore)
@@ -189,7 +190,9 @@ self.onmessage = function (e) {
             avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
             totalUvExposureUnits: isFinite(totalUv) ? totalUv : 0,
             sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
-            sceneSource: scene && scene.source ? scene.source : 'heuristic fallback'
+            segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
+            sceneSource: useScene && scene.source ? scene.source : 'heuristic fallback',
+            analysisMode: useScene ? 'scene' : 'heuristic'
         }
     });
 };

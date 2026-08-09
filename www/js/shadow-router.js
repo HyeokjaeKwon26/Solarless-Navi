@@ -411,6 +411,12 @@ window.ShadowRouter = (function () {
         return timeLookup;
     }
 
+    function isPrecisionScene(scene) {
+        // SceneShadow marks incomplete Overpass/DEM coverage explicitly. A
+        // missing flag remains compatible with small hand-built test scenes.
+        return !!scene && scene.precisionReady !== false;
+    }
+
     function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null, scene = null) {
         const segments = [];
         let totalGlareWeighted = 0;
@@ -419,6 +425,7 @@ window.ShadowRouter = (function () {
         let totalPathMeters = 0;
 
         const segmentDistances = [];
+        const useScene = isPrecisionScene(scene);
         for (let i = 0; i < coordinates.length - 1; i++) {
             const d = calculateDistanceMeters(coordinates[i][1], coordinates[i][0], coordinates[i + 1][1], coordinates[i + 1][0]);
             segmentDistances.push(d);
@@ -449,7 +456,7 @@ window.ShadowRouter = (function () {
 
             const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
             const glareRisk = calculateSegmentGlare(heading, segSunPos);
-            const sceneResult = scene && window.SceneShadow
+            const sceneResult = useScene && window.SceneShadow
                 ? window.SceneShadow.getSegmentOcclusion(p1, p2, segSunPos, scene, i)
                 : null;
             const shadeScore = sceneResult && Number.isFinite(sceneResult.shadeScore)
@@ -491,8 +498,147 @@ window.ShadowRouter = (function () {
             coordinates: coordinates,
             sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
             segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
-            sceneSource: scene && scene.source ? scene.source : 'heuristic fallback'
+            sceneSource: useScene && scene.source ? scene.source : 'heuristic fallback',
+            analysisMode: useScene ? 'scene' : 'heuristic'
         };
+    }
+
+    function createRouteIdentity(rawRoute, fallbackIndex = 0) {
+        const coordinates = rawRoute && rawRoute.geometry && Array.isArray(rawRoute.geometry.coordinates)
+            ? rawRoute.geometry.coordinates : [];
+        const first = coordinates[0] || [];
+        const last = coordinates[coordinates.length - 1] || [];
+        const values = [
+            Number(rawRoute && rawRoute.distance || 0), Number(rawRoute && rawRoute.duration || 0),
+            Number(first[0]), Number(first[1]), Number(last[0]), Number(last[1])
+        ];
+        return values.every(Number.isFinite)
+            ? `route-${values.map(value => value.toFixed(5)).join('-')}`
+            : `route-index-${fallbackIndex}`;
+    }
+
+    function extractRouteDetails(rawRoute) {
+        const routeSteps = [];
+        const maneuvers = [];
+        let cumulativeStepDist = 0;
+        for (const leg of (rawRoute && rawRoute.legs) || []) {
+            for (const step of (leg && leg.steps) || []) {
+                routeSteps.push(step);
+                if (step.maneuver && step.maneuver.type !== 'depart') {
+                    maneuvers.push({
+                        type: step.maneuver.type,
+                        modifier: step.maneuver.modifier || '',
+                        location: step.maneuver.location,
+                        bearingBefore: step.maneuver.bearing_before,
+                        bearingAfter: step.maneuver.bearing_after,
+                        name: step.name || '',
+                        ref: step.ref || '',
+                        distance: step.distance,
+                        duration: step.duration,
+                        cumulativeDistance: cumulativeStepDist
+                    });
+                }
+                cumulativeStepDist += Number(step.distance) || 0;
+            }
+        }
+        return { routeSteps, maneuvers };
+    }
+
+    function createRouteCandidate(rawRoute, candidateIndex, timeOfDayAdjustment) {
+        const baseDuration = Number(rawRoute.duration) || 0;
+        const details = extractRouteDetails(rawRoute);
+        return {
+            id: createRouteIdentity(rawRoute, candidateIndex),
+            candidateIndex,
+            raw: rawRoute,
+            distanceMeters: Number(rawRoute.distance) || 0,
+            durationSec: Math.round(baseDuration * timeOfDayAdjustment),
+            baseDurationSec: baseDuration,
+            routeSteps: details.routeSteps,
+            maneuvers: details.maneuvers,
+            analyzed: null,
+            analysisMode: 'heuristic',
+            sceneCoverage: { buildings: false, terrain: false, tunnels: false },
+            sceneSource: 'heuristic fallback'
+        };
+    }
+
+    function stableSortRoutes(routes, compare) {
+        return [...routes].sort((a, b) => compare(a, b) ||
+            (a.candidateIndex || 0) - (b.candidateIndex || 0));
+    }
+
+    function routeDurationForSelection(route) {
+        return Number.isFinite(Number(route && route.baseDurationSec))
+            ? Number(route.baseDurationSec)
+            : Number(route && route.durationSec) || Infinity;
+    }
+
+    function selectPrecisionCandidates(routes, maxCandidates = 5) {
+        if (!Array.isArray(routes) || routes.length === 0) {
+            return { fastest: null, glareCandidates: [], shadeCandidates: [], precisionCandidates: [] };
+        }
+        const fastest = stableSortRoutes(routes, (a, b) => routeDurationForSelection(a) - routeDurationForSelection(b))[0];
+        const glareCandidates = stableSortRoutes(routes, (a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk).slice(0, 2);
+        const shadeCandidates = stableSortRoutes(routes, (a, b) => {
+            const uvDifference = a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits;
+            return Math.abs(uvDifference) > 0.001 ? uvDifference : b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage;
+        }).slice(0, 2);
+        const selected = [];
+        const seen = new Set();
+        [fastest, ...glareCandidates, ...shadeCandidates].forEach(route => {
+            if (route && !seen.has(route.id) && selected.length < maxCandidates) {
+                seen.add(route.id);
+                selected.push(route);
+            }
+        });
+        return { fastest, glareCandidates, shadeCandidates, precisionCandidates: selected };
+    }
+
+    function selectRouteRoles(routes) {
+        if (!Array.isArray(routes) || routes.length === 0) return { fastest: null, glareFree: null, shade: null };
+        const fastest = stableSortRoutes(routes, (a, b) => routeDurationForSelection(a) - routeDurationForSelection(b))[0];
+        const alternatives = routes.filter(route => route.id !== fastest.id);
+        if (alternatives.length === 0) return { fastest, glareFree: fastest, shade: fastest };
+        const glareFree = stableSortRoutes(alternatives, (a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk)[0];
+        const shadeSorted = stableSortRoutes(alternatives, (a, b) => {
+            const uvDifference = a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits;
+            return Math.abs(uvDifference) > 0.001 ? uvDifference : b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage;
+        });
+        const remainingForShade = alternatives.filter(route => route.id !== glareFree.id);
+        const shade = remainingForShade.length > 0
+            ? stableSortRoutes(remainingForShade, (a, b) => {
+                const uvDifference = a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits;
+                return Math.abs(uvDifference) > 0.001 ? uvDifference : b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage;
+            })[0]
+            : shadeSorted[0];
+        return { fastest, glareFree, shade };
+    }
+
+    function applyExposureReductions(fastestRoute, glareFreeRoute, shadeRoute, dateObj, start) {
+        if (!fastestRoute) return;
+        const baseUvExposure = fastestRoute.analyzed.totalUvExposureUnits;
+        const sunPos = SunCalc.getPosition(dateObj, start.lat, start.lng);
+        const hasSolarUv = calculateSolarUvIntensity(sunPos.altitude) > 0 || baseUvExposure > 0.0001;
+        fastestRoute.uvReductionPct = 0;
+        fastestRoute.isNight = !hasSolarUv;
+        [glareFreeRoute, shadeRoute].forEach(route => {
+            if (!route) return;
+            if (!hasSolarUv) {
+                route.uvReductionPct = 0;
+                route.isNight = true;
+            } else if (route.id === fastestRoute.id) {
+                route.uvReductionPct = 0;
+                route.isNight = false;
+            } else if (baseUvExposure > 0.00001) {
+                const diffPct = ((baseUvExposure - route.analyzed.totalUvExposureUnits) / baseUvExposure) * 100;
+                route.uvReductionPct = diffPct >= 1 ? Math.min(99, Math.round(diffPct)) : 0;
+                route.isNight = false;
+            } else {
+                route.uvReductionPct = 0;
+                route.isNight = false;
+            }
+        });
     }
 
     async function fetchAndAnalyzeRoutes(start, end, dateObj, isTollFreeOnly = false, options = {}) {
@@ -576,13 +722,8 @@ window.ShadowRouter = (function () {
 
         if (uniqueRoutes.length === 0) uniqueRoutes.push(filteredCandidates[0]);
 
-        // Scene services are optional and significantly more expensive than
-        // OSRM. Analyse only the fastest two candidates with scene data; all
-        // other candidates keep the fast heuristic analysis and remain usable.
-        const sceneCandidates = new Set([...uniqueRoutes]
-            .sort((a, b) => Number(a.duration || Infinity) - Number(b.duration || Infinity))
-            .slice(0, 2));
-
+        // First analyse every candidate with the same lightweight model. Scene
+        // data is selected only after these common scores are available.
         const analyzedRoutes = await Promise.all(uniqueRoutes.map(async (r, idx) => {
             const baseDuration = r.duration;
             const liveDuration = Math.round(baseDuration * timeOfDayAdjustment);
@@ -617,77 +758,73 @@ window.ShadowRouter = (function () {
                 }
             }
 
-            let scene = null;
-            if (sceneCandidates.has(r) && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
-                try {
-                    scene = await window.SceneShadow.fetchSceneForRoute(r.geometry.coordinates, {
-                        dateObj,
-                        durationSec: liveDuration,
-                        timeLookup: buildStepTimeLookup(r.geometry.coordinates, routeSteps, liveDuration),
-                        signal: options.signal,
-                        timeoutMs: 12000,
-                        terrainTimeoutMs: 10000,
-                        maxRouteMeters: 250000
-                    });
-                } catch (sceneError) {
-                    if (options.signal && options.signal.aborted) throw sceneError;
-                    // Scene data is an optional enhancement. Never turn an
-                    // otherwise valid OSRM route into a routing failure.
-                    console.warn('Scene data unavailable; using heuristic route analysis.', sceneError);
-                }
-            }
-            // Keep the OSRM route even when optional scene services are down.
-            const analyzed = await analyzeRouteSegmentsAsync(r.geometry.coordinates, dateObj, liveDuration, routeSteps, scene);
+            const analyzed = await analyzeRouteSegmentsAsync(r.geometry.coordinates, dateObj, liveDuration, routeSteps, null);
 
             return {
-                id: 'route_opt_' + idx,
+                id: createRouteIdentity(r, idx),
+                candidateIndex: idx,
                 raw: r,
                 distanceMeters: r.distance,
                 durationSec: liveDuration,
                 baseDurationSec: baseDuration,
                 analyzed: analyzed,
                 maneuvers: maneuvers,
+                routeSteps: routeSteps,
+                analysisMode: 'heuristic',
                 sceneCoverage: analyzed.sceneCoverage,
                 sceneSource: analyzed.sceneSource
             };
         }));
 
-        // 1. Fastest Route: strictly minimum duration
-        const sortedByDuration = [...analyzedRoutes].sort((a, b) => a.durationSec - b.durationSec);
-        const fastestRoute = sortedByDuration[0];
-
-        // 2 & 3. Distinct Glare-Free & Shade-Priority Routes
-        const distinctAlternatives = analyzedRoutes.filter(r => r.id !== fastestRoute.id);
-        let glareFreeRoute, shadeRoute;
-
-        if (distinctAlternatives.length === 0) {
-            glareFreeRoute = fastestRoute;
-            shadeRoute = fastestRoute;
-        } else {
-            // Sort distinct alternatives by lowest glare risk
-            const sortedByGlare = [...distinctAlternatives].sort((a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk);
-            glareFreeRoute = sortedByGlare[0];
-
-            // Sort distinct alternatives by lowest UV exposure / highest shade coverage
-            const sortedByShade = [...distinctAlternatives].sort((a, b) => {
-                if (Math.abs(a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits) > 0.001) {
-                    return a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits;
+        const selection = selectPrecisionCandidates(analyzedRoutes, 5);
+        const refinedResults = await Promise.all(selection.precisionCandidates.map(async route => {
+            let scene = null;
+            let refinedAnalyzed = null;
+            try {
+                if (window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
+                    scene = await window.SceneShadow.fetchSceneForRoute(route.raw.geometry.coordinates, {
+                        dateObj,
+                        durationSec: route.durationSec,
+                        timeLookup: buildStepTimeLookup(route.raw.geometry.coordinates, route.routeSteps, route.durationSec),
+                        signal: options.signal,
+                        timeoutMs: 12000,
+                        terrainTimeoutMs: 10000,
+                        maxRouteMeters: 250000
+                    });
                 }
-                return b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage;
-            });
+                if (isPrecisionScene(scene)) {
+                    refinedAnalyzed = await analyzeRouteSegmentsAsync(route.raw.geometry.coordinates, dateObj, route.durationSec, route.routeSteps, scene);
+                }
+            } catch (sceneError) {
+                if (options.signal && options.signal.aborted) throw sceneError;
+                console.warn('Scene data unavailable; retaining common heuristic comparison.', sceneError);
+            }
+            return { route, scene, refinedAnalyzed, ready: !!refinedAnalyzed && refinedAnalyzed.analysisMode === 'scene' };
+        }));
 
-            const remainingForShade = distinctAlternatives.filter(r => r.id !== glareFreeRoute.id);
-            shadeRoute = remainingForShade.length > 0
-                ? [...remainingForShade].sort((a, b) => a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits)[0]
-                : sortedByShade[0];
-        }
+        const allPrecisionReady = refinedResults.length === selection.precisionCandidates.length &&
+            refinedResults.length > 0 && refinedResults.every(result => result.ready);
+        refinedResults.forEach(({ route, scene, refinedAnalyzed }) => {
+            if (refinedAnalyzed) route.sceneAnalysis = refinedAnalyzed;
+            if (allPrecisionReady && refinedAnalyzed) {
+                route.analyzed = refinedAnalyzed;
+                route.analysisMode = 'scene';
+            }
+            route.sceneCoverage = scene && scene.coverage ? scene.coverage : route.analyzed.sceneCoverage;
+            route.sceneSource = scene && scene.source ? scene.source : route.analyzed.sceneSource;
+        });
 
-        // Cumulative estimated solar-exposure reduction compared to the OSRM
-        // baseline route. This is an experimental relative indicator, not a
-        // measured UV dose.
-        const sunPos = SunCalc.getPosition(dateObj, start.lat, start.lng);
-        const startUvIntensity = calculateSolarUvIntensity(sunPos.altitude);
-        const hasSolarUv = startUvIntensity > 0 || fastestRoute.analyzed.totalUvExposureUnits > 0.0001;
+        // Apply reductions only after the common-tier comparison set is fixed.
+        // If any precision candidate lacks scene data, every final ranking
+        // deliberately stays on the common heuristic tier. Successful scene
+        // results remain auxiliary metadata and are never mixed into scores.
+        const comparisonRoutes = allPrecisionReady ? selection.precisionCandidates : analyzedRoutes;
+        const roles = selectRouteRoles(comparisonRoutes);
+        const fastestRoute = comparisonRoutes.find(route => route.id === selection.fastest.id) || roles.fastest;
+        const glareFreeRoute = roles.glareFree;
+        const shadeRoute = roles.shade;
+        applyExposureReductions(fastestRoute, glareFreeRoute, shadeRoute, dateObj, start);
+        /* const hasSolarUv = calculateSolarUvIntensity(sunPos.altitude) > 0 || fastestRoute.analyzed.totalUvExposureUnits > 0.0001;
         const baseUvExposure = fastestRoute.analyzed.totalUvExposureUnits;
 
         fastestRoute.uvReductionPct = 0;
@@ -713,10 +850,12 @@ window.ShadowRouter = (function () {
                 r.uvReductionPct = 0;
                 r.isNight = false;
             }
-        });
+        }); */
 
         return {
             timeOfDayAdjustment: timeOfDayAdjustment,
+            analysisMode: allPrecisionReady ? 'scene' : 'heuristic',
+            precisionCandidateIds: selection.precisionCandidates.map(route => route.id),
             routes: {
                 fastest: fastestRoute,
                 glareFree: glareFreeRoute,
@@ -809,6 +948,10 @@ window.ShadowRouter = (function () {
         estimateSegmentShade: estimateSegmentShade,
         calculateSolarUvIntensity: calculateSolarUvIntensity,
         buildStepTimeLookup: buildStepTimeLookup,
+        createRouteIdentity: createRouteIdentity,
+        selectPrecisionCandidates: selectPrecisionCandidates,
+        selectRouteRoles: selectRouteRoles,
+        applyExposureReductions: applyExposureReductions,
         routeContainsToll: routeContainsToll,
         areValidRouteCoordinates: areValidRouteCoordinates,
         analyzeRouteSegments: analyzeRouteSegments,

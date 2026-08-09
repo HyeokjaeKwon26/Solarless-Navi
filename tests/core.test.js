@@ -155,6 +155,47 @@ test('off-route distance uses the nearest point on a route segment', () => {
     assert.ok(ShadowRouter.pointToSegmentDistanceMeters(0.0005, 0.005, route[0], route[1]) < 65);
 });
 
+test('precision candidates include duration fastest plus purpose-specific heuristic leaders', () => {
+    const makeRoute = (id, durationSec, glare, uv, shade, candidateIndex) => ({
+        id, durationSec, candidateIndex,
+        analyzed: { avgGlareRisk: glare, totalUvExposureUnits: uv, avgShadeCoverage: shade }
+    });
+    const routes = [
+        makeRoute('fast', 100, 0.80, 0.90, 0.10, 0),
+        makeRoute('glare-a', 140, 0.10, 0.70, 0.20, 1),
+        makeRoute('glare-b', 150, 0.20, 0.60, 0.30, 2),
+        makeRoute('shade-a', 160, 0.70, 0.10, 0.90, 3),
+        makeRoute('shade-b', 170, 0.60, 0.20, 0.80, 4)
+    ];
+    const selection = ShadowRouter.selectPrecisionCandidates(routes, 5);
+    assert.equal(selection.fastest.id, 'fast');
+    assert.deepEqual(Array.from(selection.glareCandidates, route => route.id), ['glare-a', 'glare-b']);
+    assert.deepEqual(Array.from(selection.shadeCandidates, route => route.id), ['shade-a', 'shade-b']);
+    assert.deepEqual(new Set(selection.precisionCandidates).size, 5);
+    assert.ok(selection.precisionCandidates.some(route => route.id === 'shade-a'));
+});
+
+test('route roles preserve OSRM duration for fastest regardless of solar scores', () => {
+    const routes = [
+        { id: 'fast', durationSec: 100, candidateIndex: 0, analyzed: { avgGlareRisk: 0.9, totalUvExposureUnits: 0.9, avgShadeCoverage: 0.1 } },
+        { id: 'slow', durationSec: 130, candidateIndex: 1, analyzed: { avgGlareRisk: 0.1, totalUvExposureUnits: 0.1, avgShadeCoverage: 0.9 } }
+    ];
+    const roles = ShadowRouter.selectRouteRoles(routes);
+    assert.equal(roles.fastest.id, 'fast');
+    assert.equal(roles.glareFree.id, 'slow');
+    assert.equal(roles.shade.id, 'slow');
+});
+
+test('exposure reduction uses the same-tier refined fastest baseline', () => {
+    const fastest = { id: 'fast', analyzed: { totalUvExposureUnits: 0.5 } };
+    const glare = { id: 'glare', analyzed: { totalUvExposureUnits: 0.25 } };
+    const shade = { id: 'shade', analyzed: { totalUvExposureUnits: 0.4 } };
+    ShadowRouter.applyExposureReductions(fastest, glare, shade, new Date('2024-06-21T12:00:00Z'), { lat: 0, lng: 0 });
+    assert.equal(fastest.uvReductionPct, 0);
+    assert.equal(glare.uvReductionPct, 50);
+    assert.equal(shade.uvReductionPct, 20);
+});
+
 test('OSM maxspeed values normalize to km/h while preserving regional display units', () => {
     assert.equal(Geocoder.detectCountry(40.7, -74), 'US');
     assert.equal(Geocoder.detectCountry(51.5, -0.1), 'GB');
@@ -201,9 +242,81 @@ test('scene service failure does not fail an otherwise valid OSRM route', async 
             { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false
         );
         assert.ok(result && result.routes && result.routes.fastest);
+        assert.equal(result.analysisMode, 'heuristic');
+        assert.ok([result.routes.fastest, result.routes.glareFree, result.routes.shade].every(route => route.analysisMode === 'heuristic'));
     } finally {
         sandbox.fetch = originalFetch;
         sandbox.window.SceneShadow = originalScene;
+    }
+});
+
+test('identical route groups invoke scene analysis once and return scene-tier results', async () => {
+    const originalFetch = sandbox.fetch;
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    let sceneCalls = 0;
+    sandbox.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ routes: [{ distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] }] })
+    });
+    SceneShadow.fetchSceneForRoute = async () => {
+        sceneCalls++;
+        return {
+            precisionReady: true,
+            origin: { lat: 0, lng: 0 },
+            coverage: { buildings: true, terrain: true, tunnels: true },
+            segmentCoverage: [{ buildings: true, terrain: true, tunnels: true }],
+            buildings: [], tunnels: [], terrainSamples: [], terrainProfiles: [],
+            source: 'mock scene'
+        };
+    };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false);
+        assert.equal(sceneCalls, 1);
+        assert.equal(result.analysisMode, 'scene');
+        assert.equal(result.routes.fastest.analysisMode, 'scene');
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
+    }
+});
+
+test('partial scene failure falls back every final comparison to heuristic mode', async () => {
+    const originalFetch = sandbox.fetch;
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    let requestIndex = 0;
+    let sceneCalls = 0;
+    const rawRoutes = [
+        { distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] },
+        { distance: 1400, duration: 130, geometry: { coordinates: [[0, 0], [0.012, 0.001]] }, legs: [{ steps: [] }] },
+        { distance: 1800, duration: 160, geometry: { coordinates: [[0, 0], [0.014, -0.001]] }, legs: [{ steps: [] }] }
+    ];
+    sandbox.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ routes: [rawRoutes[requestIndex++ % rawRoutes.length]] })
+    });
+    SceneShadow.fetchSceneForRoute = async () => {
+        sceneCalls++;
+        if (sceneCalls > 1) throw new Error('mock partial scene outage');
+        return {
+            precisionReady: true,
+            origin: { lat: 0, lng: 0 },
+            coverage: { buildings: true, terrain: true, tunnels: true },
+            segmentCoverage: [{ buildings: true, terrain: true, tunnels: true }],
+            buildings: [], tunnels: [], terrainSamples: [], terrainProfiles: [],
+            source: 'mock scene'
+        };
+    };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false);
+        assert.ok(sceneCalls > 1);
+        assert.equal(result.analysisMode, 'heuristic');
+        assert.ok([result.routes.fastest, result.routes.glareFree, result.routes.shade].every(route => route.analysisMode === 'heuristic'));
+        assert.ok(result.routes.all.some(route => route.sceneAnalysis));
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
     }
 });
 

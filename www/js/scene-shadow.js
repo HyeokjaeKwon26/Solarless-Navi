@@ -435,6 +435,11 @@
                 tunnels: !!overpass.available,
                 terrain: terrainAvailable
             },
+            // A route is scene-comparable only when the shared Overpass data
+            // and every route segment's DEM profile are available. Partial
+            // coverage remains attached for diagnostics but forces the common
+            // heuristic comparison tier in ShadowRouter.
+            precisionReady: !!overpass.available && terrainAvailable && segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain),
             source: 'OpenStreetMap Overpass + OpenTopoData ASTER30m',
             sampleCount: terrainSamples.length
         };
