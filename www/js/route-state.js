@@ -32,5 +32,58 @@
         return !!key && key === createRouteRequestKey(start, end, mode, tollFree, timeToken);
     }
 
-    return { createRouteRequestKey, isRouteRequestKeyCurrent, normalizeTimeToken };
+    function rectsOverlap(a, b, gap = 0) {
+        if (!a || !b) return false;
+        const clearance = Math.max(0, Number(gap) || 0);
+        return a.left < b.right - clearance && a.right > b.left + clearance &&
+            a.top < b.bottom - clearance && a.bottom > b.top + clearance;
+    }
+
+    function findRectIntersections(rects, gap = 0) {
+        const entries = Object.entries(rects || {}).filter(([, rect]) => rect);
+        const overlaps = [];
+        for (let i = 0; i < entries.length; i++) {
+            for (let j = i + 1; j < entries.length; j++) {
+                if (rectsOverlap(entries[i][1], entries[j][1], gap)) {
+                    overlaps.push([entries[i][0], entries[j][0]]);
+                }
+            }
+        }
+        return overlaps;
+    }
+
+    function createDebouncedScheduler(task, delayMs = 300) {
+        let timer = null;
+        let generation = 0;
+        const schedule = (...args) => {
+            generation += 1;
+            const currentGeneration = generation;
+            if (timer !== null) clearTimeout(timer);
+            timer = setTimeout(() => {
+                timer = null;
+                if (currentGeneration === generation) task(...args);
+            }, Math.max(0, Number(delayMs) || 0));
+        };
+        schedule.flush = (...args) => {
+            generation += 1;
+            if (timer !== null) clearTimeout(timer);
+            timer = null;
+            task(...args);
+        };
+        schedule.cancel = () => {
+            generation += 1;
+            if (timer !== null) clearTimeout(timer);
+            timer = null;
+        };
+        return schedule;
+    }
+
+    return {
+        createRouteRequestKey,
+        isRouteRequestKeyCurrent,
+        normalizeTimeToken,
+        rectsOverlap,
+        findRectIntersections,
+        createDebouncedScheduler
+    };
 });

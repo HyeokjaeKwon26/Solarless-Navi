@@ -30,14 +30,14 @@
 * **전면 유리창 직사광선 차단**: 태양이 운전자의 정면 전면유리로 찌르는 서쪽 저녁 노을/아침 동쪽 태양 구간을 우회하는 안전 경로를 추천합니다.
 
 ### ☀️ 3. 태양 노출 추정 감소율(%) 표시 & 4D 시공간 주행 예측
-* **4D 시공간(Spatio-Temporal) 동적 태양광 연산**: 출발 시각 스냅샷이 아닌, 차량이 각 도로 세그먼트($i$)를 실제로 통과하는 미래 통과 시각($T_i = T_{\text{start}} + \Delta t_i$)의 태양 방위각/고도각을 구간별로 개별 연산하여 30분~1시간 이상 장거리 주행 시의 태양 이동(시간당 약 15°)을 완벽히 반영합니다.
+* **4D 시공간(Spatio-Temporal) 동적 태양광 연산**: 출발 시각 스냅샷이 아닌, 차량이 각 도로 세그먼트($i$)를 통과할 것으로 예상되는 시각($T_i = T_{\text{start}} + \Delta t_i$)의 태양 방위각/고도각을 구간별로 계산합니다. 시간대 보정 예상시간과 OSRM step geometry를 사용한 실험용 모델입니다.
 * **실험용 추정값 표기**: 특정 경로를 과학적으로 보증하지 않으며, 모든 경로 카드에 역광 가능성 추정과 태양 노출 추정 감소율을 상대 지표로 표시합니다.
-* **단일 경로/야간 자동 분기**: 대안 우회로가 없는 단일 최적 경로인 경우 해당 도로의 실제 그늘율/역광 지수를 표기하며, 일몰 후에는 `일몰 후 (자외선 0% 🌙)`로 자동 전환됩니다.
-* **💡 자외선 절대량이 아닌 상대적 감축률(%) 산출 배경**: 차량 유리의 종류(전면 이중접합유리, 측면 강화유리, 파노라마 선루프) 및 썬팅(틴팅) 필름의 종류·농도에 따라 탑승자 피부에 도달하는 실제 자외선 흡수량은 차량마다 크게 달라집니다. 따라서 본 시스템은 특정 차량의 개별 썬팅 상태에 구애받지 않도록 **차량 창문으로 유입되는 자연 자외선 총량을 표준 기준치(Baseline)**로 두고, 최단 경로 대비 **"자외선 노출량이 얼마나 줄어드는지(감축률 %)"**를 객관적 비교 지표로 계산합니다.
+* **단일 경로/야간 자동 분기**: 대안 우회로가 없으면 동일 경로를 각 역할에 재사용하며, 그늘·역광은 추정 지표로 표시합니다. 일몰 후에는 야간 추정으로 전환됩니다.
+* **💡 직사 태양 노출 추정 감소율(%)**: 차량 유리나 썬팅을 측정하지 않습니다. 정밀 또는 공통 휴리스틱 계층 안에서 최단 경로를 기준으로 계산하는 상대적 실험 지표이며 의학적 보호 효과를 의미하지 않습니다.
 
 ### 🚥 4. OSM 조회 기반 제한속도 & 표지판 (한국/글로벌 🔴 / 미국 ⬜)
 * OpenStreetMap `Overpass API`에서 주변 도로 태그를 조회해 제한속도·STOP·터널·톨게이트 정보를 표시합니다. 데이터가 없거나 오래되었을 수 있습니다.
-* **한국 및 유럽/아시아/글로벌 180개국 (비엔나 도로표지 협약 표준)**: 국제 규격 빨간색 원형 제한속도 표지판 (km/h)
+* **지역 단위 표시**: 명시적인 `mph`/`km/h` OSM 태그와 reverse-geocoding ISO 코드를 우선하며, 국가를 확정할 수 없으면 안전한 국제 기본값(km/h)을 사용합니다.
 * **미국 도로 (MUTCD 규격 표준)**: 흰색 사각형 표지판 (mph) & 8각 STOP 표지판 지원
 
 ### 🗣️ 5. 스마트 맞춤형 음성 안내 (TTS & 경고음)
@@ -105,7 +105,7 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 
 ### 1. 의존성 설치 및 씽크
 ```bash
-npm install
+npm ci
 npx @capacitor/cli sync android
 ```
 
@@ -115,14 +115,14 @@ cmd /c "build_apk.bat"
 ```
 빌드가 완료되면 루트 디렉토리에 **`SolarLessNavi_v1.0.apk`**가 생성됩니다.
 
-릴리스 빌드 전에는 사용자 Gradle properties 또는 환경변수로
-`releaseStoreFile`, `releaseStorePassword`, `releaseKeyAlias`, `releaseKeyPassword`
+릴리스 빌드에는 JDK 17, Android SDK/Gradle 및 서명 키스토어가 필요합니다. 키스토어와 비밀번호는 저장소에 넣지 말고 사용자 Gradle properties 또는 다음 환경변수로만 제공합니다: `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`. 값이 없으면 스크립트는 실패하며 debug APK를 release APK로 복사하지 않습니다. 서명 없이 기능만 확인하려면 `android\gradlew.bat assembleDebug`를 사용하세요. `npm test`도 빌드 전 실행하세요.
 
 ### 실행 범위와 한계
 * 경로 계산은 무료 공개 OSRM 서비스에 의존하며, 네트워크 장애나 이용 제한이 발생할 수 있습니다.
 * Nominatim, Photon, Overpass 및 지도 타일(Esri/CARTO)을 사용할 때 검색어와 위치 정보가 해당 외부 서비스로 전송될 수 있습니다.
-* 시간은 OSRM 기본 시간에 시간대별 고정 보정을 적용한 **예상시간**이며 실시간 교통 정보가 아닙니다.
-* 건물·터널·지형 데이터가 조회되면 제한된 2.5D 광선 교차 결과를 반영하지만, 데이터 범위·높이 태그·DEM 해상도에 따라 달라지는 **실험용 추정값**입니다. 실패한 API는 휴리스틱으로 표시되며 실제 차광률, UV 선량, 온도 또는 안전을 보장하지 않습니다.
+* 시간은 OSRM geometry/step을 재사용하면서 시간대별 고정 보정을 적용한 **예상시간**이며 실시간 교통 정보가 아닙니다. 시간 슬라이더 변경은 OSRM을 다시 호출하지 않고 태양 분석을 갱신합니다.
+* 건물·터널·지형 데이터가 조회되면 제한된 2.5D 광선 교차 결과를 반영하지만, 데이터 범위·높이 태그·DEM 해상도에 따라 **휴리스틱, 부분 장면, 정밀 장면** 계층으로 표시됩니다. 역할별로 같은 계층의 최단 기준과만 비교하며, 장면 API 실패 시 해당 역할은 휴리스틱으로 fallback합니다. 실제 차광률, UV 선량, 온도 또는 안전을 보장하지 않습니다.
+* 공개 OSRM, Overpass, OpenTopoData, Nominatim/Photon 및 Esri/CARTO 타일은 rate limit·장애·정책 변경이 있을 수 있습니다. 지도 출처 표시는 라이선스 조건상 제거할 수 없습니다.
 
 ---
 
@@ -180,18 +180,18 @@ cmd /c "build_apk.bat"
 * **Experimental comparison only**: It does not measure actual shade coverage, cabin temperature, or UV dose.
 
 ### 🕶️ 2. Glare-Free Avoidance Route Guidance
-* **NOAA AA+ Astronomical Calculations**: Computes exact solar azimuth and elevation angles in real time based on driver GPS coordinates.
+* **Astronomical calculations**: Computes solar azimuth and elevation estimates in real time based on driver GPS coordinates.
 * **Windshield Glare Protection**: Re-routes around roads heading directly into low-angle morning/evening sun glare.
 
 ### ☀️ 3. Estimated Solar Exposure Reduction (%) & 4D Spatio-Temporal Simulation
-* **4D Spatio-Temporal Solar Simulation**: Dynamically computes future solar azimuth and elevation angles for each road segment at its exact projected vehicle arrival timestamp ($T_i = T_{\text{start}} + \Delta t_i$), fully modeling solar trajectory changes (~15°/hr) during long-distance trips (30m - 1hr+).
+* **4D Spatio-Temporal Solar Estimate**: Recomputes solar azimuth/elevation for each segment at its projected arrival time ($T_i = T_{\text{start}} + \Delta t_i$), using the OSRM geometry and time-of-day adjusted expected duration. It is an experimental estimate, not a full physical simulation.
 * **Experimental estimate labels**: Displays estimated glare possibility and relative solar-exposure reduction on every route card; these are not measured or medically validated values.
-* **Single Route & Night Mode**: Displays intrinsic shade/glare metrics if no alternative detour exists, and automatically transitions to `Night (No UV 🌙)` after sunset.
-* **💡 Rationale for Relative Reduction (%) vs. Absolute UV Dose**: The actual amount of UV radiation absorbed by an occupant's skin varies significantly depending on vehicle glass types (laminated front windshield vs. tempered side windows, sunroofs) and aftermarket window tinting films. To ensure objective, vehicle-agnostic guidance, SolarLess Navi establishes the incident solar UV radiation reaching vehicle windows as the **Standard Baseline**, and computes the **relative percentage reduction (%) in exposure** compared to the fastest baseline route rather than estimating uncertain absolute skin dosages.
+* **Single Route & Night Mode**: Reuses the same route when no meaningful alternative exists and labels shade/glare values as estimates. Night handling is an estimate after sunset.
+* **💡 Estimated direct-sun exposure reduction (%)**: The app does not measure vehicle glass, tinting, skin dose, or medical protection. The percentage is a relative experimental indicator calculated against the fastest route within the same analysis tier.
 
 ### 🚥 4. OSM Tag Lookup for Speed Limits & Road Signs
 * Queries nearby OpenStreetMap `Overpass API` tags for speed limits, STOP signs, tunnels, and toll information. Coverage and freshness depend on OSM data.
-* **International / Korea / Europe / Asia (180+ Countries, Vienna Convention Standard)**: International Red Circle Speed Limit Sign (km/h).
+* **Regional units**: Explicit `mph`/`km/h` tags and reverse-geocoded ISO country codes take priority; uncertain locations use the international km/h default.
 * **USA (MUTCD Standard)**: White Rectangular Speed Limit Sign (mph) & 8-sided STOP sign.
 
 ### 🗣️ 5. Smart Adaptive Voice Guidance (TTS & Warnings)
@@ -256,18 +256,21 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 To build the APK from source:
 
 ```bash
-npm install
+npm ci
 npx @capacitor/cli sync android
 cmd /c "build_apk.bat"
 ```
 
 The compiled APK will be generated at **`SolarLessNavi_v1.0.apk`**.
 
+Release builds require JDK 17, Android SDK/Gradle, and a signing keystore. Keep the keystore and passwords outside the repository and provide `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD` as user Gradle properties or environment variables. Without them the script fails; it never copies a debug APK as a release APK. For an unsigned functional check use `android\gradlew.bat assembleDebug`. Run `npm test` before building.
+
 ### Scope and limitations
 * Routing depends on the free public OSRM service and may fail or be rate-limited.
 * Search terms and location data may be sent to Nominatim, Photon, Overpass, and the selected map-tile providers (Esri/CARTO).
-* Durations are OSRM durations with a fixed time-of-day adjustment, not live traffic information.
-* Buildings, tunnels, and terrain can adjust shade scores when the optional OSM/DEM requests succeed. Coverage, tags, DEM resolution, and public-service rate limits mean these remain experimental estimates; they do not guarantee shade, UV reduction, temperature, or safety.
+* Durations are OSRM geometry/step durations with a fixed time-of-day adjustment, not live traffic information. Moving the time slider reuses the geometry and refreshes solar analysis without another OSRM request.
+* Buildings, tunnels, and terrain can adjust shade scores when optional OSM/DEM requests succeed. Routes expose heuristic, partial-scene, or precision-scene metadata; each role compares only within the same tier and falls back to heuristic when its scene data fails. These estimates do not guarantee shade, direct-sun reduction, temperature, or safety.
+* Public OSRM, Overpass, OpenTopoData, Nominatim/Photon, and Esri/CARTO tile services can be rate-limited or unavailable. Attribution links are required by the providers' licenses and cannot be removed.
 
 ---
 

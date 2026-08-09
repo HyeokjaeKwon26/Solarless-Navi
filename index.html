@@ -101,7 +101,7 @@
                     <div class="search-input-group">
                         <label class="input-label origin-label" id="origin-label-text"><i class="fa-solid fa-circle-dot"></i> 출발지</label>
                         <div class="input-wrapper origin-wrapper">
-                            <input type="text" id="origin-input" placeholder="🎯 내 위치 (현재 GPS)" autocomplete="off">
+                            <input type="text" id="origin-input" placeholder="🎯 내 위치 (현재 GPS)" autocomplete="off" aria-label="출발지 검색">
                             <button type="button" class="gps-auto-btn" id="btn-use-gps" title="내 GPS 위치로 재설정">
                                 <i class="fa-solid fa-crosshairs"></i> GPS
                             </button>
@@ -113,7 +113,7 @@
                     <div class="search-input-group">
                         <label class="input-label dest-label" id="dest-label-text"><i class="fa-solid fa-location-dot"></i> 목적지 (필수)</label>
                         <div class="input-wrapper">
-                            <input type="text" id="destination-input" placeholder="장소명, 주소, 또는 건물 검색..." autocomplete="off">
+                            <input type="text" id="destination-input" placeholder="장소명, 주소, 또는 건물 검색..." autocomplete="off" aria-label="목적지 검색">
                         </div>
                         <div class="search-results-dropdown" id="destination-results"></div>
                     </div>
@@ -252,7 +252,7 @@
                         </div>
                         <div class="arrival-stat-box">
                             <span class="lbl" id="arrival-lbl-score">쾌적도 보호</span>
-                            <span class="val comfort" id="arrival-val-score">자외선 차단 완료</span>
+                            <span class="val comfort" id="arrival-val-score">태양 노출 추정 지표</span>
                         </div>
                     </div>
 
@@ -489,8 +489,10 @@
                 </div>
 
                 <div id="map"></div>
-                <div class="map-attribution" id="map-attribution" aria-label="Map attribution">
-                    <span id="map-attribution-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · Tiles © <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a> / <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a></span>
+                <div class="map-bottom-overlay-stack" id="map-bottom-overlay-stack" aria-live="polite">
+                    <div class="map-attribution" id="map-attribution" aria-label="Map attribution">
+                        <span id="map-attribution-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · Tiles © <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a> / <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a></span>
+                    </div>
                 </div>
 
                 <!-- Bottom-Left Speedometer HUD & Country-Specific Speed Limit & Stop Sign Badge Container -->

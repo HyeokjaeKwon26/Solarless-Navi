@@ -478,7 +478,7 @@ test('identical route groups invoke scene analysis once and return scene-tier re
     }
 });
 
-test('partial scene failure falls back every final comparison to heuristic mode', async () => {
+test('partial scene failure falls back only the affected role comparison tier', async () => {
     const originalFetch = sandbox.fetch;
     const originalSceneFetch = SceneShadow.fetchSceneForRoute;
     let requestIndex = 0;
@@ -508,8 +508,9 @@ test('partial scene failure falls back every final comparison to heuristic mode'
     try {
         const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false));
         assert.ok(sceneCalls > 1);
-        assert.equal(result.analysisMode, 'heuristic');
-        assert.ok([result.routes.fastest, result.routes.glareFree, result.routes.shade].every(route => route.analysisMode === 'heuristic'));
+        assert.equal(result.analysisMode, 'mixed-by-role');
+        assert.equal(result.routes.fastest.analysisMode, 'scene');
+        assert.ok([result.routes.glareFree, result.routes.shade].some(route => route.analysisMode === 'heuristic'));
         assert.ok(result.routes.all.some(route => route.sceneAnalysis));
     } finally {
         sandbox.fetch = originalFetch;
@@ -901,11 +902,12 @@ test('nearest OSM way geometry determines the speed limit', async () => {
         status: 200,
         json: async () => ({ elements: [
             { type: 'way', id: 1, tags: { highway: 'primary', maxspeed: '30 mph', name: 'Nearby Road' }, geometry: [{ lat: 40, lon: -74.0002 }, { lat: 40, lon: -74.0001 }] },
-            { type: 'way', id: 2, tags: { highway: 'motorway', maxspeed: '70 mph', name: 'Distant Highway' }, geometry: [{ lat: 40.01, lon: -74.01 }, { lat: 40.01, lon: -74.00 }] }
+            { type: 'way', id: 2, tags: { highway: 'motorway', maxspeed: '70 mph', name: 'Distant Highway' }, geometry: [{ lat: 40.01, lon: -74.01 }, { lat: 40.01, lon: -74.00 }] },
+            { type: 'way', id: 3, tags: { highway: 'secondary', maxspeed: '50 mph', name: 'Parallel Crossing' }, geometry: [{ lat: 39.9998, lon: -74.00015 }, { lat: 40.0002, lon: -74.00015 }] }
         ] })
     });
     try {
-        const road = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(40, -74);
+        const road = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(40, -74, { roadContext: { heading: 90, name: 'Nearby Road' } });
         assert.equal(road.roadName, 'Nearby Road');
         assert.equal(road.rawSpeedLimit, 30);
         assert.equal(road.rawSpeedLimitUnit, 'mph');
@@ -920,4 +922,61 @@ test('scene caches expose a finite TTL and bounded entry counts', () => {
     assert.ok(stats.ttlMs > 0);
     assert.equal(stats.overpass, 0);
     assert.equal(stats.terrain, 0);
+});
+
+test('route-state overlay geometry reports intersections without DOM dependencies', () => {
+    assert.equal(RouteState.findRectIntersections({
+        attribution: { left: 0, top: 80, right: 100, bottom: 100 },
+        summary: { left: 0, top: 40, right: 100, bottom: 78 }
+    }).length, 0);
+    assert.deepEqual(Array.from(RouteState.findRectIntersections({
+        attribution: { left: 0, top: 80, right: 100, bottom: 100 },
+        banner: { left: 20, top: 90, right: 80, bottom: 120 }
+    })[0]), ['attribution', 'banner']);
+});
+
+test('time slider debounce collapses repeated input into one analysis', async () => {
+    let calls = 0;
+    const schedule = RouteState.createDebouncedScheduler(() => { calls++; }, 20);
+    for (let i = 0; i < 20; i++) schedule(i);
+    await new Promise(resolve => setTimeout(resolve, 35));
+    assert.equal(calls, 1);
+});
+
+test('time-only route analysis reuses OSRM geometry and makes no network request', async () => {
+    const originalFetch = sandbox.fetch;
+    const originalScene = sandbox.window.SceneShadow;
+    let fetchCalls = 0;
+    sandbox.fetch = async () => {
+        fetchCalls++;
+        return { ok: true, status: 200, json: async () => ({ routes: [] }) };
+    };
+    sandbox.window.SceneShadow = null;
+    const candidate = {
+        distance: 1000,
+        duration: 100,
+        geometry: { coordinates: [[0, 0], [0.01, 0]] },
+        legs: [{ steps: [] }]
+    };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false,
+            { candidates: [candidate] }
+        );
+        assert.equal(fetchCalls, 0);
+        assert.equal(result.routeCandidates.length, 1);
+        assert.equal(result.routes.fastest.raw, candidate);
+    } finally {
+        sandbox.fetch = originalFetch;
+        sandbox.window.SceneShadow = originalScene;
+    }
+});
+
+test('heading-up panning no longer resets the map DOM transform', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const panSection = appSource.slice(appSource.indexOf('function setupMapPanTrackingListeners'), appSource.indexOf('function triggerRecenterCountdownToast'));
+    assert.equal(panSection.includes("mapElement.style.transform = 'none';"), false);
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    assert.ok(html.includes('map-bottom-overlay-stack'));
+    assert.ok(html.includes('openstreetmap.org/copyright'));
 });

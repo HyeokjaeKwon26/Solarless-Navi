@@ -659,6 +659,9 @@ window.ShadowRouter = (function () {
     const MIN_GLARE_IMPROVEMENT = 0.05;
     const MIN_SHADE_IMPROVEMENT = 0.05;
     const MIN_UV_REDUCTION_PCT = 5;
+    const SCENE_ROUTE_CACHE_TTL_MS = 10 * 60 * 1000;
+    const SCENE_ROUTE_CACHE_MAX = 24;
+    const sceneRouteCache = new Map();
 
     function calculateRouteTradeoff(fastest, candidate) {
         const fastestDuration = routeDurationForSelection(fastest);
@@ -745,6 +748,78 @@ window.ShadowRouter = (function () {
         });
     }
 
+    function sceneFallbackReason(error) {
+        const message = String(error && (error.code || error.message) || '').toLowerCase();
+        if (message.includes('abort') || message.includes('cancel')) return 'cancelled';
+        if (message.includes('timeout')) return message.includes('dem') ? 'DEM timeout' : 'Overpass timeout';
+        if (message.includes('range') || message.includes('bbox') || message.includes('250')) return 'scene range exceeded';
+        return 'scene data unavailable';
+    }
+
+    function getCachedScene(routeId) {
+        const entry = sceneRouteCache.get(routeId);
+        if (!entry) return null;
+        if (entry.expiresAt <= Date.now()) {
+            sceneRouteCache.delete(routeId);
+            return null;
+        }
+        sceneRouteCache.delete(routeId);
+        sceneRouteCache.set(routeId, entry);
+        return entry.scene;
+    }
+
+    function cacheScene(routeId, scene) {
+        if (!routeId || !scene) return;
+        sceneRouteCache.delete(routeId);
+        sceneRouteCache.set(routeId, { scene, expiresAt: Date.now() + SCENE_ROUTE_CACHE_TTL_MS });
+        while (sceneRouteCache.size > SCENE_ROUTE_CACHE_MAX) sceneRouteCache.delete(sceneRouteCache.keys().next().value);
+    }
+
+    function createRoleRouteView(route, analyzed, mode, fallbackReason = null) {
+        const view = Object.assign({}, route, {
+            analyzed,
+            analysisMode: mode,
+            analysisTier: mode,
+            fallbackReason: mode === 'heuristic' ? (fallbackReason || route.fallbackReason || null) : null,
+            sceneCoverage: analyzed && analyzed.sceneCoverage ? analyzed.sceneCoverage : route.sceneCoverage,
+            sceneSource: analyzed && analyzed.sceneSource ? analyzed.sceneSource : route.sceneSource
+        });
+        if (route.sceneAnalysis) view.sceneAnalysis = route.sceneAnalysis;
+        return view;
+    }
+
+    function selectRoleByTier(fastest, purposeCandidates, role, refinedById) {
+        const unique = [];
+        const seen = new Set();
+        [fastest, ...(purposeCandidates || [])].forEach(route => {
+            if (route && !seen.has(route.id)) { seen.add(route.id); unique.push(route); }
+        });
+        const allReady = unique.length > 0 && unique.every(route => {
+            const refined = refinedById.get(route.id);
+            return !!(refined && refined.ready);
+        });
+        const mode = allReady ? 'scene' : 'heuristic';
+        const failedResult = unique.map(route => refinedById.get(route.id)).find(result => result && !result.ready);
+        const roleFallbackReason = failedResult && failedResult.fallbackReason ? failedResult.fallbackReason : null;
+        const views = unique.map(route => {
+            const refined = refinedById.get(route.id);
+            return createRoleRouteView(route, allReady && refined ? refined.refinedAnalyzed : route.analyzed,
+                mode, roleFallbackReason || (refined && refined.fallbackReason));
+        });
+        const baseline = views[0];
+        let selected = baseline;
+        const alternatives = views.slice(1).map(route => ({ route, tradeoff: calculateRouteTradeoff(baseline, route) }));
+        const pool = role === 'glare'
+            ? alternatives.filter(item => isMeaningfulGlareAlternative(item.tradeoff))
+                .sort((a, b) => a.route.analyzed.avgGlareRisk - b.route.analyzed.avgGlareRisk ||
+                    a.tradeoff.extraDurationSec - b.tradeoff.extraDurationSec)
+            : alternatives.filter(item => isMeaningfulShadeAlternative(item.tradeoff))
+                .sort((a, b) => b.tradeoff.uvReductionPct - a.tradeoff.uvReductionPct ||
+                    b.route.analyzed.avgShadeCoverage - a.route.analyzed.avgShadeCoverage);
+        if (pool.length) selected = pool[0].route;
+        return { selected, baseline, mode, allReady, fallbackReason: roleFallbackReason, views };
+    }
+
     async function mapWithConcurrency(items, concurrency, worker, signal) {
         const values = Array.isArray(items) ? items : [];
         if (!values.length) return [];
@@ -773,49 +848,45 @@ window.ShadowRouter = (function () {
 
         const timeOfDayAdjustment = getTimeOfDayAdjustment(dateObj);
         
-        // 1. Direct OSRM query (with steps=true for turn-by-turn maneuver data)
-        let directUrl = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson&alternatives=3&steps=true`;
-        if (isTollFreeOnly) {
-            directUrl += `&exclude=toll`;
+        let rawCandidates = Array.isArray(options.candidates) && options.candidates.length
+            ? options.candidates.filter(route => route && route.geometry && Array.isArray(route.geometry.coordinates))
+            : null;
+        if (!rawCandidates) {
+            // 1. Direct OSRM query (with steps=true for turn-by-turn maneuver data)
+            let directUrl = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson&alternatives=3&steps=true`;
+            if (isTollFreeOnly) directUrl += `&exclude=toll`;
+
+            // 2. Parallel Multi-Corridor Exploration: Generate lateral via-points with aspect-ratio normalization
+            const midLat = (start.lat + end.lat) / 2;
+            const midLng = (start.lng + end.lng) / 2;
+            const dLat = end.lat - start.lat;
+            const dLng = end.lng - start.lng;
+            const cosLat = Math.cos(midLat * Math.PI / 180);
+            const perpLat = -dLng / (cosLat || 1);
+            const perpLng = dLat * (cosLat || 1);
+            const norm = Math.sqrt(perpLat * perpLat + perpLng * perpLng) || 1;
+            const distDeg = Math.sqrt(dLat * dLat + dLng * dLng);
+            const offsetScale = Math.min(0.015, Math.max(0.0015, distDeg * 0.18));
+            const offsets = [
+                { lat: midLat + (perpLat / norm) * offsetScale, lng: midLng + (perpLng / norm) * offsetScale },
+                { lat: midLat - (perpLat / norm) * offsetScale, lng: midLng - (perpLng / norm) * offsetScale },
+                { lat: midLat + (perpLat / norm) * offsetScale * 1.8, lng: midLng + (perpLng / norm) * offsetScale * 1.8 },
+                { lat: midLat - (perpLat / norm) * offsetScale * 1.8, lng: midLng - (perpLng / norm) * offsetScale * 1.8 }
+            ];
+            const tollQuery = isTollFreeOnly ? '&exclude=toll' : '';
+            const urls = [
+                directUrl,
+                ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true${tollQuery}`)
+            ];
+            const responses = await Promise.allSettled(urls.map(u => fetchJsonWithTimeout(u, {
+                signal: options.signal,
+                timeoutMs: 10000
+            })));
+            rawCandidates = [];
+            responses.forEach(res => {
+                if (res.status === 'fulfilled' && res.value && res.value.routes) rawCandidates.push(...res.value.routes);
+            });
         }
-
-        // 2. Parallel Multi-Corridor Exploration: Generate lateral via-points with aspect-ratio normalization
-        const midLat = (start.lat + end.lat) / 2;
-        const midLng = (start.lng + end.lng) / 2;
-        const dLat = end.lat - start.lat;
-        const dLng = end.lng - start.lng;
-        const cosLat = Math.cos(midLat * Math.PI / 180);
-
-        const perpLat = -dLng / (cosLat || 1);
-        const perpLng = dLat * (cosLat || 1);
-        const norm = Math.sqrt(perpLat * perpLat + perpLng * perpLng) || 1;
-
-        const distDeg = Math.sqrt(dLat * dLat + dLng * dLng);
-        const offsetScale = Math.min(0.015, Math.max(0.0015, distDeg * 0.18));
-
-        const offsets = [
-            { lat: midLat + (perpLat / norm) * offsetScale, lng: midLng + (perpLng / norm) * offsetScale },
-            { lat: midLat - (perpLat / norm) * offsetScale, lng: midLng - (perpLng / norm) * offsetScale },
-            { lat: midLat + (perpLat / norm) * offsetScale * 1.8, lng: midLng + (perpLng / norm) * offsetScale * 1.8 },
-            { lat: midLat - (perpLat / norm) * offsetScale * 1.8, lng: midLng - (perpLng / norm) * offsetScale * 1.8 }
-        ];
-
-        const tollQuery = isTollFreeOnly ? '&exclude=toll' : '';
-        const urls = [
-            directUrl,
-            ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true${tollQuery}`)
-        ];
-
-        const responses = await Promise.allSettled(urls.map(u => fetchJsonWithTimeout(u, {
-            signal: options.signal,
-            timeoutMs: 10000
-        })));
-        const rawCandidates = [];
-        responses.forEach(res => {
-            if (res.status === 'fulfilled' && res.value && res.value.routes) {
-                rawCandidates.push(...res.value.routes);
-            }
-        });
 
         const filteredCandidates = isTollFreeOnly
             ? rawCandidates.filter(route => !routeContainsToll(route))
@@ -906,10 +977,12 @@ window.ShadowRouter = (function () {
             selection.precisionCandidates,
             options.sceneConcurrency || 2,
             async route => {
-            let scene = null;
+            const useSceneCache = options.reuseSceneCache === true;
+            let scene = useSceneCache ? getCachedScene(route.id) : null;
             let refinedAnalyzed = null;
+            let fallbackReason = null;
             try {
-                if (window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
+                if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
                     scene = await window.SceneShadow.fetchSceneForRoute(route.raw.geometry.coordinates, {
                         dateObj,
                         durationSec: route.durationSec,
@@ -919,47 +992,69 @@ window.ShadowRouter = (function () {
                         terrainTimeoutMs: 10000,
                         maxRouteMeters: 250000
                     });
+                    if (scene && useSceneCache) cacheScene(route.id, scene);
                 }
                 if (isPrecisionScene(scene)) {
                     refinedAnalyzed = await analyzeRouteSegmentsAsync(route.raw.geometry.coordinates, dateObj, route.durationSec, route.routeSteps, scene, options.signal);
+                } else {
+                    fallbackReason = 'scene data unavailable';
                 }
             } catch (sceneError) {
                 if (options.signal && options.signal.aborted) throw sceneError;
                 console.warn('Scene data unavailable; retaining common heuristic comparison.', sceneError);
+                fallbackReason = sceneFallbackReason(sceneError);
             }
-            return { route, scene, refinedAnalyzed, ready: !!refinedAnalyzed && refinedAnalyzed.analysisMode === 'scene' };
+            return { route, scene, refinedAnalyzed, fallbackReason, ready: !!refinedAnalyzed && refinedAnalyzed.analysisMode === 'scene' };
             },
             options.signal
         );
 
-        const allPrecisionReady = refinedResults.length === selection.precisionCandidates.length &&
-            refinedResults.length > 0 && refinedResults.every(result => result.ready);
-        refinedResults.forEach(({ route, scene, refinedAnalyzed }) => {
+        // Keep successful scene results attached to their route, but select a
+        // comparison tier per role. Precision is never compared directly with
+        // a heuristic baseline.
+        const refinedById = new Map(refinedResults.map(result => [result.route.id, result]));
+        refinedResults.forEach(({ route, scene, refinedAnalyzed, fallbackReason }) => {
             if (refinedAnalyzed) route.sceneAnalysis = refinedAnalyzed;
-            if (allPrecisionReady && refinedAnalyzed) {
-                route.analyzed = refinedAnalyzed;
-                route.analysisMode = 'scene';
-            }
             route.sceneCoverage = scene && scene.coverage ? scene.coverage : route.analyzed.sceneCoverage;
             route.sceneSource = scene && scene.source ? scene.source : route.analyzed.sceneSource;
+            route.fallbackReason = fallbackReason || null;
         });
 
         // Apply reductions only after the common-tier comparison set is fixed.
         // If any precision candidate lacks scene data, every final ranking
         // deliberately stays on the common heuristic tier. Successful scene
         // results remain auxiliary metadata and are never mixed into scores.
-        const comparisonRoutes = allPrecisionReady ? selection.precisionCandidates : analyzedRoutes;
-        const roles = selectRouteRoles(comparisonRoutes);
-        const fastestRoute = comparisonRoutes.find(route => route.id === selection.fastest.id) || roles.fastest;
-        const glareFreeRoute = roles.glareFree;
-        const shadeRoute = roles.shade;
-        applyExposureReductions(fastestRoute, glareFreeRoute, shadeRoute, dateObj, start);
+        const fastestTier = selectRoleByTier(selection.fastest, [], 'fastest', refinedById);
+        const glareTier = selectRoleByTier(selection.fastest, selection.glareCandidates, 'glare', refinedById);
+        const shadeTier = selectRoleByTier(selection.fastest, selection.shadeCandidates, 'shade', refinedById);
+        const fastestRoute = fastestTier.baseline;
+        const glareFreeRoute = glareTier.selected;
+        const shadeRoute = shadeTier.selected;
+        // Reductions are calculated independently per role tier. This keeps a
+        // heuristic glare/shade fallback from being compared with a precision
+        // fastest baseline.
+        applyExposureReductions(fastestRoute, null, null, dateObj, start);
+        applyExposureReductions(glareTier.baseline, glareFreeRoute, null, dateObj, start);
+        applyExposureReductions(shadeTier.baseline, null, shadeRoute, dateObj, start);
+        const roleModes = [fastestTier.mode, glareTier.mode, shadeTier.mode];
+        const finalAnalysisMode = roleModes.every(mode => mode === 'scene')
+            ? 'scene'
+            : (roleModes.every(mode => mode === 'heuristic') ? 'heuristic' : 'mixed-by-role');
                 // True Astronomical Night (altitude < -6.0°): No solar UV radiation
 
         return {
             timeOfDayAdjustment: timeOfDayAdjustment,
-            analysisMode: allPrecisionReady ? 'scene' : 'heuristic',
+            analysisMode: finalAnalysisMode,
             precisionCandidateIds: selection.precisionCandidates.map(route => route.id),
+            // Raw OSRM candidates are safe to reuse for a time-only change;
+            // their geometry, steps and base duration do not depend on the
+            // selected clock time.
+            routeCandidates: analyzedRoutes.map(route => route.raw),
+            roleAnalysis: {
+                fastest: { analysisMode: fastestTier.mode, sceneReady: fastestTier.allReady, fallbackReason: fastestTier.fallbackReason || null },
+                glareFree: { analysisMode: glareTier.mode, sceneReady: glareTier.allReady, fallbackReason: glareTier.fallbackReason || null },
+                shade: { analysisMode: shadeTier.mode, sceneReady: shadeTier.allReady, fallbackReason: shadeTier.fallbackReason || null }
+            },
             routes: {
                 fastest: fastestRoute,
                 glareFree: glareFreeRoute,

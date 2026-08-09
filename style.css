@@ -68,7 +68,7 @@ body {
 
 /* Floating Auto-Recenter Circular Ring Countdown Toast Banner */
 .recenter-toast-banner {
-    position: absolute; bottom: 85px; left: 50%; transform: translateX(-50%);
+    position: absolute; bottom: calc(max(85px, env(safe-area-inset-bottom) + 72px) + var(--map-bottom-overlay-height, 0px)); left: 50%; transform: translateX(-50%);
     background: #0f172a; border: 2px solid #38bdf8; border-radius: 18px;
     padding: 8px 14px; z-index: 8000; pointer-events: auto;
     box-shadow: 0 12px 35px rgba(0, 0, 0, 0.8), 0 0 20px rgba(56, 189, 248, 0.4);
@@ -195,7 +195,7 @@ body {
 /* Mobile Settings Toggle Button in Header (Always Clickable) */
 .mobile-toggle-btn {
     display: flex; background: rgba(56, 189, 248, 0.2); border: 1.5px solid #38bdf8;
-    color: #38bdf8; width: 36px; height: 36px; border-radius: 10px; font-size: 16px;
+    color: #38bdf8; width: 44px; height: 44px; min-width: 44px; min-height: 44px; border-radius: 10px; font-size: 16px;
     align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;
     z-index: 6000; touch-action: manipulation; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
@@ -500,6 +500,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
     overflow: hidden;
     width: 100%;
     height: 100%;
+    --map-bottom-overlay-height: 0px;
 }
 
 #map {
@@ -532,7 +533,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 
 /* Bottom-Left Speedometer HUD & Country Sign Badges */
 .speedometer-bottom-left {
-    position: absolute; bottom: max(80px, calc(env(safe-area-inset-bottom) + 72px)); left: max(14px, env(safe-area-inset-left));
+    position: absolute; bottom: calc(max(80px, calc(env(safe-area-inset-bottom) + 72px)) + var(--map-bottom-overlay-height, 0px)); left: max(14px, env(safe-area-inset-left));
     display: flex; flex-direction: column; align-items: flex-start; gap: 6px; z-index: 1100;
     pointer-events: none;
 }
@@ -701,7 +702,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 
 /* Map Control Buttons Group */
 .map-controls-group {
-    position: absolute; bottom: max(80px, calc(env(safe-area-inset-bottom) + 72px)); right: max(14px, env(safe-area-inset-right));
+    position: absolute; bottom: calc(max(80px, calc(env(safe-area-inset-bottom) + 72px)) + var(--map-bottom-overlay-height, 0px)); right: max(14px, env(safe-area-inset-right));
     display: flex; flex-direction: column; gap: 10px;
     z-index: 1100; pointer-events: auto;
 }
@@ -745,15 +746,15 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 
 /* Floating Route Summary Card with Direct One-Tap Map Start Button - Overlap-Free */
 .route-summary-floating {
-    position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+    position: static; transform: none;
     background: #0f172a; border: 2px solid #0284c7; border-radius: 16px;
-    padding: 8px 12px; display: flex; align-items: center; gap: 8px; z-index: 1100;
-    max-width: 98%; width: max-content; pointer-events: auto;
+    padding: 8px 12px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; z-index: 1100;
+    max-width: min(98vw, 720px); width: max-content; pointer-events: auto;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
 }
 
 .summary-stats-wrapper {
-    display: flex; align-items: center; gap: 6px; flex-shrink: 1;
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; flex-shrink: 1; min-width: 0; max-width: 100%;
 }
 
 .summary-stat { display: flex; align-items: center; gap: 4px; }
@@ -796,10 +797,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 
 /* Small, persistent source notice for the external tile providers and OSM data. */
 .map-attribution {
-    position: absolute;
-    right: max(6px, env(safe-area-inset-right));
-    bottom: max(5px, env(safe-area-inset-bottom));
-    z-index: 1200;
+    position: static;
     max-width: min(78vw, 360px);
     padding: 3px 6px;
     border-radius: 4px;
@@ -815,11 +813,8 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 .map-attribution a { color: #bae6fd; text-decoration: underline; }
 
 .api-status-banner {
-    position: fixed;
-    left: 50%;
-    bottom: max(18px, env(safe-area-inset-bottom));
-    transform: translate(-50%, 16px);
-    z-index: 5000;
+    position: static;
+    transform: translateY(16px);
     max-width: min(88vw, 440px);
     padding: 9px 12px;
     border: 1px solid rgba(251, 191, 36, 0.55);
@@ -834,7 +829,40 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
-.api-status-banner.active { opacity: 1; transform: translate(-50%, 0); }
+.api-status-banner:not(.active) { display: none; }
+.api-status-banner.active { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+.map-bottom-overlay-stack {
+    position: absolute;
+    left: 50%;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 1200;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: min(100% - 16px, 760px);
+    max-height: min(42vh, 360px);
+    overflow: visible;
+    pointer-events: none;
+    padding-bottom: env(safe-area-inset-bottom);
+}
+.map-bottom-overlay-stack > * { pointer-events: auto; }
+.map-bottom-overlay-stack .route-summary-floating { margin: 0; }
+.map-container.bottom-sheet-open .map-bottom-overlay-stack,
+.map-container.bottom-sheet-open .speedometer-bottom-left,
+.map-container.bottom-sheet-open .map-controls-group,
+.map-container.bottom-sheet-open .recenter-toast-banner {
+    opacity: 0;
+    pointer-events: none;
+}
+.route-summary-floating.calculating::after {
+    content: ' · calculating…';
+    color: #fbbf24;
+    font-size: 10px;
+    white-space: nowrap;
+}
 
 /* OLED Heat & Battery Saver Theme Overrides */
 body.battery-saver-active #map { filter: grayscale(100%) contrast(150%) brightness(75%); }
@@ -853,12 +881,12 @@ body.battery-saver-active .route-summary-floating {
 }
 
 .speedometer-bottom-left {
-    bottom: max(80px, calc(env(safe-area-inset-bottom) + 72px));
+    bottom: calc(max(80px, calc(env(safe-area-inset-bottom) + 72px)) + var(--map-bottom-overlay-height, 0px));
     left: max(14px, env(safe-area-inset-left));
 }
 
 .map-controls-group {
-    bottom: max(80px, calc(env(safe-area-inset-bottom) + 72px));
+    bottom: calc(max(80px, calc(env(safe-area-inset-bottom) + 72px)) + var(--map-bottom-overlay-height, 0px));
     right: max(14px, env(safe-area-inset-right));
 }
 
@@ -872,12 +900,12 @@ body.battery-saver-active .route-summary-floating {
     .main-body { height: calc(100vh - 44px); height: calc(100dvh - 44px); }
     .map-top-bar { top: 6px; padding: 4px 10px; max-width: 50%; }
     .sidebar-panel { width: 340px; }
-    .route-summary-floating { bottom: max(6px, env(safe-area-inset-bottom)); padding: 5px 8px; }
-    .speedometer-bottom-left { bottom: max(55px, env(safe-area-inset-bottom)); left: max(8px, env(safe-area-inset-left)); }
+    .route-summary-floating { padding: 5px 8px; }
+    .speedometer-bottom-left { bottom: calc(max(55px, env(safe-area-inset-bottom)) + var(--map-bottom-overlay-height, 0px)); left: max(8px, env(safe-area-inset-left)); }
     .speed-num { font-size: 26px; }
-    .map-controls-group { bottom: max(55px, env(safe-area-inset-bottom)); right: max(8px, env(safe-area-inset-right)); gap: 5px; }
+    .map-controls-group { bottom: calc(max(55px, env(safe-area-inset-bottom)) + var(--map-bottom-overlay-height, 0px)); right: max(8px, env(safe-area-inset-right)); gap: 5px; }
     .map-floating-btn { width: 38px; height: 38px; font-size: 14px; }
-    .recenter-toast-banner { bottom: max(55px, env(safe-area-inset-bottom)); padding: 5px 8px; }
+    .recenter-toast-banner { bottom: calc(max(55px, env(safe-area-inset-bottom)) + var(--map-bottom-overlay-height, 0px)); padding: 5px 8px; }
 }
 
 /* Tablet & Large Foldable Screen Optimization */
@@ -919,7 +947,7 @@ body.battery-saver-active .route-summary-floating {
         box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.8);
     }
     .sidebar-panel.active { transform: translateY(0); }
-    .route-summary-floating { bottom: max(12px, env(safe-area-inset-bottom)); padding: 6px 10px; gap: 6px; }
+    .route-summary-floating { padding: 6px 10px; gap: 6px; }
     .summary-stats-wrapper { gap: 4px; }
     .stat-val { font-size: 11px; }
     .stat-lbl { font-size: 7px; }
@@ -934,8 +962,8 @@ body.battery-saver-active .route-summary-floating {
     .shaded-rest-btn { padding: 4px 7px; font-size: 11px; border-radius: 14px; display: inline-flex !important; }
     .shaded-rest-btn span { display: inline-block !important; font-weight: 700; font-size: 10.5px; }
     .lang-toggle-btn { padding: 4px 6px; font-size: 11px; }
-    .voice-btn { width: 30px; height: 30px; font-size: 12px; }
-    .mobile-toggle-btn { width: 34px; height: 34px; font-size: 15px; margin-left: auto; flex-shrink: 0; display: flex !important; }
+    .voice-btn { width: 44px; height: 44px; min-width: 44px; min-height: 44px; font-size: 12px; }
+    .mobile-toggle-btn { width: 44px; height: 44px; font-size: 15px; margin-left: auto; flex-shrink: 0; display: flex !important; }
 }
 
 /* Ultra-Compact & Flip Cover Screen Devices (Width <= 360px) */
@@ -946,8 +974,8 @@ body.battery-saver-active .route-summary-floating {
     .shaded-rest-btn { padding: 3px 5px; font-size: 9.5px; }
     .shaded-rest-btn span { font-size: 9.5px; }
     .lang-toggle-btn { padding: 3px 5px; font-size: 9.5px; }
-    .voice-btn { width: 26px; height: 26px; font-size: 10.5px; }
-    .mobile-toggle-btn { width: 28px; height: 28px; font-size: 13px; }
+    .voice-btn { width: 44px; height: 44px; font-size: 10.5px; }
+    .mobile-toggle-btn { width: 44px; height: 44px; font-size: 13px; }
     .stat-val { font-size: 10px; }
 }
 

@@ -260,8 +260,12 @@ window.Geocoder = (function () {
         let request = reverseInFlight.get(key);
         if (!request) {
             const url = `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+            // The shared request owns its controller; an individual caller's
+            // AbortSignal only detaches that caller and cannot cancel a
+            // request another caller is already waiting for.
+            const requestController = typeof AbortController !== 'undefined' ? new AbortController() : null;
             request = fetchJsonWithTimeout(url, {
-                signal: options.signal,
+                signal: requestController ? requestController.signal : null,
                 timeoutMs: options.timeoutMs || API_TIMEOUT_MS,
                 headers: { 'User-Agent': 'SolarisNav-MobileApp/1.0' },
                 messageKey: 'searchNetworkError'
@@ -330,6 +334,23 @@ window.Geocoder = (function () {
         return best;
     }
 
+    function bearingDifference(a, b) {
+        return Math.abs(((Number(a) - Number(b) + 540) % 360) - 180);
+    }
+
+    function wayBearing(element) {
+        const geometry = element && Array.isArray(element.geometry) ? element.geometry : [];
+        if (geometry.length < 2) return null;
+        const first = geometry[0];
+        const last = geometry[geometry.length - 1];
+        const lat1 = Number(first.lat) * Math.PI / 180;
+        const lat2 = Number(last.lat) * Math.PI / 180;
+        const dLng = (Number(last.lon) - Number(first.lon)) * Math.PI / 180;
+        const y = Math.sin(dLng) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+        return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    }
+
     function parseMaxspeed(rawValue, country) {
         const raw = String(rawValue || '').trim().toLowerCase();
         if (!raw || /^(signals|none|variable|national|walk|living_street)$/.test(raw)) return null;
@@ -394,9 +415,22 @@ window.Geocoder = (function () {
             if (data && Array.isArray(data.elements) && data.elements.length > 0) {
                 const wayCandidates = data.elements.filter(elem => elem.type === 'way' && elem.tags &&
                     (elem.tags.highway || elem.tags.maxspeed) && Array.isArray(elem.geometry) && elem.geometry.length >= 2);
+                const roadContext = options.roadContext || {};
+                const targetBearing = Number.isFinite(Number(roadContext.heading)) ? Number(roadContext.heading) : null;
+                const targetName = String(roadContext.name || roadContext.ref || '').trim().toLowerCase();
                 const matchedWay = wayCandidates
-                    .map(elem => ({ elem, distance: distanceToWayMeters(lat, lng, elem) }))
-                    .sort((a, b) => a.distance - b.distance)[0]?.elem || null;
+                    .map(elem => {
+                        const distance = distanceToWayMeters(lat, lng, elem);
+                        const candidateBearing = wayBearing(elem);
+                        const bearingPenalty = targetBearing !== null && candidateBearing !== null
+                            ? bearingDifference(candidateBearing, targetBearing) * 2
+                            : 0;
+                        const tags = elem.tags || {};
+                        const candidateName = String(tags.name || tags.ref || '').trim().toLowerCase();
+                        const nameBonus = targetName && candidateName && (targetName === candidateName || targetName.includes(candidateName) || candidateName.includes(targetName)) ? 80 : 0;
+                        return { elem, score: distance + bearingPenalty - nameBonus };
+                    })
+                    .sort((a, b) => a.score - b.score)[0]?.elem || null;
 
                 // Point signs and toll booths are independent of the current
                 // way, but road properties must come from the nearest geometry.
@@ -480,6 +514,8 @@ window.Geocoder = (function () {
                     nomUrl += `&viewbox=${minLng},${maxLat},${maxLng},${minLat}&bounded=0`;
                 }
                 const nomData = await fetchJsonWithTimeout(nomUrl, {
+                    signal: options.signal,
+                    timeoutMs: options.timeoutMs || API_TIMEOUT_MS,
                     headers: { 'User-Agent': 'SolarisNav-MobileApp/1.0' },
                     messageKey: 'searchNetworkError'
                 });
@@ -510,7 +546,11 @@ window.Geocoder = (function () {
         try {
             let photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanQ)}&limit=10`;
             if (hasCoords) photonUrl += `&lat=${userCoords.lat}&lon=${userCoords.lng}`;
-            const photonData = await fetchJsonWithTimeout(photonUrl, { messageKey: 'searchNetworkError' });
+            const photonData = await fetchJsonWithTimeout(photonUrl, {
+                signal: options.signal,
+                timeoutMs: options.timeoutMs || API_TIMEOUT_MS,
+                messageKey: 'searchNetworkError'
+            });
             if (photonData && Array.isArray(photonData.features)) {
                 photonData.features.forEach(feature => {
                     const props = feature && feature.properties ? feature.properties : {};

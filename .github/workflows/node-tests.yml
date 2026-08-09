@@ -34,8 +34,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in app.js geocoder.js scene-shadow.js shadow-router.js solar-worker.js; do
+          for name in app.js geocoder.js i18n.js route-state.js scene-shadow.js shadow-router.js solar-worker.js; do
             root_hash=$(sha256sum "js/$name" | cut -d' ' -f1)
             www_hash=$(sha256sum "www/js/$name" | cut -d' ' -f1)
+            test "$root_hash" = "$www_hash"
+          done
+          for name in index.html style.css; do
+            root_hash=$(sha256sum "$name" | cut -d' ' -f1)
+            www_hash=$(sha256sum "www/$name" | cut -d' ' -f1)
             test "$root_hash" = "$www_hash"
           done

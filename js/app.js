@@ -60,6 +60,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let routeAbortController = null;
     let pendingRouteRequestKey = null;
     let verifiedRouteRequestKey = null;
+    let routeCandidateCacheKey = null;
+    let routeAnalysisGeneration = 0;
+    let scheduleTimeRouteUpdate = null;
+    let lastTimeAnalysisCommitAt = 0;
     let wakeLockSentinel = null;
     let apiNoticeTimer = null;
     let solarRefreshTimer = null;
@@ -77,6 +81,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentSpeedLimit = null; // null if no road speed limit data exists
     let lastSpeedLimitFetchTime = 0;
     let lastRoadDataErrorNotice = 0;
+    let speedLimitRequestGeneration = 0;
+    let speedLimitAbortController = null;
     let isSpeedingWarningActive = false;
     let lastSpeedingAnnounceTime = 0;
     let isAmbientLightDark = false;
@@ -105,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? I18n.getText(messageKey)
             : I18n.getText('routeNetworkError');
         const suffix = keptPreviousRoute ? `\n\n${I18n.getText('existingRouteKept')}` : '';
-        alert(`${base}${suffix}`);
+        showApiNotice(`${base}${suffix}`);
     }
 
     function showApiNotice(message) {
@@ -115,12 +121,61 @@ document.addEventListener('DOMContentLoaded', () => {
             notice = document.createElement('div');
             notice.id = 'api-status-banner';
             notice.className = 'api-status-banner';
-            document.body.appendChild(notice);
+            notice.setAttribute('role', 'status');
+            notice.setAttribute('aria-live', 'polite');
+            const overlayStack = document.getElementById('map-bottom-overlay-stack');
+            (overlayStack || document.body).appendChild(notice);
         }
         notice.textContent = String(message);
         notice.classList.add('active');
         clearTimeout(apiNoticeTimer);
         apiNoticeTimer = setTimeout(() => notice.classList.remove('active'), 5500);
+    }
+
+    function validateMapOverlayLayout() {
+        const ids = [
+            'map-attribution', 'route-summary-box', 'api-status-banner',
+            'speedometer-bottom-left', 'map-controls-group', 'recenter-toast-banner'
+        ];
+        const rects = {};
+        ids.forEach(id => {
+            const element = document.getElementById(id);
+            if (!element || element.classList.contains('hidden')) return;
+            const rect = element.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) rects[id] = rect;
+        });
+        const overlaps = window.RouteState && typeof window.RouteState.findRectIntersections === 'function'
+            ? window.RouteState.findRectIntersections(rects, 1)
+            : [];
+        if (overlaps.length && window.console && typeof console.warn === 'function') {
+            console.warn('Map overlay intersection detected:', overlaps);
+        }
+        return { rects, overlaps };
+    }
+
+    // The map bottom controls share one measured clearance area. This avoids
+    // device-specific bottom magic numbers and keeps attribution clickable.
+    function setupMapOverlayLayout() {
+        const wrapper = document.getElementById('map-perspective-wrapper');
+        const stack = document.getElementById('map-bottom-overlay-stack');
+        if (!wrapper || !stack) return;
+        const summary = document.getElementById('route-summary-box');
+        if (summary && summary.parentElement !== stack) stack.appendChild(summary);
+        const update = () => {
+            const height = Math.ceil(stack.getBoundingClientRect().height || 0);
+            wrapper.style.setProperty('--map-bottom-overlay-height', `${height}px`);
+            validateMapOverlayLayout();
+        };
+        if (typeof ResizeObserver !== 'undefined') {
+            const observer = new ResizeObserver(update);
+            observer.observe(stack);
+            if (summary) observer.observe(summary);
+            const apiNotice = document.getElementById('api-status-banner');
+            if (apiNotice) observer.observe(apiNotice);
+        }
+        window.addEventListener('resize', update, { passive: true });
+        window.__solarlessValidateMapOverlays = validateMapOverlayLayout;
+        update();
     }
 
     function getRouteAnnouncementText(mode, isReroute = false) {
@@ -224,6 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
         disableMapEventsOnUI();
         const attribution = document.getElementById('map-attribution');
         if (attribution) L.DomEvent.disableClickPropagation(attribution);
+        setupMapOverlayLayout();
 
         setupHardwareBackButtonHandler();
         setupAppResumeListener();
@@ -284,9 +340,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const btnGps = document.getElementById('btn-recenter-gps');
             if (btnGps) btnGps.classList.add('panned');
 
-            // Temporarily reset DOM transform while user is panning so touch drag direction matches screen fingers
-            const mapElement = document.getElementById('map');
-            if (mapElement) mapElement.style.transform = 'none';
+            // Keep heading-up rotation while the user explores the map. The
+            // old transform reset made the map jump to north-up and left
+            // counter-rotated markers visually out of sync. Leaflet handles
+            // the drag in its own layer; only automatic recentering is paused.
+            const wrapper = document.getElementById('map-perspective-wrapper');
+            if (wrapper) wrapper.classList.add('user-map-panning');
 
             resetRecenterInactivityTimer();
         };
@@ -375,13 +434,17 @@ document.addEventListener('DOMContentLoaded', () => {
         // Close sidebar drawer when recentering so driver returns to clear navigation view
         const sidebar = document.getElementById('sidebar-panel');
         if (sidebar) sidebar.classList.remove('active');
+        const mapWrapper = document.getElementById('map-perspective-wrapper');
+        if (mapWrapper) mapWrapper.classList.remove('bottom-sheet-open');
 
         const btnGps = document.getElementById('btn-recenter-gps');
         if (btnGps) btnGps.classList.remove('panned');
+        const wrapper = document.getElementById('map-perspective-wrapper');
+        if (wrapper) wrapper.classList.remove('user-map-panning');
 
         if (map && currentStart) {
             map.setView([currentStart.lat, currentStart.lng], 17, { animate: true });
-            applyMapRotation(currentHeading);
+            applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
         }
     }
 
@@ -401,6 +464,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (sidebar) {
                 const isOpening = !sidebar.classList.contains('active');
                 sidebar.classList.toggle('active');
+                const mapWrapper = document.getElementById('map-perspective-wrapper');
+                if (mapWrapper) mapWrapper.classList.toggle('bottom-sheet-open', isOpening);
                 if (isOpening) {
                     clearTimeout(recenterWaitTimer);
                     clearInterval(recenterCountdownInterval);
@@ -1685,13 +1750,40 @@ document.addEventListener('DOMContentLoaded', () => {
         return sunPos;
     }
 
-    async function updateRoute(isMidDrive = false) {
+    function getRouteCandidateCacheKey() {
+        if (!currentStart || !currentEnd) return null;
+        return [
+            Number(currentStart.lat).toFixed(6), Number(currentStart.lng).toFixed(6),
+            Number(currentEnd.lat).toFixed(6), Number(currentEnd.lng).toFixed(6),
+            isTollFreeOnly ? 'toll-free' : 'standard'
+        ].join('|');
+    }
+
+    function markRouteCalculationPending(isPending) {
+        const summary = document.getElementById('route-summary-box');
+        if (summary) {
+            summary.classList.toggle('calculating', !!isPending);
+            summary.setAttribute('aria-busy', isPending ? 'true' : 'false');
+        }
+        document.querySelectorAll('.route-option-card').forEach(card => {
+            card.classList.toggle('calculating', !!isPending);
+            card.setAttribute('aria-busy', isPending ? 'true' : 'false');
+        });
+    }
+
+    async function updateRoute(isMidDrive = false, routeOptions = {}) {
         if (!currentEnd || !currentStart) {
             pendingRouteRequestKey = null;
             verifiedRouteRequestKey = null;
             setNavigationButtonsEnabled(false);
             return;
         }
+
+        const requestGeneration = ++routeAnalysisGeneration;
+        const candidateCacheKey = getRouteCandidateCacheKey();
+        const reusableCandidates = routeOptions.reuseCachedCandidates && routeData &&
+            routeData.routeCandidateKey === candidateCacheKey && Array.isArray(routeData.routeCandidates)
+            ? routeData.routeCandidates : null;
 
         // Cancel an older route request before starting a new one.  This avoids
         // a slow response overwriting a newer destination or route selection.
@@ -1707,6 +1799,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Keep the previously rendered route visible as context, but never
         // allow it to start navigation while a different request is pending.
         setNavigationButtonsEnabled(false);
+        markRouteCalculationPending(true);
         const sunPos = updateSunInfo();
 
         try {
@@ -1715,13 +1808,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentEnd,
                 dateObj,
                 isTollFreeOnly,
-                { signal: requestController.signal }
+                { signal: requestController.signal, candidates: reusableCandidates, reuseSceneCache: true }
             );
 
-            if (requestController.signal.aborted || routeAbortController !== requestController) return;
+            if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
             routeData = nextRouteData;
             routeData.calculatedAt = Date.now();
             routeData.requestKey = requestKey;
+            routeData.routeCandidateKey = candidateCacheKey;
+            routeCandidateCacheKey = candidateCacheKey;
             if (routeData.routes) {
                 Object.values(routeData.routes).forEach(route => {
                     if (route && typeof route === 'object') route.requestKey = requestKey;
@@ -1730,7 +1825,7 @@ document.addEventListener('DOMContentLoaded', () => {
             verifiedRouteRequestKey = requestKey;
             pendingRouteRequestKey = null;
         } catch (e) {
-            if (requestController.signal.aborted || routeAbortController !== requestController) return;
+            if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
             const hadPreviousRoute = !!(routeData && selectedRouteObj);
             pendingRouteRequestKey = null;
             verifiedRouteRequestKey = null;
@@ -1750,6 +1845,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (routeAbortController === requestController) {
                 routeAbortController = null;
             }
+            if (requestGeneration === routeAnalysisGeneration) markRouteCalculationPending(false);
         }
 
         updateRouteOptionButtons(routeData);
@@ -1871,10 +1967,15 @@ document.addEventListener('DOMContentLoaded', () => {
         // full building/terrain model was used in that case.
         function sceneLabel(route) {
             const coverage = route && route.analyzed && route.analyzed.sceneCoverage;
-            const hasScene = coverage && (coverage.buildings || coverage.terrain || coverage.tunnels);
-            return hasScene
-                ? (isKo ? '건물·지형 데이터 반영' : 'OSM/DEM scene data applied')
-                : (isKo ? '장면 데이터 없음 · 휴리스틱 추정' : 'Scene data unavailable · heuristic');
+            const mode = route && (route.analysisMode || (route.analyzed && route.analyzed.analysisMode));
+            if (mode === 'scene') {
+                if (coverage && coverage.buildings && coverage.terrain) return isKo ? '건물·지형 정밀 분석' : 'Building/terrain precision analysis';
+                if (coverage && coverage.buildings) return isKo ? '건물 데이터 반영 · 지형 데이터 미확보' : 'Building data applied · terrain unavailable';
+                if (coverage && coverage.tunnels) return isKo ? '터널 데이터만 반영' : 'Tunnel data only';
+                return isKo ? '장면 데이터 반영' : 'Scene data applied';
+            }
+            const reason = route && route.fallbackReason ? ` (${route.fallbackReason})` : '';
+            return isKo ? `휴리스틱 추정${reason}` : `Heuristic estimate${reason}`;
         }
         [[fstDesc, fst], [glrDesc, glr], [shdDesc, shd]].forEach(([element, route]) => {
             if (element) element.innerText += ` | ${sceneLabel(route)}`;
@@ -2035,9 +2136,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const input = document.getElementById(inputId);
         const dropdown = document.getElementById(dropdownId);
         let debounceTimer = null;
+        let requestGeneration = 0;
+        let requestController = null;
+        let activeIndex = -1;
+        if (!input || !dropdown) return;
+        input.setAttribute('role', 'combobox');
+        input.setAttribute('aria-controls', dropdownId);
+        input.setAttribute('aria-autocomplete', 'list');
+        dropdown.setAttribute('role', 'listbox');
 
         input.addEventListener('input', (e) => {
             clearTimeout(debounceTimer);
+            requestGeneration += 1;
+            activeIndex = -1;
+            if (requestController) requestController.abort();
             const val = e.target.value;
 
             if (inputId === 'destination-input') {
@@ -2050,18 +2162,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            const generation = requestGeneration;
             debounceTimer = setTimeout(async () => {
                 // Photon-only autocomplete keeps Nominatim for explicit submit
                 // searches, avoiding one request per partial keystroke.
                 let results = [];
+                requestController = new AbortController();
                 try {
-                    results = await Geocoder.searchPlaces(val, currentStart, { includeNominatim: false });
+                    results = await Geocoder.searchPlaces(val, currentStart, {
+                        includeNominatim: false,
+                        signal: requestController.signal
+                    });
                 } catch (e) {
+                    if (generation !== requestGeneration || (e && e.name === 'AbortError')) return;
                     console.warn('Autocomplete search unavailable:', e);
                     dropdown.classList.remove('active');
                     return;
                 }
+                if (generation !== requestGeneration) return;
                 dropdown.innerHTML = '';
+                activeIndex = -1;
                 if (!results || results.length === 0) {
                     dropdown.classList.remove('active');
                     return;
@@ -2070,6 +2190,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 results.forEach(res => {
                     const item = document.createElement('div');
                     item.className = 'result-item';
+                    item.setAttribute('role', 'option');
+                    item.id = `${dropdownId}-option-${dropdown.children.length}`;
+                    item.setAttribute('aria-selected', 'false');
                     const icon = document.createElement('i');
                     icon.className = 'fa-solid fa-location-dot';
                     icon.style.color = 'var(--accent-cyan)';
@@ -2106,8 +2229,33 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         input.addEventListener('keydown', (e) => {
+            const options = Array.from(dropdown.querySelectorAll('[role="option"]'));
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (!options.length) return;
+                activeIndex = (activeIndex + (e.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+                options.forEach((option, index) => {
+                    const active = index === activeIndex;
+                    option.setAttribute('aria-selected', active ? 'true' : 'false');
+                    option.classList.toggle('keyboard-active', active);
+                });
+                input.setAttribute('aria-activedescendant', options[activeIndex].id);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                requestGeneration += 1;
+                if (requestController) requestController.abort();
+                dropdown.classList.remove('active');
+                input.removeAttribute('aria-activedescendant');
+                return;
+            }
             if (e.key === 'Enter') {
                 e.preventDefault();
+                if (activeIndex >= 0 && options[activeIndex]) {
+                    options[activeIndex].click();
+                    return;
+                }
                 dropdown.classList.remove('active');
                 if (inputId === 'destination-input') {
                     resolveAndStartNavigation();
@@ -2139,6 +2287,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-top-bar-change').addEventListener('click', openSearchModal);
     document.getElementById('btn-close-drawer').addEventListener('click', () => {
         document.getElementById('sidebar-panel').classList.remove('active');
+        const mapWrapper = document.getElementById('map-perspective-wrapper');
+        if (mapWrapper) mapWrapper.classList.remove('bottom-sheet-open');
     });
 
     const clearHistBtn = document.getElementById('btn-clear-history');
@@ -2167,8 +2317,12 @@ document.addEventListener('DOMContentLoaded', () => {
     /* COUNTRY-SPECIFIC ROAD SIGN DISPLAY (US MUTCD RECTANGULAR vs KR RED CIRCLE & US STOP SIGN) */
     async function updateSpeedLimitDisplay(lat, lng) {
         const now = Date.now();
+        const requestGeneration = ++speedLimitRequestGeneration;
+        if (speedLimitAbortController) speedLimitAbortController.abort();
         if (now - lastSpeedLimitFetchTime < 6000) return; // 6-second throttle for API efficiency
         lastSpeedLimitFetchTime = now;
+        const requestController = new AbortController();
+        speedLimitAbortController = requestController;
 
         const badgeKr = document.getElementById('speed-limit-badge-kr');
         const badgeUs = document.getElementById('speed-limit-badge-us');
@@ -2183,9 +2337,35 @@ document.addEventListener('DOMContentLoaded', () => {
         const cachedCountryCode = Geocoder.getCachedCountryCode
             ? Geocoder.getCachedCountryCode(lat, lng)
             : null;
-        const roadData = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(lat, lng, {
-            countryCode: cachedCountryCode || undefined
-        });
+        let roadData;
+        let roadContext = { heading: currentHeading };
+        if (selectedRouteObj && selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)) {
+            const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, currentHeading, selectedRouteObj.analyzed.coordinates);
+            const segment = selectedRouteObj.analyzed.coordinates[snap.segmentIndex || 0];
+            const nextSegment = selectedRouteObj.analyzed.coordinates[(snap.segmentIndex || 0) + 1];
+            if (segment && nextSegment) {
+                roadContext = {
+                    heading: ShadowRouter.calculateBearing(segment[1], segment[0], nextSegment[1], nextSegment[0]),
+                    name: selectedRouteObj.maneuvers && selectedRouteObj.maneuvers.find(m => m.name)?.name || '',
+                    ref: selectedRouteObj.maneuvers && selectedRouteObj.maneuvers.find(m => m.ref)?.ref || ''
+                };
+            }
+        }
+        try {
+            roadData = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(lat, lng, {
+                countryCode: cachedCountryCode || undefined,
+                signal: requestController.signal,
+                roadContext
+            });
+        } catch (error) {
+            if (!requestController.signal.aborted && requestGeneration === speedLimitRequestGeneration) {
+                showApiNotice(I18n.getText('roadDataUnavailable'));
+            }
+            return;
+        } finally {
+            if (speedLimitAbortController === requestController) speedLimitAbortController = null;
+        }
+        if (requestGeneration !== speedLimitRequestGeneration || requestController.signal.aborted) return;
         currentCountry = roadData.country;
         currentCountryCode = roadData.countryCode || cachedCountryCode || currentCountryCode;
         if (roadData.errorCode && now - lastRoadDataErrorNotice > 60000) {
@@ -2594,18 +2774,52 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const timeSlider = document.getElementById('time-slider');
+    function scheduleTimeBasedRouteAnalysis(immediate = false) {
+        if (!currentEnd || !currentStart) return;
+        pendingRouteRequestKey = 'time-update-pending';
+        setNavigationButtonsEnabled(false);
+        markRouteCalculationPending(true);
+        updateSunInfo();
+        if (!scheduleTimeRouteUpdate) {
+            const run = () => updateRoute(false, { reuseCachedCandidates: true });
+            if (window.RouteState && typeof window.RouteState.createDebouncedScheduler === 'function') {
+                scheduleTimeRouteUpdate = window.RouteState.createDebouncedScheduler(run, 320);
+            } else {
+                let timer = null;
+                const schedule = (...args) => {
+                    clearTimeout(timer);
+                    timer = setTimeout(() => run(...args), 320);
+                };
+                schedule.flush = () => { clearTimeout(timer); timer = null; run(); };
+                schedule.cancel = () => { clearTimeout(timer); timer = null; };
+                scheduleTimeRouteUpdate = schedule;
+            }
+        }
+        if (immediate && typeof scheduleTimeRouteUpdate.flush === 'function') {
+            const now = Date.now();
+            // Browsers commonly emit pointerup followed by change. Treat that
+            // pair as one commit so a drag cannot trigger two expensive passes.
+            if (now - lastTimeAnalysisCommitAt >= 80) {
+                lastTimeAnalysisCommitAt = now;
+                scheduleTimeRouteUpdate.flush();
+            }
+        } else scheduleTimeRouteUpdate();
+    }
+
     timeSlider.addEventListener('input', (e) => {
         isRealTimeMode = false;
         selectedTimeMinutes = parseInt(e.target.value, 10);
         document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
-        if (currentEnd) updateRoute();
+        if (currentEnd) scheduleTimeBasedRouteAnalysis(false);
     });
+    timeSlider.addEventListener('change', () => scheduleTimeBasedRouteAnalysis(true));
+    timeSlider.addEventListener('pointerup', () => scheduleTimeBasedRouteAnalysis(true));
 
     document.getElementById('btn-now-time').addEventListener('click', () => {
         document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
         document.getElementById('btn-now-time').classList.add('active');
         isRealTimeMode = true;
-        if (currentEnd) updateRoute();
+        if (currentEnd) scheduleTimeBasedRouteAnalysis(true);
     });
 
     document.getElementById('btn-sunrise-time').addEventListener('click', () => {
@@ -2614,7 +2828,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isRealTimeMode = false;
         selectedTimeMinutes = gpsSunTimes.sunriseMins;
         timeSlider.value = selectedTimeMinutes;
-        if (currentEnd) updateRoute();
+        if (currentEnd) scheduleTimeBasedRouteAnalysis(true);
     });
 
     document.getElementById('btn-noon-time').addEventListener('click', () => {
@@ -2623,7 +2837,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isRealTimeMode = false;
         selectedTimeMinutes = gpsSunTimes.noonMins;
         timeSlider.value = selectedTimeMinutes;
-        if (currentEnd) updateRoute();
+        if (currentEnd) scheduleTimeBasedRouteAnalysis(true);
     });
 
     document.getElementById('btn-sunset-time').addEventListener('click', () => {
@@ -2632,7 +2846,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isRealTimeMode = false;
         selectedTimeMinutes = gpsSunTimes.sunsetMins;
         timeSlider.value = selectedTimeMinutes;
-        if (currentEnd) updateRoute();
+        if (currentEnd) scheduleTimeBasedRouteAnalysis(true);
     });
 
     /* ROUTE MODE SELECTOR & MID-ROUTE REROUTING LOGIC WITH CANCEL HIGHLIGHT REVERT */
