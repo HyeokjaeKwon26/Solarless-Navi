@@ -41,6 +41,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedTimeMinutes = nowD.getHours() * 60 + nowD.getMinutes();
 
     let compassMode = 'heading-up'; // 'heading-up' (standard default for vehicle navigation) | 'north-up'
+    const PREVIEW_MAX_ZOOM = 16;
+    const NAVIGATION_ZOOM = 17.5;
     let isAutoDarkModeEnabled = true;
     let isTollFreeOnly = false;
     let isSatelliteViewActive = false;
@@ -348,21 +350,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function setupMapPanTrackingListeners() {
         if (!map) return;
 
+        installManualMapRotationGesture();
+        installHeadingUpInteractionCompensation();
+
         const onUserPan = () => {
-            if (!isLiveNavActive) return;
-
-            isUserMapPanning = true;
-            const btnGps = document.getElementById('btn-recenter-gps');
-            if (btnGps) btnGps.classList.add('panned');
-
-            // Keep heading-up rotation while the user explores the map. The
-            // old transform reset made the map jump to north-up and left
-            // counter-rotated markers visually out of sync. Leaflet handles
-            // the drag in its own layer; only automatic recentering is paused.
-            const wrapper = document.getElementById('map-perspective-wrapper');
-            if (wrapper) wrapper.classList.add('user-map-panning');
-
-            resetRecenterInactivityTimer();
+            markUserMapPanning();
         };
 
         map.on('dragstart', onUserPan);
@@ -383,6 +375,156 @@ document.addEventListener('DOMContentLoaded', () => {
         if (btnRecenterToast) {
             btnRecenterToast.addEventListener('click', recenterMapToVehicle);
         }
+    }
+
+    function markUserMapPanning() {
+        if (!isLiveNavActive) return;
+        isUserMapPanning = true;
+        const btnGps = document.getElementById('btn-recenter-gps');
+        if (btnGps) btnGps.classList.add('panned');
+
+        // Keep heading-up rotation while the user explores the map. Automatic
+        // recentering is paused, then resumed after the inactivity countdown.
+        const wrapper = document.getElementById('map-perspective-wrapper');
+        if (wrapper) wrapper.classList.add('user-map-panning');
+        resetRecenterInactivityTimer();
+    }
+
+    /**
+     * The heading-up view is a CSS rotation of Leaflet's container. Leaflet's
+     * gesture handlers still receive coordinates in the unrotated container
+     * coordinate system, so a screen drag otherwise pans at the wrong angle.
+     * Patch pointer/mouse/touch coordinates during capture, then restore the
+     * native event immediately after Leaflet has synchronously consumed it.
+     */
+    function installHeadingUpInteractionCompensation() {
+        const container = map && map.getContainer ? map.getContainer() : null;
+        if (!container || container.__headingUpInteractionCompensationInstalled) return;
+        container.__headingUpInteractionCompensationInstalled = true;
+
+        const restoreAfterDispatch = (restore) => {
+            const release = () => restore.forEach(fn => {
+                try { fn(); } catch (e) { /* best effort: native event may be sealed */ }
+            });
+            if (typeof queueMicrotask === 'function') queueMicrotask(release);
+            else Promise.resolve().then(release);
+        };
+
+        const defineTemporary = (target, property, value, restore) => {
+            if (!target) return false;
+            try {
+                const hadOwn = Object.prototype.hasOwnProperty.call(target, property);
+                const previous = target[property];
+                Object.defineProperty(target, property, {
+                    configurable: true,
+                    enumerable: true,
+                    value
+                });
+                restore.push(() => {
+                    if (hadOwn) Object.defineProperty(target, property, { configurable: true, enumerable: true, value: previous });
+                    else delete target[property];
+                });
+                return true;
+            } catch (e) {
+                return false;
+            }
+        };
+
+        const rotatePointToMapCoordinates = (x, y, angleDeg) => {
+            const rect = container.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+            const radians = angleDeg * Math.PI / 180;
+            const cos = Math.cos(radians);
+            const sin = Math.sin(radians);
+            const dx = x - cx;
+            const dy = y - cy;
+            return {
+                clientX: cx + dx * cos - dy * sin,
+                clientY: cy + dx * sin + dy * cos
+            };
+        };
+
+        const patchPoint = (point, angleDeg, restore) => {
+            if (!point || !Number.isFinite(point.clientX) || !Number.isFinite(point.clientY)) return;
+            const rotated = rotatePointToMapCoordinates(point.clientX, point.clientY, angleDeg);
+            const scrollX = window.scrollX || window.pageXOffset || 0;
+            const scrollY = window.scrollY || window.pageYOffset || 0;
+            defineTemporary(point, 'clientX', rotated.clientX, restore);
+            defineTemporary(point, 'clientY', rotated.clientY, restore);
+            defineTemporary(point, 'pageX', rotated.clientX + scrollX, restore);
+            defineTemporary(point, 'pageY', rotated.clientY + scrollY, restore);
+        };
+
+        const patchEvent = (event) => {
+            if (!event || lastAppliedMapRotation === null || (compassMode !== 'heading-up' && Math.abs(manualMapRotation) < 0.1)) return;
+            const angleDeg = Number(lastAppliedMapRotation) || 0;
+            const restore = [];
+            const touchLists = ['touches', 'targetTouches', 'changedTouches'];
+            let patchedTouchList = false;
+            touchLists.forEach(name => {
+                const list = event[name];
+                if (!list || typeof list.length !== 'number') return;
+                const mapped = Array.from(list, touch => {
+                    const clone = Object.create(touch);
+                    patchPoint(clone, angleDeg, restore);
+                    return clone;
+                });
+                patchedTouchList = defineTemporary(event, name, mapped, restore) || patchedTouchList;
+            });
+            if (!patchedTouchList) patchPoint(event, angleDeg, restore);
+            if (restore.length) restoreAfterDispatch(restore);
+        };
+
+        ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'mousedown', 'mousemove', 'mouseup', 'touchstart', 'touchmove', 'touchend', 'touchcancel']
+            .forEach(type => container.addEventListener(type, patchEvent, { capture: true, passive: true }));
+    }
+
+    /**
+     * Leaflet does not rotate its map on its own. Keep two-finger rotation as
+     * a lightweight visual transform while leaving Leaflet's native pinch and
+     * pan handlers active, so users can rotate, move, and zoom in one gesture.
+     */
+    function installManualMapRotationGesture() {
+        const container = map && map.getContainer ? map.getContainer() : null;
+        if (!container || container.__manualMapRotationGestureInstalled) return;
+        container.__manualMapRotationGestureInstalled = true;
+        let gesture = null;
+
+        const readTouchPair = event => {
+            const touches = event && event.touches;
+            if (!touches || touches.length < 2) return null;
+            return [touches[0], touches[1]];
+        };
+        const touchAngle = pair => Math.atan2(pair[1].clientY - pair[0].clientY, pair[1].clientX - pair[0].clientX) * 180 / Math.PI;
+        const angleDelta = (next, previous) => ((next - previous + 540) % 360) - 180;
+
+        container.addEventListener('touchstart', event => {
+            const pair = readTouchPair(event);
+            if (!pair) return;
+            markUserMapPanning();
+            gesture = { startAngle: touchAngle(pair), startOffset: manualMapRotation };
+            const wrapper = document.getElementById('map-perspective-wrapper');
+            if (wrapper) wrapper.classList.add('manual-rotation-gesture');
+        }, { capture: true, passive: true });
+
+        container.addEventListener('touchmove', event => {
+            if (!gesture) return;
+            const pair = readTouchPair(event);
+            if (!pair) return;
+            manualMapRotation = gesture.startOffset + angleDelta(touchAngle(pair), gesture.startAngle);
+            applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
+        }, { capture: true, passive: true });
+
+        const finishGesture = event => {
+            if (!gesture) return;
+            if (event && event.touches && event.touches.length >= 2) return;
+            gesture = null;
+            const wrapper = document.getElementById('map-perspective-wrapper');
+            if (wrapper) wrapper.classList.remove('manual-rotation-gesture');
+        };
+        container.addEventListener('touchend', finishGesture, { capture: true, passive: true });
+        container.addEventListener('touchcancel', finishGesture, { capture: true, passive: true });
     }
 
     function triggerRecenterCountdownToast() {
@@ -445,6 +587,10 @@ document.addEventListener('DOMContentLoaded', () => {
         clearTimeout(recenterWaitTimer);
         clearInterval(recenterCountdownInterval);
         hideRecenterToast();
+        // Recenter is also the explicit way out of a manual two-finger
+        // rotation: restore the automatic heading-up orientation exactly.
+        manualMapRotation = 0;
+        lastAppliedMapRotation = null;
 
         // Close sidebar drawer when recentering so driver returns to clear navigation view
         const sidebar = document.getElementById('sidebar-panel');
@@ -455,10 +601,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const btnGps = document.getElementById('btn-recenter-gps');
         if (btnGps) btnGps.classList.remove('panned');
         const wrapper = document.getElementById('map-perspective-wrapper');
-        if (wrapper) wrapper.classList.remove('user-map-panning');
+        if (wrapper) wrapper.classList.remove('user-map-panning', 'manual-rotation-gesture');
 
         if (map && currentStart) {
-            map.setView([currentStart.lat, currentStart.lng], 17, { animate: true });
+            map.setView([currentStart.lat, currentStart.lng], isLiveNavActive ? NAVIGATION_ZOOM : 17, { animate: true });
             applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
         }
     }
@@ -1485,6 +1631,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let vehicleAnimationFrom = null;
     let lastVehicleMapPanAt = 0;
     let lastAppliedMapRotation = null;
+    let manualMapRotation = 0;
     let stableGpsHeading = 0;
     let lastStableMovingGps = null;
 
@@ -1665,12 +1812,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (compassMode === 'heading-up') {
             compassMode = 'north-up';
+            manualMapRotation = 0;
             if (btn) btn.classList.remove('heading-up');
             if (tag) tag.innerText = isKo ? "북쪽고정" : "NORTH-UP";
             applyMapRotation(0);
             TTSVoice.speak(isKo ? "북쪽 고정 모드입니다." : "North-up mode activated.");
         } else {
             compassMode = 'heading-up';
+            manualMapRotation = 0;
             if (btn) btn.classList.add('heading-up');
             if (tag) tag.innerText = isKo ? "주행방향" : "HEADING-UP";
             applyMapRotation(currentHeading);
@@ -1683,16 +1832,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const mapElement = document.getElementById('map');
         if (!mapElement || !mapWrapper) return;
 
-        if (compassMode === 'heading-up' && heading !== undefined) {
+        const baseRotation = compassMode === 'heading-up' ? (Number(heading) || 0) : 0;
+        const visualRotation = ((baseRotation + manualMapRotation) % 360 + 360) % 360;
+        const hasManualRotation = Math.abs(manualMapRotation) >= 0.1;
+        if ((compassMode === 'heading-up' && heading !== undefined) || hasManualRotation) {
             if (!mapWrapper.classList.contains('heading-up-active')) {
                 mapWrapper.classList.add('heading-up-active');
                 if (map) map.invalidateSize();
             }
             // Rotation deadband filter: Only update DOM transform if angular delta is >= 1.0 degrees
-            if (lastAppliedMapRotation === null || Math.abs(((heading - lastAppliedMapRotation + 540) % 360) - 180) >= 1.0) {
-                lastAppliedMapRotation = heading;
-                mapElement.style.transform = `rotate(${-heading}deg)`;
-                mapWrapper.style.setProperty('--map-counter-rotation', `${heading}deg`);
+            if (lastAppliedMapRotation === null || Math.abs(((visualRotation - lastAppliedMapRotation + 540) % 360) - 180) >= 1.0) {
+                lastAppliedMapRotation = visualRotation;
+                mapElement.style.transform = `rotate(${-visualRotation}deg)`;
+                mapWrapper.style.setProperty('--map-counter-rotation', `${visualRotation}deg`);
             }
         } else {
             if (mapWrapper.classList.contains('heading-up-active')) {
@@ -1702,6 +1854,18 @@ document.addEventListener('DOMContentLoaded', () => {
             mapElement.style.transform = 'none';
             mapWrapper.style.setProperty('--map-counter-rotation', '0deg');
             lastAppliedMapRotation = null;
+        }
+    }
+
+    function setLiveNavigationMapMode(active) {
+        const wrapper = document.getElementById('map-perspective-wrapper');
+        if (!wrapper) return;
+        const wasActive = wrapper.classList.contains('live-navigation');
+        wrapper.classList.toggle('live-navigation', !!active);
+        if (map && wasActive !== !!active) {
+            // The live view uses an oversized rotated map so tile corners stay
+            // covered. Preview remains normal-sized for reliable fitBounds().
+            map.invalidateSize({ pan: false, debounceMoveend: true });
         }
     }
 
@@ -2177,7 +2341,16 @@ document.addEventListener('DOMContentLoaded', () => {
         // Camera auto-framing: only fit bounds when planning/previewing route, NOT when actively navigating
         if (!isLiveDrive && !isLiveNavActive) {
             const allCoords = selectedRouteObj.analyzed.coordinates.map(c => [c[1], c[0]]);
-            map.fitBounds(L.polyline(allCoords).getBounds(), { padding: [40, 40] });
+            if (allCoords.length >= 2) {
+                // Reserve space occupied by the destination/header and the
+                // bottom route summary so both endpoints remain visible.
+                map.fitBounds(L.latLngBounds(allCoords), {
+                    paddingTopLeft: [48, 176],
+                    paddingBottomRight: [48, 156],
+                    maxZoom: PREVIEW_MAX_ZOOM,
+                    animate: false
+                });
+            }
         }
     }
 
@@ -2698,6 +2871,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
         stopGpsWatch();
         isLiveNavActive = false;
+        setLiveNavigationMapMode(false);
         if (window.PipController) window.PipController.setNavigationActive(false);
 
         const isKo = I18n.getLanguage().startsWith('ko');
@@ -2750,6 +2924,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isLiveNavActive) {
             stopGpsWatch();
             isLiveNavActive = false;
+            setLiveNavigationMapMode(false);
             if (window.PipController) window.PipController.setNavigationActive(false);
             recenterMapToVehicle();
 
@@ -2790,6 +2965,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         isLiveNavActive = true;
+        setLiveNavigationMapMode(true);
         if (window.PipController) window.PipController.setNavigationActive(true);
         recenterMapToVehicle();
 

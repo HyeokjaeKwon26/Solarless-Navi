@@ -1027,3 +1027,29 @@ test('vehicle animation and remaining path use cancellable/reusable renderers', 
     assert.ok(appSource.includes('knownSnap = null'));
     assert.equal(appSource.includes('activeRoutePolylineGroup.clearLayers();\n\n        // 1. Current segment'), false);
 });
+
+test('heading-up gestures compensate CSS rotation and route preview frames both endpoints', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('function installHeadingUpInteractionCompensation()'));
+    assert.ok(appSource.includes('function installManualMapRotationGesture()'));
+    assert.ok(appSource.includes('function markUserMapPanning()'));
+    assert.ok(appSource.includes("'touchmove'"));
+    assert.ok(appSource.includes('startOffset: manualMapRotation'));
+    assert.ok(appSource.includes('manualMapRotation = gesture.startOffset'));
+    assert.ok(appSource.includes("'pointermove'"));
+    assert.ok(appSource.includes('rotatePointToMapCoordinates'));
+    assert.ok(appSource.includes('queueMicrotask'));
+    assert.ok(appSource.includes('paddingTopLeft: [48, 176]'));
+    assert.ok(appSource.includes('paddingBottomRight: [48, 156]'));
+    assert.ok(appSource.includes('maxZoom: PREVIEW_MAX_ZOOM'));
+    assert.ok(appSource.includes('setLiveNavigationMapMode(true)'));
+    assert.ok(appSource.includes('setLiveNavigationMapMode(false)'));
+    assert.ok(appSource.includes('manualMapRotation = 0;'));
+    assert.ok(appSource.includes("wrapper.classList.remove('user-map-panning', 'manual-rotation-gesture')"));
+});
+
+test('heading-up oversized map is limited to live navigation', () => {
+    const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+    assert.ok(css.includes('.map-container.heading-up-active.live-navigation #map'));
+    assert.equal(css.includes('.map-container.heading-up-active #map {'), false);
+});

@@ -523,7 +523,7 @@ body.pip-mode .sidebar-panel, body.pip-mode .map-top-bar, body.pip-mode .speedom
 }
 
 /* Expanded Map Container when Heading-Up mode is active so tile edges/corners are never cut off */
-.map-container.heading-up-active #map {
+.map-container.heading-up-active.live-navigation #map {
     width: 250vmax;
     height: 250vmax;
     position: absolute;
@@ -532,6 +532,10 @@ body.pip-mode .sidebar-panel, body.pip-mode .map-top-bar, body.pip-mode .speedom
     margin-top: -125vmax;
     margin-left: -125vmax;
     transform-origin: 50% 50%;
+}
+
+.map-container.manual-rotation-gesture #map {
+    transition: none;
 }
 
 /* Counter-rotate map markers and icons so text & icons always stay upright (0deg relative to screen) in Heading-Up mode */
