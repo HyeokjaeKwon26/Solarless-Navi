@@ -1053,3 +1053,12 @@ test('heading-up oversized map is limited to live navigation', () => {
     assert.ok(css.includes('.map-container.heading-up-active.live-navigation #map'));
     assert.equal(css.includes('.map-container.heading-up-active #map {'), false);
 });
+
+test('initial search overlay cannot cover the global header controls', () => {
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+    assert.ok(html.indexOf('<header class="app-header">') < html.indexOf('<div class="main-body">'));
+    assert.ok(css.includes('flex: 0 0 60px;'));
+    assert.ok(css.includes('position: relative;'));
+    assert.ok(css.includes('z-index: 10000;'));
+});
