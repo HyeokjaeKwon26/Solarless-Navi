@@ -474,6 +474,34 @@ document.addEventListener('DOMContentLoaded', () => {
         const activePointerIds = new Set();
         let touchGestureActive = false;
 
+        // Android WebView can expose read-only native Touch/PointerEvent
+        // properties. Keep a Leaflet-level fallback so pinch/zoom handlers
+        // still receive logical container points even when event patching is
+        // rejected by the platform.
+        const originalMouseEventToContainerPoint = map && typeof map.mouseEventToContainerPoint === 'function'
+            ? map.mouseEventToContainerPoint.bind(map) : null;
+        const isRotationActive = () => lastAppliedMapRotation !== null &&
+            (compassMode === 'heading-up' || Math.abs(manualMapRotation) >= 0.1);
+        if (originalMouseEventToContainerPoint) {
+            map.mouseEventToContainerPoint = event => {
+                if (!isRotationActive() || (event && patchedEvents.has(event))) {
+                    return originalMouseEventToContainerPoint(event);
+                }
+                const source = event && event.touches && event.touches.length
+                    ? event.touches[0]
+                    : (event && event.changedTouches && event.changedTouches.length ? event.changedTouches[0] : event);
+                if (!source || !Number.isFinite(source.clientX) || !Number.isFinite(source.clientY)) {
+                    return originalMouseEventToContainerPoint(event);
+                }
+                const rect = container.getBoundingClientRect();
+                const mapped = rotatePointToMapCoordinates(source.clientX, source.clientY, Number(lastAppliedMapRotation) || 0);
+                return L.point(
+                    mapped.clientX - rect.left - (container.clientLeft || 0),
+                    mapped.clientY - rect.top - (container.clientTop || 0)
+                );
+            };
+        }
+
         const patchEvent = (event) => {
             if (!event || lastAppliedMapRotation === null || (compassMode !== 'heading-up' && Math.abs(manualMapRotation) < 0.1)) return;
             if (patchedEvents.has(event)) return;
@@ -527,6 +555,30 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         ['mousemove', 'mouseup', 'pointermove', 'pointerup', 'pointercancel', 'touchmove', 'touchend', 'touchcancel']
             .forEach(type => document.addEventListener(type, patchDocumentEvent, { capture: true, passive: true }));
+
+        // Leaflet's Draggable computes map-pane deltas directly from pointer
+        // coordinates, bypassing mouseEventToContainerPoint. Correct the
+        // pending delta at the predrag seam so a screen-space drag follows the
+        // finger after the map is visually rotated. This also works when the
+        // WebView seals native event coordinates.
+        const draggable = map && map.dragging && map.dragging._draggable;
+        if (draggable && typeof draggable.on === 'function') {
+            draggable.on('predrag', event => {
+                // When the native event was successfully remapped above,
+                // Draggable already computed a logical delta. Only apply this
+                // seam correction for sealed/native events that could not be
+                // patched, avoiding a double rotation.
+                if (event && patchedEvents.has(event)) return;
+                if (!isRotationActive() || !draggable._startPos || !draggable._newPos) return;
+                const angle = (Number(lastAppliedMapRotation) || 0) * Math.PI / 180;
+                const dx = draggable._newPos.x - draggable._startPos.x;
+                const dy = draggable._newPos.y - draggable._startPos.y;
+                const logicalX = dx * Math.cos(angle) - dy * Math.sin(angle);
+                const logicalY = dx * Math.sin(angle) + dy * Math.cos(angle);
+                draggable._newPos = draggable._startPos.add(L.point(logicalX, logicalY));
+                if (draggable._absPos) draggable._absPos = draggable._startPos.add(L.point(logicalX, logicalY));
+            });
+        }
     }
 
     /**
@@ -1653,6 +1705,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 gpsPermissionState = 'granted';
                 gpsFixState = 'ready';
                 setGpsStatusIndicator(false, true);
+                // If a destination was already selected by a resume/GPS
+                // refresh flow, preserve the previous behavior of starting a
+                // route as soon as the first valid fix arrives. A normal
+                // startNavigationFlow() call sets navigationStartPending and
+                // owns that first request, so this guard cannot duplicate it.
+                const shouldRefreshExistingRoute = !!currentEnd && !navigationStartPending;
+                if (shouldRefreshExistingRoute) updateRoute();
                 // Resolve as soon as coordinates exist. Reverse geocoding is
                 // UI enrichment and must not block route-start readiness.
                 resolve(currentStart);
@@ -1666,11 +1725,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateSunInfo();
                 checkAndUpdateMapTileTheme();
 
-                // A route-start caller owns route calculation after this
-                // promise resolves. Do not also start a second request here;
-                // GPS refreshes with an existing destination keep the current
-                // verified route until the normal reroute flow decides to
-                // replace it.
                 if (!currentEnd) {
                     map.setView([lat, lng], 16);
                     updateVehicleMarkerPosition(lat, lng, currentHeading);
@@ -1678,7 +1732,10 @@ document.addEventListener('DOMContentLoaded', () => {
             },
             (err) => {
                 gpsFixState = 'error';
-                if (err && err.code === 1) gpsPermissionState = 'denied';
+                // Do not infer a permanent permission denial from a single
+                // WebView code-1 callback. Android can emit it while the
+                // permission result is settling; the Permissions API state
+                // (when available) is the source of truth for the alert.
                 setGpsStatusIndicator(false, false);
                 if (isInitial) {
                     document.getElementById('origin-input').value = I18n.getLanguage().startsWith('ko') ? "🎯 내 위치 (현재 GPS)" : "🎯 My Location (Current GPS)";
@@ -1992,7 +2049,11 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             await requestUserGpsLocation(false);
         } catch (e) {
-            if (e && e.code === 1) {
+            // Some Android WebViews report a transient code-1 geolocation
+            // failure even after the native permission dialog was accepted.
+            // Show the settings message only when the permission state is
+            // explicitly denied; otherwise explain that a GPS fix is pending.
+            if (e && e.code === 1 && gpsPermissionState === 'denied') {
                 alert(isKo ? '위치 권한이 거부되었습니다. Android 설정에서 위치 권한을 허용해 주세요.' : 'Location permission was denied. Allow it in Android settings.');
             } else if (e && e.code === 'UNAVAILABLE') {
                 alert(isKo ? '이 기기에서는 위치 정보를 사용할 수 없습니다.' : 'Location is not available on this device.');
@@ -3046,6 +3107,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (!isCurrentRouteReady()) {
+            // The direct/live guidance buttons can be pressed while the first
+            // GPS fix is still pending. Route-start owns that wait and will
+            // calculate the road route once coordinates arrive; do not show a
+            // misleading “navigation disabled”/permission-style alert.
+            if (currentEnd && !currentStart) {
+                startNavigationFlow();
+                return;
+            }
             const isKo = I18n.getLanguage().startsWith('ko');
             alert(isKo
                 ? '새 출발지·목적지의 실제 도로 경로 계산이 끝날 때까지 내비게이션을 시작할 수 없습니다.'

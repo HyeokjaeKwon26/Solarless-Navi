@@ -1070,6 +1070,8 @@ test('rotated Leaflet input uses logical layout dimensions and document drag eve
     assert.ok(appSource.includes('rect.left + (container.clientLeft || 0) + localX'));
     assert.ok(appSource.includes('const patchDocumentEvent = event =>'));
     assert.ok(appSource.includes("'touchmove', 'touchend', 'touchcancel'"));
+    assert.ok(appSource.includes('map.mouseEventToContainerPoint = event =>'));
+    assert.ok(appSource.includes("draggable.on('predrag'"));
 });
 
 test('GPS permission and GPS fix are separate, with one in-flight request', () => {
@@ -1080,5 +1082,9 @@ test('GPS permission and GPS fix are separate, with one in-flight request', () =
     assert.ok(appSource.includes('gpsFixState = \'pending\';'));
     assert.ok(appSource.includes('async function startNavigationFlow()'));
     assert.ok(appSource.includes('await requestUserGpsLocation(false);'));
+    assert.ok(appSource.includes('const shouldRefreshExistingRoute = !!currentEnd && !navigationStartPending;'));
+    assert.ok(appSource.includes('if (currentEnd && !currentStart) {'));
+    assert.ok(appSource.includes('startNavigationFlow();\n                return;'));
+    assert.ok(appSource.includes("e.code === 1 && gpsPermissionState === 'denied'"));
     assert.ok(appSource.includes('The current GPS fix is not ready yet.'));
 });
