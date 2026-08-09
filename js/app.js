@@ -72,6 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let countdownSecLeft = 3;
 
     let currentCountry = 'KR';
+    let currentCountryCode = null;
     let currentSpeedUnit = 'km/h';
     let currentSpeedLimit = null; // null if no road speed limit data exists
     let lastSpeedLimitFetchTime = 0;
@@ -2176,8 +2177,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const valUs = document.getElementById('limit-val-us');
         const unitVal = document.getElementById('speed-unit-val');
 
-        const roadData = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(lat, lng);
+        // Reuse the reverse-geocoder ISO code for this quantized GPS cell.
+        // The geocoder resolves and caches it when it is not available, while
+        // avoiding reuse of a code from a different country after movement.
+        const cachedCountryCode = Geocoder.getCachedCountryCode
+            ? Geocoder.getCachedCountryCode(lat, lng)
+            : null;
+        const roadData = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(lat, lng, {
+            countryCode: cachedCountryCode || undefined
+        });
         currentCountry = roadData.country;
+        currentCountryCode = roadData.countryCode || cachedCountryCode || currentCountryCode;
         if (roadData.errorCode && now - lastRoadDataErrorNotice > 60000) {
             lastRoadDataErrorNotice = now;
             showApiNotice(I18n.getText('roadDataUnavailable'));

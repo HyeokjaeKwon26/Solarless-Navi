@@ -8,6 +8,9 @@ window.Geocoder = (function () {
     const API_TIMEOUT_MS = 7000;
     const SEARCH_CACHE_MAX = 24;
     const searchCache = new Map();
+    const COUNTRY_CACHE_TTL_MS = 15 * 60 * 1000;
+    const COUNTRY_CACHE_MAX = 64;
+    const countryCache = new Map();
 
     function createApiError(code, messageKey, details, cause) {
         const error = new Error(code);
@@ -106,6 +109,58 @@ window.Geocoder = (function () {
         [-5.3, 52.2], [-4.0, 51.5], [-5.2, 50.8]
     ];
 
+    // A conservative outline for the contiguous United States.  It is only
+    // a local fallback when reverse geocoding has no ISO code; it intentionally
+    // excludes Toronto, Tijuana and the broad Canadian/Mexican areas covered
+    // by the old rectangular bbox.  Explicit OSM/reverse-geocoder country
+    // codes always take precedence over this approximation.
+    const CONTIGUOUS_US_POLYGON = [
+        [-124.8, 48.9], [-123.2, 46.0], [-124.2, 42.0], [-120.0, 39.0],
+        [-117.1, 32.8], [-114.7, 32.7], [-111.0, 31.3], [-108.2, 31.3],
+        [-106.5, 31.8], [-104.0, 29.8], [-97.2, 25.8], [-90.1, 28.5],
+        [-88.0, 30.2], [-85.0, 29.5], [-82.5, 27.0], [-80.0, 25.0],
+        [-80.0, 31.0], [-75.0, 35.0], [-71.0, 41.0], [-67.0, 44.8],
+        [-74.5, 45.0], [-79.0, 44.5], [-84.8, 46.0], [-89.5, 48.0],
+        [-95.1, 49.0], [-104.0, 49.0], [-111.0, 49.0], [-120.0, 49.0],
+        [-124.8, 48.9]
+    ];
+
+    function normalizeCountryCode(countryCode) {
+        const value = String(countryCode || '').trim().toUpperCase();
+        if (!value) return '';
+        if (value === 'USA' || value === 'US') return 'US';
+        if (value === 'GBR' || value === 'GB' || value === 'UK') return 'GB';
+        if (value === 'KOR' || value === 'KR') return 'KR';
+        return /^[A-Z]{2}$/.test(value) ? value : '';
+    }
+
+    function countryCacheKey(lat, lng) {
+        return `${Number(lat).toFixed(2)},${Number(lng).toFixed(2)}`;
+    }
+
+    function getCachedCountryCode(lat, lng) {
+        const key = countryCacheKey(lat, lng);
+        const entry = countryCache.get(key);
+        if (!entry) return null;
+        if (entry.expiresAt <= Date.now()) {
+            countryCache.delete(key);
+            return null;
+        }
+        countryCache.delete(key);
+        countryCache.set(key, entry);
+        // Empty string is a cached "unknown" result; null means no cache
+        // entry.  Keeping that distinction prevents repeated reverse lookups
+        // while a GPS position remains in the same cell.
+        return entry.code;
+    }
+
+    function setCachedCountryCode(lat, lng, code) {
+        const key = countryCacheKey(lat, lng);
+        countryCache.delete(key);
+        countryCache.set(key, { code: normalizeCountryCode(code), expiresAt: Date.now() + COUNTRY_CACHE_TTL_MS });
+        while (countryCache.size > COUNTRY_CACHE_MAX) countryCache.delete(countryCache.keys().next().value);
+    }
+
     /* Country detection uses explicit ISO data when available, then a
      * conservative local boundary. It never treats a broad European bbox as
      * proof of UK units. */
@@ -116,10 +171,13 @@ window.Geocoder = (function () {
         if (explicit === 'KR' || explicit === 'KOR') return 'KR';
         if (explicit) return 'INT';
 
-        // USA Mainland, Alaska, Hawaii
-        if ((lat >= 24 && lat <= 50 && lng >= -125 && lng <= -66) ||
+        // USA Mainland, Alaska, Hawaii.  The contiguous outline is kept
+        // deliberately conservative; unknown points use international km/h.
+        const inGreatLakesCanadaBand = Number(lat) > 43.2 && Number(lat) < 46.0 &&
+            Number(lng) > -83.5 && Number(lng) < -77.0;
+        if (!inGreatLakesCanadaBand && (pointInPolygon(Number(lat), Number(lng), CONTIGUOUS_US_POLYGON) ||
             (lat >= 50 && lat <= 72 && lng >= -180 && lng <= -130) ||
-            (lat >= 18 && lat <= 23 && lng >= -161 && lng <= -154)) {
+            (lat >= 18 && lat <= 23 && lng >= -161 && lng <= -154))) {
             return 'US';
         }
 
@@ -134,6 +192,31 @@ window.Geocoder = (function () {
         }
 
         return 'INT'; // International / European Default
+    }
+
+    async function resolveCountryCode(lat, lng, options = {}) {
+        const explicit = normalizeCountryCode(options.countryCode);
+        if (explicit) return explicit;
+        const cached = getCachedCountryCode(lat, lng);
+        if (cached !== null) return cached;
+        let code = '';
+        try {
+            const url = `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+            const data = await fetchJsonWithTimeout(url, {
+                signal: options.signal,
+                timeoutMs: options.timeoutMs || API_TIMEOUT_MS,
+                headers: { 'User-Agent': 'SolarisNav-MobileApp/1.0' },
+                messageKey: 'searchNetworkError'
+            });
+            code = normalizeCountryCode(data && data.address && data.address.country_code);
+        } catch (error) {
+            // Country lookup is advisory.  Cache the unknown result briefly so
+            // GPS updates do not issue a reverse request every few seconds.
+            if (options.signal && options.signal.aborted) throw error;
+            console.warn('Country lookup warning:', error);
+        }
+        setCachedCountryCode(lat, lng, code);
+        return code || null;
     }
 
     function pointToSegmentDistanceMeters(lat, lng, a, b) {
@@ -189,7 +272,8 @@ window.Geocoder = (function () {
 
     /* OSM Overpass lookup for nearby speed-limit, tunnel, highway, toll and sign tags */
     async function fetchCurrentRoadSpeedLimitAndRules(lat, lng, options = {}) {
-        const country = detectCountry(lat, lng, options.countryCode);
+        const resolvedCountryCode = await resolveCountryCode(lat, lng, options);
+        const country = detectCountry(lat, lng, resolvedCountryCode || options.countryCode);
         let speedLimit = null;
         let isStopSignAhead = false;
         let isTunnel = false;
@@ -221,6 +305,7 @@ window.Geocoder = (function () {
             const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
             const data = await fetchJsonWithTimeout(url, {
+                signal: options.signal,
                 timeoutMs: 5000,
                 messageKey: 'routeNetworkError'
             });
@@ -264,6 +349,7 @@ window.Geocoder = (function () {
 
         return {
             country: country,
+            countryCode: resolvedCountryCode || normalizeCountryCode(options.countryCode) || null,
             speedLimit: speedLimit,
             speedLimitKmh: speedLimitKmh,
             rawSpeedLimit: rawSpeedLimit,
@@ -406,6 +492,7 @@ window.Geocoder = (function () {
         searchPlaces: searchPlaces,
         reverseGeocode: reverseGeocode,
         detectCountry: detectCountry,
+        getCachedCountryCode: getCachedCountryCode,
         parseMaxspeed: parseMaxspeed,
         pointToSegmentDistanceMeters: pointToSegmentDistanceMeters,
         distanceToWayMeters: distanceToWayMeters,

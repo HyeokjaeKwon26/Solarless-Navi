@@ -107,6 +107,17 @@ function estimateSegmentShade(p1, p2, sunPos) {
 self.onmessage = function (e) {
     const { id, coordinates, startTimestamp, durationSec, timeLookup: timeLookupArr, scene } = e.data;
 
+    // Keep scene capability checks outside the segment loop.  The previous
+    // implementation declared `useScene` inside the loop and then referenced
+    // it while building the final result, which caused a ReferenceError after
+    // all segments had already been calculated.  Scene data alone is not
+    // enough: the worker must have imported the occlusion API as well.
+    const sceneApiAvailable = self.SceneShadow &&
+        typeof self.SceneShadow.getSegmentOcclusion === 'function';
+    const useScene = !!scene &&
+        scene.precisionReady !== false &&
+        !!sceneApiAvailable;
+
     const n = coordinates.length;
     // Accept pre-computed timeLookup or build uniform fallback
     let timeLookup;
@@ -149,7 +160,6 @@ self.onmessage = function (e) {
         const sunIntensity = calculateSolarUvIntensity(segSunPos.altitude);
         const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
         const glareRisk = calculateSegmentGlare(heading, segSunPos);
-        const useScene = !!scene && scene.precisionReady !== false;
         const sceneResult = useScene && self.SceneShadow
             ? self.SceneShadow.getSegmentOcclusion(p1, p2, segSunPos, scene, i)
             : null;

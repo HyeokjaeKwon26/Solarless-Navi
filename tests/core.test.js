@@ -39,6 +39,40 @@ const SceneShadow = sandbox.SceneShadow;
 const RouteState = sandbox.RouteState;
 const Geocoder = sandbox.Geocoder;
 
+function runSolarWorkerMessage(data, importAvailable = true) {
+    const messages = [];
+    const workerSandbox = {
+        console,
+        Math,
+        Date,
+        Number,
+        String,
+        Array,
+        Object,
+        JSON,
+        Map,
+        Set,
+        Float64Array,
+        Promise,
+        AbortController,
+        setTimeout,
+        clearTimeout,
+        isFinite,
+        self: null,
+        postMessage: message => messages.push(message),
+        importScripts: file => {
+            if (!importAvailable) throw new Error('scene module unavailable');
+            vm.runInContext(fs.readFileSync(path.join(root, 'js', file), 'utf8'), workerSandbox, { filename: file });
+        }
+    };
+    workerSandbox.self = workerSandbox;
+    vm.createContext(workerSandbox);
+    vm.runInContext(fs.readFileSync(path.join(root, 'js/solar-worker.js'), 'utf8'), workerSandbox, { filename: 'js/solar-worker.js' });
+    workerSandbox.self.onmessage({ data });
+    assert.equal(messages.length, 1);
+    return messages[0].result;
+}
+
 test('distance and bearing calculations handle normal and invalid inputs', () => {
     assert.equal(ShadowRouter.calculateDistanceMeters(0, 0, 0, 0), 0);
     assert.ok(Math.abs(ShadowRouter.calculateDistanceMeters(0, 0, 0, 1) - 111194.9) < 200);
@@ -129,6 +163,76 @@ test('scene coverage falls back to heuristics for uncovered route segments', () 
     assert.equal(SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, scene, 1).source, 'heuristic');
 });
 
+test('solar worker handles heuristic and precision scene messages without scope errors', () => {
+    const coordinates = [[127, 37], [127.001, 37]];
+    const base = {
+        id: 'worker-test',
+        coordinates,
+        startTimestamp: 0,
+        durationSec: 100,
+        timeLookup: [0, 100]
+    };
+    const heuristic = runSolarWorkerMessage(base);
+    assert.equal(heuristic.analysisMode, 'heuristic');
+    assert.equal(heuristic.sceneSource, 'heuristic fallback');
+    assert.ok(Number.isFinite(heuristic.avgGlareRisk));
+    assert.ok(Number.isFinite(heuristic.avgShadeCoverage));
+    assert.ok(Number.isFinite(heuristic.totalUvExposureUnits));
+
+    const scene = {
+        precisionReady: true,
+        source: 'mock scene',
+        origin: { lat: 37, lng: 127 },
+        coverage: { buildings: true, terrain: true, tunnels: true },
+        segmentCoverage: [{ buildings: true, terrain: true, tunnels: true }],
+        buildings: [],
+        tunnels: [],
+        terrainSamples: [],
+        terrainProfiles: []
+    };
+    const workerScene = runSolarWorkerMessage({ ...base, scene });
+    const mainScene = ShadowRouter.analyzeRouteSegments(coordinates, new Date(0), 100, null, scene);
+    assert.equal(workerScene.analysisMode, 'scene');
+    assert.equal(workerScene.sceneSource, 'mock scene');
+    assert.ok(Math.abs(workerScene.avgGlareRisk - mainScene.avgGlareRisk) < 1e-12);
+    assert.ok(Math.abs(workerScene.avgShadeCoverage - mainScene.avgShadeCoverage) < 1e-12);
+    assert.ok(Math.abs(workerScene.totalUvExposureUnits - mainScene.totalUvExposureUnits) < 1e-12);
+
+    const importFailure = runSolarWorkerMessage({ ...base, scene }, false);
+    assert.equal(importFailure.analysisMode, 'heuristic');
+    assert.equal(importFailure.sceneSource, 'heuristic fallback');
+});
+
+test('worker failure resolves immediately and disables repeated worker creation', async () => {
+    let constructorCount = 0;
+    function FailingWorker() {
+        constructorCount++;
+        setTimeout(() => {
+            if (this.onerror) this.onerror(new Error('mock worker failure'));
+        }, 0);
+    }
+    FailingWorker.prototype.postMessage = () => {};
+    FailingWorker.prototype.terminate = () => {};
+
+    const local = { ...sandbox, Worker: FailingWorker };
+    local.window = local;
+    local.self = local;
+    vm.createContext(local);
+    for (const file of ['js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js']) {
+        vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), local, { filename: file });
+    }
+    const started = Date.now();
+    const first = await Promise.race([
+        local.ShadowRouter.analyzeRouteSegmentsAsync([[127, 37], [127.001, 37]], new Date(0), 100, null),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('worker fallback waited too long')), 500))
+    ]);
+    const second = await local.ShadowRouter.analyzeRouteSegmentsAsync([[127, 37], [127.001, 37]], new Date(0), 100, null);
+    assert.equal(first.analysisMode, 'heuristic');
+    assert.equal(second.analysisMode, 'heuristic');
+    assert.ok(Date.now() - started < 500);
+    assert.equal(constructorCount, 1);
+});
+
 test('route request identity rejects stale origin, destination, mode, and toll results', () => {
     const start = { lat: 37, lng: 127 };
     const end = { lat: 37.1, lng: 127.1 };
@@ -153,6 +257,28 @@ test('off-route distance uses the nearest point on a route segment', () => {
     const distance = ShadowRouter.distanceToRoute(0.0005, 0.005, route);
     assert.ok(distance > 50 && distance < 65, `expected about 56m, got ${distance}`);
     assert.ok(ShadowRouter.pointToSegmentDistanceMeters(0.0005, 0.005, route[0], route[1]) < 65);
+});
+
+test('route duplicate filtering compares sampled geometry after distance and duration', () => {
+    const base = {
+        distance: 1000,
+        duration: 100,
+        geometry: { coordinates: [[0, 0], [0.005, 0], [0.01, 0]] }
+    };
+    const slightVariation = {
+        distance: 1002,
+        duration: 101,
+        geometry: { coordinates: [[0, 0], [0.005, 0.00005], [0.01, 0]] }
+    };
+    const differentCorridor = {
+        distance: 1001,
+        duration: 101,
+        geometry: { coordinates: [[0, 0], [0.005, 0.004], [0.01, 0]] }
+    };
+    assert.equal(ShadowRouter.areRoutesGeometricallySimilar(base, slightVariation), true);
+    assert.equal(ShadowRouter.areRoutesGeometricallySimilar(base, differentCorridor), false);
+    assert.notEqual(ShadowRouter.createRouteIdentity(base), ShadowRouter.createRouteIdentity(differentCorridor));
+    assert.ok(ShadowRouter.geometryHausdorffDistanceMeters(base, differentCorridor) > 300);
 });
 
 test('precision candidates include duration fastest plus purpose-specific heuristic leaders', () => {
@@ -320,6 +446,127 @@ test('partial scene failure falls back every final comparison to heuristic mode'
     }
 });
 
+test('scene analysis concurrency is bounded and queued candidates remain cancellable', async () => {
+    const originalFetch = sandbox.fetch;
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    let requestIndex = 0;
+    let active = 0;
+    let maxActive = 0;
+    const rawRoutes = Array.from({ length: 5 }, (_, index) => ({
+        distance: 1000 + index * 100,
+        duration: 100 + index * 20,
+        geometry: { coordinates: [[0, 0], [0.01, (index + 1) * 0.001]] },
+        legs: [{ steps: [] }]
+    }));
+    sandbox.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ routes: [rawRoutes[requestIndex++ % rawRoutes.length]] })
+    });
+    SceneShadow.fetchSceneForRoute = async () => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise(resolve => setTimeout(resolve, 12));
+        active--;
+        return {
+            precisionReady: true,
+            origin: { lat: 0, lng: 0 },
+            coverage: { buildings: true, terrain: true, tunnels: true },
+            segmentCoverage: [{ buildings: true, terrain: true, tunnels: true }],
+            buildings: [], tunnels: [], terrainSamples: [], terrainProfiles: [],
+            source: 'mock scene'
+        };
+    };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false,
+            { sceneConcurrency: 2 }
+        );
+        assert.ok(result.precisionCandidateIds.length >= 2);
+        assert.ok(maxActive <= 2, `expected at most 2 concurrent scene requests, got ${maxActive}`);
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
+    }
+});
+
+test('building ground elevation uses the nearest valid DEM sample and does not fabricate zero', async () => {
+    const originalFetch = sandbox.fetch;
+    SceneShadow.clearCaches();
+    let terrainAvailable = true;
+    sandbox.fetch = async url => {
+        if (String(url).includes('overpass-api.de')) {
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({ elements: [{
+                    type: 'way', id: 1,
+                    tags: { building: 'yes', height: '12' },
+                    geometry: [
+                        { lat: -0.00005, lon: 0.00001 },
+                        { lat: 0.00005, lon: 0.00001 },
+                        { lat: 0.00005, lon: 0.00009 },
+                        { lat: -0.00005, lon: 0.00009 }
+                    ]
+                }, {
+                    type: 'way', id: 2,
+                    tags: { building: 'yes', height: '18' },
+                    geometry: [
+                        { lat: -0.00005, lon: 0.00091 },
+                        { lat: 0.00005, lon: 0.00091 },
+                        { lat: 0.00005, lon: 0.00099 },
+                        { lat: -0.00005, lon: 0.00099 }
+                    ]
+                }] })
+            };
+        }
+        if (String(url).includes('opentopodata')) {
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({ results: terrainAvailable
+                    ? Array.from({ length: 100 }, (_, index) => ({ elevation: 100 + index }))
+                    : [] })
+            };
+        }
+        throw new Error(`unexpected URL: ${url}`);
+    };
+    try {
+        const scene = await SceneShadow.fetchSceneForRoute(
+            [[0, 0], [0.001, 0]], { dateObj: new Date(0), durationSec: 100 }
+        );
+        assert.equal(scene.buildings.length, 2);
+        assert.ok(scene.buildings.every(building => Number.isFinite(building.ground)));
+        assert.notEqual(scene.buildings[0].ground, scene.buildings[1].ground);
+
+        SceneShadow.clearCaches();
+        terrainAvailable = false;
+        const incomplete = await SceneShadow.fetchSceneForRoute(
+            [[0.01, 0], [0.011, 0]], { dateObj: new Date(0), durationSec: 100 }
+        );
+        assert.equal(incomplete.buildings[0].ground, null);
+        assert.equal(incomplete.precisionReady, false);
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.clearCaches();
+    }
+});
+
+test('large scene bbox is skipped before external API calls', async () => {
+    const originalFetch = sandbox.fetch;
+    let calls = 0;
+    sandbox.fetch = async () => { calls++; throw new Error('should not call API'); };
+    try {
+        const scene = await SceneShadow.fetchSceneForRoute(
+            [[0, 0], [2, 0]], { maxRouteMeters: 300000, maxBboxSpanDeg: 1.5 }
+        );
+        assert.equal(scene, null);
+        assert.equal(calls, 0);
+    } finally {
+        sandbox.fetch = originalFetch;
+    }
+});
+
 test('toll-free routing adds exclusion to direct and via-point OSRM requests', async () => {
     const originalFetch = sandbox.fetch;
     const requestedUrls = [];
@@ -364,6 +611,44 @@ test('country detection does not classify Ireland or continental Europe as Great
     assert.equal(Geocoder.detectCountry(53.35, -6.26), 'INT');
     assert.equal(Geocoder.detectCountry(48.86, 2.35), 'INT');
     assert.equal(Geocoder.detectCountry(50.85, 4.35), 'INT');
+    assert.equal(Geocoder.detectCountry(43.6532, -79.3832), 'INT');
+    assert.equal(Geocoder.detectCountry(32.5149, -117.0382), 'INT');
+    assert.equal(Geocoder.detectCountry(47.6062, -122.3321), 'US');
+});
+
+test('reverse-geocoded ISO country is cached and controls speed units', async () => {
+    const originalFetch = sandbox.fetch;
+    let reverseCalls = 0;
+    let overpassCalls = 0;
+    sandbox.fetch = async url => {
+        if (String(url).includes('nominatim.openstreetmap.org/reverse')) {
+            reverseCalls++;
+            return { ok: true, status: 200, json: async () => ({ address: { country_code: 'ca' } }) };
+        }
+        overpassCalls++;
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({ elements: [{
+                type: 'way',
+                tags: { highway: 'primary', maxspeed: '50', name: 'Canadian Road' },
+                geometry: [{ lat: 43.6532, lon: -79.3833 }, { lat: 43.6532, lon: -79.3831 }]
+            }] })
+        };
+    };
+    try {
+        const first = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(43.6532, -79.3832);
+        const second = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(43.6532, -79.3832);
+        assert.equal(first.countryCode, 'CA');
+        assert.equal(first.country, 'INT');
+        assert.equal(first.unit, 'km/h');
+        assert.equal(first.speedLimitKmh, 50);
+        assert.equal(second.countryCode, 'CA');
+        assert.equal(reverseCalls, 1);
+        assert.equal(overpassCalls, 2);
+    } finally {
+        sandbox.fetch = originalFetch;
+    }
 });
 
 test('nearest OSM way geometry determines the speed limit', async () => {

@@ -20,8 +20,10 @@
     const CACHE_TTL_MS = 10 * 60 * 1000;
     const OVERPASS_CACHE_MAX_ENTRIES = 12;
     const TERRAIN_CACHE_MAX_ENTRIES = 512;
+    const BUILDING_GROUND_MAX_SAMPLE_DISTANCE_METERS = 500;
     const overpassCache = new Map();
     const terrainCache = new Map();
+    const terrainInflight = new Map();
 
     function finite(value) {
         return value !== null && value !== '' && Number.isFinite(Number(value));
@@ -347,20 +349,45 @@
         const batchSize = 80;
         for (let i = 0; i < missing.length; i += batchSize) {
             const batch = missing.slice(i, i + batchSize);
-            const locations = batch.map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`).join('|');
-            try {
-                const data = await fetchJsonWithTimeout(`${TERRAIN_ENDPOINT}${encodeURIComponent(locations)}`, {
+            const newRecords = batch.filter(record => !terrainInflight.has(record.key));
+            if (newRecords.length) {
+                const requestBatch = newRecords.slice(0, batchSize);
+                const locations = requestBatch.map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`).join('|');
+                const request = fetchJsonWithTimeout(`${TERRAIN_ENDPOINT}${encodeURIComponent(locations)}`, {
                     signal: options.signal,
                     timeoutMs: options.terrainTimeoutMs || 10000
+                }).then(data => {
+                    const values = new Map();
+                    const results = Array.isArray(data && data.results) ? data.results : [];
+                    requestBatch.forEach((record, index) => {
+                        const value = results[index] && Number(results[index].elevation);
+                        if (Number.isFinite(value)) values.set(record.key, value);
+                    });
+                    return values;
                 });
-                const results = Array.isArray(data && data.results) ? data.results : [];
-                batch.forEach((record, index) => {
-                    const value = results[index] && Number(results[index].elevation);
+                requestBatch.forEach(record => {
+                    let valuePromise;
+                    valuePromise = request.then(values => values.has(record.key) ? values.get(record.key) : null)
+                        .then(value => {
+                            if (Number.isFinite(value)) setExpiringCacheValue(terrainCache, record.key, value, TERRAIN_CACHE_MAX_ENTRIES);
+                            return value;
+                        })
+                        .finally(() => {
+                            if (terrainInflight.get(record.key) === valuePromise) terrainInflight.delete(record.key);
+                        });
+                    terrainInflight.set(record.key, valuePromise);
+                });
+            }
+            try {
+                await Promise.all(batch.map(async record => {
+                    const pending = terrainInflight.get(record.key);
+                    if (!pending) return;
+                    const value = await pending;
                     if (Number.isFinite(value)) {
                         setExpiringCacheValue(terrainCache, record.key, value, TERRAIN_CACHE_MAX_ENTRIES);
                         elevations.set(record.key, value);
                     }
-                });
+                }));
             } catch (error) {
                 if (options.signal && options.signal.aborted) throw error;
                 // Public DEM service limits are expected; retain partial coverage.
@@ -382,6 +409,13 @@
         const origin = { lat: Number(originCoordinate[1]), lng: Number(originCoordinate[0]) };
         const bbox = routeBbox(coordinates, options.paddingMeters || 250);
         if (!bbox) return null;
+        const maxBboxSpanDeg = Number(options.maxBboxSpanDeg || 1.5);
+        if ((bbox.north - bbox.south) > maxBboxSpanDeg || (bbox.east - bbox.west) > maxBboxSpanDeg) {
+            // A single large Overpass corridor is more likely to hit service
+            // limits than to improve the estimate.  Keep OSRM usable and let
+            // ShadowRouter retain the common heuristic comparison tier.
+            return null;
+        }
         const plan = makeTerrainPlan(coordinates, options);
         const overpassPromise = loadOverpassData(bbox, origin, options).catch(error => {
             if (options.signal && options.signal.aborted) throw error;
@@ -394,13 +428,11 @@
         const [overpass, terrain] = await Promise.all([overpassPromise, terrainPromise]);
         const baseRecord = plan.pointRecords[0];
         const baseElevation = baseRecord && terrain.has(baseRecord.key) ? terrain.get(baseRecord.key) : null;
-        if (finite(baseElevation)) {
-            (overpass.buildings || []).forEach(building => { building.ground = Number(baseElevation); });
-        }
         const terrainSamples = plan.pointRecords.map(record => {
             const local = projectPoint(record.lat, record.lng, origin);
             return { key: record.key, lat: record.lat, lng: record.lng, x: local.x, y: local.y, elevation: terrain.has(record.key) ? terrain.get(record.key) : null };
         });
+        assignBuildingGroundElevations(overpass.buildings || [], terrainSamples);
         const profiles = plan.profiles.map(profile => ({
             coordinateIndex: profile.coordinateIndex,
             anchor: terrainSamples.find(p => p.key === profile.anchorKey) || null,
@@ -410,6 +442,7 @@
             elevations: profile.probeKeys.map(key => terrain.has(key) ? terrain.get(key) : null)
         }));
         const terrainAvailable = terrainSamples.some(p => finite(p.elevation));
+        const buildingGroundAvailable = (overpass.buildings || []).every(building => finite(building.ground));
         const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, (_, segmentIndex) => {
             const nearbyProfile = profiles
                 .filter(profile => profile.anchor && profile.elevations.every(finite))
@@ -433,27 +466,65 @@
             coverage: {
                 buildings: !!overpass.available,
                 tunnels: !!overpass.available,
-                terrain: terrainAvailable
+                terrain: terrainAvailable,
+                buildingGround: !!overpass.available && buildingGroundAvailable
             },
             // A route is scene-comparable only when the shared Overpass data
             // and every route segment's DEM profile are available. Partial
             // coverage remains attached for diagnostics but forces the common
             // heuristic comparison tier in ShadowRouter.
-            precisionReady: !!overpass.available && terrainAvailable && segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain),
+            precisionReady: !!overpass.available && terrainAvailable && buildingGroundAvailable &&
+                segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain),
             source: 'OpenStreetMap Overpass + OpenTopoData ASTER30m',
             sampleCount: terrainSamples.length
         };
     }
 
-    function nearestTerrainElevation(point, scene) {
+    function findNearestTerrainSample(point, terrainSamples, maxDistance = Infinity) {
         let nearest = null;
         let nearestDistance = Infinity;
-        for (const sample of scene.terrainSamples || []) {
+        for (const sample of terrainSamples || []) {
             if (!finite(sample.elevation)) continue;
             const distance = Math.hypot(point.x - sample.x, point.y - sample.y);
-            if (distance < nearestDistance) { nearestDistance = distance; nearest = Number(sample.elevation); }
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearest = sample;
+            }
         }
-        return nearest;
+        return nearest && nearestDistance <= maxDistance
+            ? { sample: nearest, distance: nearestDistance }
+            : null;
+    }
+
+    function assignBuildingGroundElevations(buildings, terrainSamples, maxDistance = BUILDING_GROUND_MAX_SAMPLE_DISTANCE_METERS) {
+        for (const building of buildings || []) {
+            const bounds = building.bounds;
+            const center = bounds
+                ? { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 }
+                : (building.polygon || []).reduce((sum, point, index, points) => ({
+                    x: sum.x + point.x / Math.max(1, points.length),
+                    y: sum.y + point.y / Math.max(1, points.length)
+                }), { x: 0, y: 0 });
+            const match = findNearestTerrainSample(center, terrainSamples, maxDistance);
+            if (match) {
+                building.ground = Number(match.sample.elevation);
+                building.groundSampleKey = match.sample.key;
+                building.groundSampleDistanceMeters = match.distance;
+                building.groundSource = 'OpenTopoData nearest DEM sample';
+            } else {
+                // Do not use the first route sample or zero as a fabricated
+                // ground elevation for a distant/uncovered building.
+                building.ground = null;
+                building.groundSampleKey = null;
+                building.groundSampleDistanceMeters = null;
+                building.groundSource = 'unresolved';
+            }
+        }
+    }
+
+    function nearestTerrainElevation(point, scene) {
+        const match = findNearestTerrainSample(point, scene && scene.terrainSamples, Infinity);
+        return match ? Number(match.sample.elevation) : null;
     }
 
     function angularDifference(a, b) {
@@ -508,9 +579,14 @@
                 if (bounds && (direction.y > 0 ? bounds.maxY < point.y : bounds.minY > point.y)) continue;
                 const hitDistance = intersectRayWithPolygon(point, direction, building.polygon, 4500);
                 if (hitDistance === null) continue;
-                const roadZ = finite(roadElevation) ? Number(roadElevation) : 0;
+                if (!finite(building.ground)) continue;
+                // A hand-built/test scene may omit route DEM samples.  In
+                // that case use the building's explicitly supplied ground as
+                // a conservative local reference; never use an unrelated
+                // first sample or an implicit zero for fetched buildings.
+                const roadZ = finite(roadElevation) ? Number(roadElevation) : Number(building.ground);
                 const lineZ = roadZ + Math.tan(Number(sunPosition.altitude) * RAD) * hitDistance;
-                if (Number(building.ground || 0) + Number(building.height || 0) >= lineZ - 1.5) {
+                if (Number(building.ground) + Number(building.height || 0) >= lineZ - 1.5) {
                     buildingBlocked = true;
                     break;
                 }

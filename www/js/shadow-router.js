@@ -413,8 +413,11 @@ window.ShadowRouter = (function () {
 
     function isPrecisionScene(scene) {
         // SceneShadow marks incomplete Overpass/DEM coverage explicitly. A
-        // missing flag remains compatible with small hand-built test scenes.
-        return !!scene && scene.precisionReady !== false;
+        // missing flag remains compatible with small hand-built test scenes,
+        // but scene metadata alone must never claim precision when the
+        // occlusion implementation is unavailable.
+        return !!scene && scene.precisionReady !== false &&
+            !!window.SceneShadow && typeof window.SceneShadow.getSegmentOcclusion === 'function';
     }
 
     function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null, scene = null) {
@@ -503,9 +506,108 @@ window.ShadowRouter = (function () {
         };
     }
 
+    const ROUTE_GEOMETRY_SAMPLE_COUNT = 24;
+    const ROUTE_DUPLICATE_HAUSDORFF_METERS = 100;
+    const ROUTE_DUPLICATE_OVERLAP_METERS = 80;
+
+    function getRouteCoordinates(route) {
+        const coordinates = route && route.geometry && Array.isArray(route.geometry.coordinates)
+            ? route.geometry.coordinates : (Array.isArray(route) ? route : []);
+        return coordinates.filter(point => Array.isArray(point) &&
+            Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
+    }
+
+    function sampleRouteGeometry(route, maxSamples = ROUTE_GEOMETRY_SAMPLE_COUNT) {
+        const coordinates = getRouteCoordinates(route);
+        if (!coordinates.length) return [];
+        if (coordinates.length <= maxSamples) return coordinates.map(point => [Number(point[0]), Number(point[1])]);
+        const cumulative = [0];
+        for (let i = 1; i < coordinates.length; i++) {
+            cumulative.push(cumulative[i - 1] + calculateDistanceMeters(
+                Number(coordinates[i - 1][1]), Number(coordinates[i - 1][0]),
+                Number(coordinates[i][1]), Number(coordinates[i][0])
+            ));
+        }
+        const total = cumulative[cumulative.length - 1];
+        if (!Number.isFinite(total) || total <= 0) {
+            return Array.from({ length: maxSamples }, (_, index) => {
+                const sourceIndex = Math.round(index * (coordinates.length - 1) / Math.max(1, maxSamples - 1));
+                return [Number(coordinates[sourceIndex][0]), Number(coordinates[sourceIndex][1])];
+            });
+        }
+        const sampled = [];
+        let cursor = 1;
+        for (let i = 0; i < maxSamples; i++) {
+            const target = total * i / Math.max(1, maxSamples - 1);
+            while (cursor < cumulative.length - 1 && cumulative[cursor] < target) cursor++;
+            const startIndex = Math.max(0, cursor - 1);
+            const endIndex = Math.min(coordinates.length - 1, cursor);
+            const span = cumulative[endIndex] - cumulative[startIndex];
+            const fraction = span > 0 ? (target - cumulative[startIndex]) / span : 0;
+            sampled.push([
+                Number(coordinates[startIndex][0]) + (Number(coordinates[endIndex][0]) - Number(coordinates[startIndex][0])) * fraction,
+                Number(coordinates[startIndex][1]) + (Number(coordinates[endIndex][1]) - Number(coordinates[startIndex][1])) * fraction
+            ]);
+        }
+        return sampled;
+    }
+
+    function geometryPointDistanceMeters(a, b) {
+        if (!a || !b) return Infinity;
+        return calculateDistanceMeters(Number(a[1]), Number(a[0]), Number(b[1]), Number(b[0]));
+    }
+
+    function directedGeometryHausdorffMeters(source, target) {
+        if (!source.length || !target.length) return Infinity;
+        return Math.max(...source.map(point => Math.min(...target.map(candidate =>
+            geometryPointDistanceMeters(point, candidate)))));
+    }
+
+    function geometryHausdorffDistanceMeters(routeA, routeB) {
+        const samplesA = sampleRouteGeometry(routeA);
+        const samplesB = sampleRouteGeometry(routeB);
+        if (!samplesA.length || !samplesB.length) return Infinity;
+        return Math.max(
+            directedGeometryHausdorffMeters(samplesA, samplesB),
+            directedGeometryHausdorffMeters(samplesB, samplesA)
+        );
+    }
+
+    function geometryOverlapRatio(routeA, routeB, thresholdMeters = ROUTE_DUPLICATE_OVERLAP_METERS) {
+        const samplesA = sampleRouteGeometry(routeA);
+        const samplesB = sampleRouteGeometry(routeB);
+        if (!samplesA.length || !samplesB.length) return 0;
+        const coveredA = samplesA.filter(point => Math.min(...samplesB.map(candidate =>
+            geometryPointDistanceMeters(point, candidate))) <= thresholdMeters).length / samplesA.length;
+        const coveredB = samplesB.filter(point => Math.min(...samplesA.map(candidate =>
+            geometryPointDistanceMeters(point, candidate))) <= thresholdMeters).length / samplesB.length;
+        return Math.min(coveredA, coveredB);
+    }
+
+    function areRoutesGeometricallySimilar(routeA, routeB) {
+        // Distance and duration are a cheap first filter, never the complete
+        // duplicate decision. Distinct corridors can have nearly identical
+        // totals, so compare sampled geometry before suppressing a candidate.
+        const distanceA = Number(routeA && routeA.distance);
+        const distanceB = Number(routeB && routeB.distance);
+        const durationA = Number(routeA && routeA.duration);
+        const durationB = Number(routeB && routeB.duration);
+        if ([distanceA, distanceB, durationA, durationB].every(Number.isFinite) &&
+            (Math.abs(distanceA - distanceB) >= 80 || Math.abs(durationA - durationB) >= 15)) return false;
+        const samplesA = sampleRouteGeometry(routeA);
+        const samplesB = sampleRouteGeometry(routeB);
+        if (!samplesA.length || !samplesB.length) return true;
+        return geometryHausdorffDistanceMeters(routeA, routeB) <= ROUTE_DUPLICATE_HAUSDORFF_METERS &&
+            geometryOverlapRatio(routeA, routeB) >= 0.8;
+    }
+
+    function routeGeometrySignature(rawRoute) {
+        const samples = sampleRouteGeometry(rawRoute, 12);
+        return samples.map(point => `${point[0].toFixed(4)},${point[1].toFixed(4)}`).join(';');
+    }
+
     function createRouteIdentity(rawRoute, fallbackIndex = 0) {
-        const coordinates = rawRoute && rawRoute.geometry && Array.isArray(rawRoute.geometry.coordinates)
-            ? rawRoute.geometry.coordinates : [];
+        const coordinates = getRouteCoordinates(rawRoute);
         const first = coordinates[0] || [];
         const last = coordinates[coordinates.length - 1] || [];
         const values = [
@@ -513,54 +615,8 @@ window.ShadowRouter = (function () {
             Number(first[0]), Number(first[1]), Number(last[0]), Number(last[1])
         ];
         return values.every(Number.isFinite)
-            ? `route-${values.map(value => value.toFixed(5)).join('-')}`
-            : `route-index-${fallbackIndex}`;
-    }
-
-    function extractRouteDetails(rawRoute) {
-        const routeSteps = [];
-        const maneuvers = [];
-        let cumulativeStepDist = 0;
-        for (const leg of (rawRoute && rawRoute.legs) || []) {
-            for (const step of (leg && leg.steps) || []) {
-                routeSteps.push(step);
-                if (step.maneuver && step.maneuver.type !== 'depart') {
-                    maneuvers.push({
-                        type: step.maneuver.type,
-                        modifier: step.maneuver.modifier || '',
-                        location: step.maneuver.location,
-                        bearingBefore: step.maneuver.bearing_before,
-                        bearingAfter: step.maneuver.bearing_after,
-                        name: step.name || '',
-                        ref: step.ref || '',
-                        distance: step.distance,
-                        duration: step.duration,
-                        cumulativeDistance: cumulativeStepDist
-                    });
-                }
-                cumulativeStepDist += Number(step.distance) || 0;
-            }
-        }
-        return { routeSteps, maneuvers };
-    }
-
-    function createRouteCandidate(rawRoute, candidateIndex, timeOfDayAdjustment) {
-        const baseDuration = Number(rawRoute.duration) || 0;
-        const details = extractRouteDetails(rawRoute);
-        return {
-            id: createRouteIdentity(rawRoute, candidateIndex),
-            candidateIndex,
-            raw: rawRoute,
-            distanceMeters: Number(rawRoute.distance) || 0,
-            durationSec: Math.round(baseDuration * timeOfDayAdjustment),
-            baseDurationSec: baseDuration,
-            routeSteps: details.routeSteps,
-            maneuvers: details.maneuvers,
-            analyzed: null,
-            analysisMode: 'heuristic',
-            sceneCoverage: { buildings: false, terrain: false, tunnels: false },
-            sceneSource: 'heuristic fallback'
-        };
+            ? `route-${values.map(value => value.toFixed(5)).join('-')}-${routeGeometrySignature(rawRoute)}`
+            : `route-index-${fallbackIndex}-${routeGeometrySignature(rawRoute)}`;
     }
 
     function stableSortRoutes(routes, compare) {
@@ -641,6 +697,24 @@ window.ShadowRouter = (function () {
         });
     }
 
+    async function mapWithConcurrency(items, concurrency, worker, signal) {
+        const values = Array.isArray(items) ? items : [];
+        if (!values.length) return [];
+        const limit = Math.max(1, Math.min(values.length, Number(concurrency) || 2));
+        let cursor = 0;
+        const results = new Array(values.length);
+        async function consume() {
+            while (true) {
+                if (signal && signal.aborted) throw createAbortError();
+                const index = cursor++;
+                if (index >= values.length) return;
+                results[index] = await worker(values[index], index);
+            }
+        }
+        await Promise.all(Array.from({ length: limit }, consume));
+        return results;
+    }
+
     async function fetchAndAnalyzeRoutes(start, end, dateObj, isTollFreeOnly = false, options = {}) {
         // Let OSRM decide whether a long-distance route is connected. A
         // straight-line threshold incorrectly rejected valid continental
@@ -706,15 +780,15 @@ window.ShadowRouter = (function () {
             throw createApiError('ROUTE_UNAVAILABLE', 'routeNetworkError', 'OSRM returned no usable routes');
         }
 
-        // Deduplicate route candidates by distance and duration, skipping excessive detours (> 1.60x)
+        // Deduplicate route candidates by distance/duration first, then by a
+        // fixed-size sampled geometry comparison.  This preserves genuinely
+        // different corridors that happen to have similar totals.
         const uniqueRoutes = [];
         const minDuration = Math.min(...filteredCandidates.map(r => r.duration));
 
         for (const r of filteredCandidates) {
             if (r.duration > minDuration * 1.60) continue;
-            const isDuplicate = uniqueRoutes.some(u => 
-                Math.abs(u.distance - r.distance) < 80 && Math.abs(u.duration - r.duration) < 15
-            );
+            const isDuplicate = uniqueRoutes.some(u => areRoutesGeometricallySimilar(u, r));
             if (!isDuplicate) {
                 uniqueRoutes.push(r);
             }
@@ -758,7 +832,7 @@ window.ShadowRouter = (function () {
                 }
             }
 
-            const analyzed = await analyzeRouteSegmentsAsync(r.geometry.coordinates, dateObj, liveDuration, routeSteps, null);
+            const analyzed = await analyzeRouteSegmentsAsync(r.geometry.coordinates, dateObj, liveDuration, routeSteps, null, options.signal);
 
             return {
                 id: createRouteIdentity(r, idx),
@@ -777,7 +851,13 @@ window.ShadowRouter = (function () {
         }));
 
         const selection = selectPrecisionCandidates(analyzedRoutes, 5);
-        const refinedResults = await Promise.all(selection.precisionCandidates.map(async route => {
+        // Scene APIs are optional and rate-limited.  Analyze at most two
+        // precision candidates at a time; queued work observes cancellation
+        // before starting another Overpass/DEM request.
+        const refinedResults = await mapWithConcurrency(
+            selection.precisionCandidates,
+            options.sceneConcurrency || 2,
+            async route => {
             let scene = null;
             let refinedAnalyzed = null;
             try {
@@ -793,14 +873,16 @@ window.ShadowRouter = (function () {
                     });
                 }
                 if (isPrecisionScene(scene)) {
-                    refinedAnalyzed = await analyzeRouteSegmentsAsync(route.raw.geometry.coordinates, dateObj, route.durationSec, route.routeSteps, scene);
+                    refinedAnalyzed = await analyzeRouteSegmentsAsync(route.raw.geometry.coordinates, dateObj, route.durationSec, route.routeSteps, scene, options.signal);
                 }
             } catch (sceneError) {
                 if (options.signal && options.signal.aborted) throw sceneError;
                 console.warn('Scene data unavailable; retaining common heuristic comparison.', sceneError);
             }
             return { route, scene, refinedAnalyzed, ready: !!refinedAnalyzed && refinedAnalyzed.analysisMode === 'scene' };
-        }));
+            },
+            options.signal
+        );
 
         const allPrecisionReady = refinedResults.length === selection.precisionCandidates.length &&
             refinedResults.length > 0 && refinedResults.every(result => result.ready);
@@ -824,33 +906,7 @@ window.ShadowRouter = (function () {
         const glareFreeRoute = roles.glareFree;
         const shadeRoute = roles.shade;
         applyExposureReductions(fastestRoute, glareFreeRoute, shadeRoute, dateObj, start);
-        /* const hasSolarUv = calculateSolarUvIntensity(sunPos.altitude) > 0 || fastestRoute.analyzed.totalUvExposureUnits > 0.0001;
-        const baseUvExposure = fastestRoute.analyzed.totalUvExposureUnits;
-
-        fastestRoute.uvReductionPct = 0;
-        fastestRoute.isNight = !hasSolarUv;
-
-        [glareFreeRoute, shadeRoute].forEach(r => {
-            if (!hasSolarUv) {
                 // True Astronomical Night (altitude < -6.0°): No solar UV radiation
-                r.uvReductionPct = 0;
-                r.isNight = true;
-            } else if (r.id === fastestRoute.id) {
-                r.uvReductionPct = 0;
-                r.isNight = false;
-            } else if (baseUvExposure > 0.00001) {
-                const diffPct = ((baseUvExposure - r.analyzed.totalUvExposureUnits) / baseUvExposure) * 100;
-                if (diffPct >= 1) {
-                    r.uvReductionPct = Math.min(99, Math.round(diffPct));
-                } else {
-                    r.uvReductionPct = 0;
-                }
-                r.isNight = false;
-            } else {
-                r.uvReductionPct = 0;
-                r.isNight = false;
-            }
-        }); */
 
         return {
             timeOfDayAdjustment: timeOfDayAdjustment,
@@ -869,26 +925,73 @@ window.ShadowRouter = (function () {
     let solarWorker = null;
     let workerCallId = 0;
     const workerCallbacks = new Map();
+    let workerUnavailable = false;
+
+    function createAbortError() {
+        const error = new Error('Solar analysis request was aborted');
+        error.name = 'AbortError';
+        return error;
+    }
+
+    function settleWorkerCallback(id, outcome, value) {
+        const callback = workerCallbacks.get(id);
+        if (!callback) return;
+        workerCallbacks.delete(id);
+        if (callback.timeoutId) clearTimeout(callback.timeoutId);
+        if (callback.abortHandler && callback.signal) {
+            callback.signal.removeEventListener('abort', callback.abortHandler);
+        }
+        try {
+            if (outcome === 'reject') callback.reject(value);
+            else callback.resolve(value);
+        } catch (error) {
+            // A consumer callback must never break cleanup for other requests.
+            console.warn('Solar Worker callback handling warning:', error);
+        }
+    }
+
+    function fallbackPendingWorkerCalls() {
+        const pending = Array.from(workerCallbacks.entries());
+        pending.forEach(([id, callback]) => {
+            try {
+                if (callback.signal && callback.signal.aborted) {
+                    settleWorkerCallback(id, 'reject', createAbortError());
+                } else {
+                    settleWorkerCallback(id, 'resolve', callback.fallback());
+                }
+            } catch (error) {
+                settleWorkerCallback(id, 'reject', error);
+            }
+        });
+    }
+
+    function markWorkerUnavailable(error) {
+        if (error) console.warn('Solar Worker unavailable; using synchronous analysis:', error);
+        workerUnavailable = true;
+        const failedWorker = solarWorker;
+        solarWorker = null;
+        if (failedWorker && typeof failedWorker.terminate === 'function') {
+            try { failedWorker.terminate(); } catch (terminateError) { /* best effort */ }
+        }
+        // Resolve all in-flight analyses immediately.  They must not remain
+        // pending until the 8-second hung-worker safety timeout.
+        fallbackPendingWorkerCalls();
+    }
 
     function initSolarWorker() {
+        if (workerUnavailable) return false;
         if (solarWorker) return true;
         try {
             solarWorker = new Worker('js/solar-worker.js');
             solarWorker.onmessage = function (e) {
                 const { id, result } = e.data;
-                const cb = workerCallbacks.get(id);
-                if (cb) {
-                    workerCallbacks.delete(id);
-                    cb.resolve(result);
-                }
+                if (workerCallbacks.has(id)) settleWorkerCallback(id, 'resolve', result);
             };
-            solarWorker.onerror = function (err) {
-                console.warn('Solar Worker error, falling back to sync:', err);
-                solarWorker = null;
-            };
+            solarWorker.onerror = markWorkerUnavailable;
+            solarWorker.onmessageerror = markWorkerUnavailable;
             return true;
         } catch (e) {
-            console.warn('Web Worker not supported, using sync fallback:', e);
+            markWorkerUnavailable(e);
             return false;
         }
     }
@@ -897,43 +1000,67 @@ window.ShadowRouter = (function () {
      * Async version of analyzeRouteSegments that runs in a Web Worker.
      * Falls back to synchronous main-thread computation if Worker is unavailable.
      */
-    function analyzeRouteSegmentsAsync(coordinates, dateObj, durationSec, steps, scene = null) {
+    function analyzeRouteSegmentsAsync(coordinates, dateObj, durationSec, steps, scene = null, signal = null) {
         // Build time lookup on main thread (lightweight) so Worker gets it ready
         const timeLookup = buildStepTimeLookup(coordinates, steps, durationSec);
 
+        const fallback = () => {
+            if (signal && signal.aborted) throw createAbortError();
+            const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene);
+            result.coordinates = coordinates;
+            return result;
+        };
+
+        if (signal && signal.aborted) return Promise.reject(createAbortError());
+
         if (initSolarWorker() && solarWorker) {
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
                 const id = ++workerCallId;
-                workerCallbacks.set(id, { resolve });
-
-                solarWorker.postMessage({
-                    id,
-                    coordinates,
-                    startTimestamp: dateObj.getTime(),
-                    durationSec,
-                    timeLookup: Array.from(timeLookup),
-                    scene
-                });
-
-                // Safety timeout: if Worker doesn't respond in 8s, fallback to sync
-                setTimeout(() => {
+                const callback = {
+                    resolve,
+                    reject,
+                    fallback,
+                    signal,
+                    timeoutId: null,
+                    abortHandler: null
+                };
+                workerCallbacks.set(id, callback);
+                if (signal) {
+                    callback.abortHandler = () => settleWorkerCallback(id, 'reject', createAbortError());
+                    signal.addEventListener('abort', callback.abortHandler, { once: true });
+                }
+                callback.timeoutId = setTimeout(() => {
                     if (workerCallbacks.has(id)) {
-                        workerCallbacks.delete(id);
-                        const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene);
-                        result.coordinates = coordinates;
-                        resolve(result);
+                        try {
+                            settleWorkerCallback(id, 'resolve', fallback());
+                        } catch (error) {
+                            settleWorkerCallback(id, 'reject', error);
+                        }
                     }
                 }, 8000);
+
+                try {
+                    solarWorker.postMessage({
+                        id,
+                        coordinates,
+                        startTimestamp: dateObj.getTime(),
+                        durationSec,
+                        timeLookup: Array.from(timeLookup),
+                        scene
+                    });
+                } catch (error) {
+                    markWorkerUnavailable(error);
+                }
             }).then(result => {
-                // Worker returns segments without coordinates; add them back
-                result.coordinates = coordinates;
+                if (signal && signal.aborted) throw createAbortError();
+                // Worker returns segments without coordinates; add them back.
+                if (result && !result.coordinates) result.coordinates = coordinates;
                 return result;
             });
         }
 
         // Sync fallback
-        const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene);
-        return Promise.resolve(result);
+        return Promise.resolve().then(fallback);
     }
 
     return {
@@ -949,6 +1076,10 @@ window.ShadowRouter = (function () {
         calculateSolarUvIntensity: calculateSolarUvIntensity,
         buildStepTimeLookup: buildStepTimeLookup,
         createRouteIdentity: createRouteIdentity,
+        sampleRouteGeometry: sampleRouteGeometry,
+        geometryHausdorffDistanceMeters: geometryHausdorffDistanceMeters,
+        geometryOverlapRatio: geometryOverlapRatio,
+        areRoutesGeometricallySimilar: areRoutesGeometricallySimilar,
         selectPrecisionCandidates: selectPrecisionCandidates,
         selectRouteRoles: selectRouteRoles,
         applyExposureReductions: applyExposureReductions,
