@@ -58,8 +58,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastGpsTimestamp = null;
     let lastRerouteTime = 0;
     let routeAbortController = null;
+    let pendingRouteRequestKey = null;
+    let verifiedRouteRequestKey = null;
     let wakeLockSentinel = null;
     let apiNoticeTimer = null;
+    let solarRefreshTimer = null;
 
     /* Free Map Panning & 8-Second Auto Recenter Toast Variables */
     let isUserMapPanning = false;
@@ -68,6 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let countdownSecLeft = 3;
 
     let currentCountry = 'KR';
+    let currentSpeedUnit = 'km/h';
     let currentSpeedLimit = null; // null if no road speed limit data exists
     let lastSpeedLimitFetchTime = 0;
     let lastRoadDataErrorNotice = 0;
@@ -240,6 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
         I18n.applyUiLanguage();
         TTSVoice.setLanguage(I18n.getLanguage()); // Sync TTS voice language with detected UI language on startup
         updateSunInfo();
+        setupSolarRefreshTimer();
         renderFavorites();
         renderRecentDestinationHistory();
         updateModeButtonsHighlight();
@@ -521,7 +526,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Refresh Compass Mode Tag Text
                 const compassTag = document.getElementById('compass-mode-tag');
                 if (compassTag) {
-                    compassTag.innerText = isHeadingUpMode ? I18n.getText('compassHeading') : I18n.getText('compassNorth');
+                    compassTag.innerText = compassMode === 'heading-up' ? I18n.getText('compassHeading') : I18n.getText('compassNorth');
                 }
 
                 // Update Mobile Turn Banner Language if Active
@@ -1153,9 +1158,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') disableKeepAwake();
-            else if (isLiveNavActive) enableKeepAwake();
+            else {
+                if (isLiveNavActive) enableKeepAwake();
+                updateSunInfo();
+            }
         });
         window.addEventListener('pagehide', () => disableKeepAwake());
+    }
+
+    function setupSolarRefreshTimer() {
+        clearInterval(solarRefreshTimer);
+        solarRefreshTimer = setInterval(() => {
+            if (document.visibilityState !== 'hidden') updateSunInfo();
+        }, 60000);
+        window.addEventListener('pagehide', () => {
+            clearInterval(solarRefreshTimer);
+            solarRefreshTimer = null;
+        }, { once: true });
+        window.addEventListener('pageshow', () => {
+            if (!solarRefreshTimer) setupSolarRefreshTimer();
+        }, { once: true });
     }
 
     function setupHardwareBackButtonHandler() {
@@ -1555,7 +1577,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('bar-dest-text').innerText = destinationName || "Destination Set";
 
         // Do not allow navigation to start while a first real route is still pending.
-        setNavigationButtonsEnabled(!!selectedRouteObj);
+        setNavigationButtonsEnabled(isCurrentRouteReady());
         updateRoute();
     }
 
@@ -1654,6 +1676,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function updateRoute(isMidDrive = false) {
         if (!currentEnd || !currentStart) {
+            pendingRouteRequestKey = null;
+            verifiedRouteRequestKey = null;
             setNavigationButtonsEnabled(false);
             return;
         }
@@ -1667,6 +1691,11 @@ document.addEventListener('DOMContentLoaded', () => {
         routeAbortController = requestController;
 
         const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
+        const requestKey = getCurrentRouteRequestKey(dateObj);
+        pendingRouteRequestKey = requestKey;
+        // Keep the previously rendered route visible as context, but never
+        // allow it to start navigation while a different request is pending.
+        setNavigationButtonsEnabled(false);
         const sunPos = updateSunInfo();
 
         try {
@@ -1680,26 +1709,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (requestController.signal.aborted || routeAbortController !== requestController) return;
             routeData = nextRouteData;
+            routeData.requestKey = requestKey;
+            if (routeData.routes) {
+                Object.values(routeData.routes).forEach(route => {
+                    if (route && typeof route === 'object') route.requestKey = requestKey;
+                });
+            }
+            verifiedRouteRequestKey = requestKey;
+            pendingRouteRequestKey = null;
         } catch (e) {
             if (requestController.signal.aborted || routeAbortController !== requestController) return;
-            if (e && e.code === "TRANS_OCEANIC") {
-                const km = e.distanceKm ? e.distanceKm.toLocaleString() : "1,500+";
-                const isKo = I18n.getLanguage().startsWith('ko');
-                alert(isKo ? `⚠️ 자동차로 이동할 수 없는 대륙 간 / 해양 건너편 위치입니다 (거리: ${km} km).\n\n현재 계신 국가/지역 내의 목적지를 검색하거나 선택해 주세요.` : `⚠️ Unreachable overseas or trans-oceanic destination (Distance: ${km} km).\n\nPlease search or select a destination reachable by road in your region.`);
-                openSearchModal();
-                return;
-            }
-
             const hadPreviousRoute = !!(routeData && selectedRouteObj);
+            pendingRouteRequestKey = null;
+            verifiedRouteRequestKey = null;
             if (!hadPreviousRoute) {
                 routeData = null;
                 selectedRouteObj = null;
                 clearRouteFromMap(true);
                 setNavigationButtonsEnabled(false);
             } else {
-                // Keep the last verified OSRM route visible. Never replace it
-                // with a synthetic line when the network is unavailable.
-                setNavigationButtonsEnabled(true);
+                // Keep the last verified OSRM route visible, but it is tied to
+                // the old start/end/mode and must not be used for this request.
+                setNavigationButtonsEnabled(false);
             }
             showRouteFailureMessage(e, hadPreviousRoute);
             return;
@@ -1712,7 +1743,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateRouteOptionButtons(routeData);
 
         selectedRouteObj = routeData.routes[currentMode] || routeData.routes.glareFree;
-        setNavigationButtonsEnabled(!!selectedRouteObj);
+        setNavigationButtonsEnabled(isCurrentRouteReady());
 
         renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
         updateSummaryBox(selectedRouteObj);
@@ -1838,6 +1869,26 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function getCurrentRouteRequestKey(dateObj) {
+        if (!window.RouteState || typeof window.RouteState.createRouteRequestKey !== 'function') return null;
+        const timeToken = isRealTimeMode
+            ? Math.floor(dateObj.getTime() / 60000)
+            : dateObj.getTime();
+        return window.RouteState.createRouteRequestKey(
+            currentStart,
+            currentEnd,
+            currentMode,
+            isTollFreeOnly,
+            dateObj instanceof Date ? timeToken : NaN
+        );
+    }
+
+    function isCurrentRouteReady() {
+        const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
+        return !!selectedRouteObj && !pendingRouteRequestKey &&
+            !!window.RouteState && verifiedRouteRequestKey === getCurrentRouteRequestKey(dateObj);
+    }
+
     function renderMapMarkersAndPolyline(selectedRouteObj, isLiveDrive = false) {
         if (!selectedRouteObj || !selectedRouteObj.analyzed || !selectedRouteObj.analyzed.coordinates) return;
 
@@ -1899,6 +1950,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* CLEAR ALL MAP POLYLINES, DESTINATION MARKERS, & BANNER WHEN GUIDANCE ENDS */
     function clearRouteFromMap(keepDestination = false) {
+        if (routeAbortController) {
+            routeAbortController.abort();
+            routeAbortController = null;
+        }
         if (activeRoutePolylineGroup) {
             activeRoutePolylineGroup.clearLayers();
         }
@@ -1910,6 +1965,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!keepDestination) currentEnd = null;
         routeData = null;
         selectedRouteObj = null;
+        pendingRouteRequestKey = null;
+        verifiedRouteRequestKey = null;
 
         const isKo = I18n.getLanguage().startsWith('ko');
         const destChip = document.getElementById('bar-dest-text');
@@ -2121,10 +2178,9 @@ document.addEventListener('DOMContentLoaded', () => {
             checkAndUpdateMapTileTheme();
         }
 
-        // Update Unit Display
-        if (unitVal) {
-            unitVal.innerText = roadData.unit || (currentCountry === 'US' ? 'mph' : 'km/h');
-        }
+        // Store speed limits internally in km/h; localize only the display.
+        currentSpeedUnit = roadData.unit || ((currentCountry === 'US' || currentCountry === 'GB') ? 'mph' : 'km/h');
+        if (unitVal) unitVal.innerText = currentSpeedUnit;
 
         // US STOP Sign Badge Display Control
         if (stopBadgeUs) {
@@ -2136,17 +2192,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Country-Specific Speed Limit Sign Styling
-        if (roadData.speedLimit !== null && roadData.speedLimit > 0) {
-            currentSpeedLimit = roadData.speedLimit;
+        const normalizedLimitKmh = Number.isFinite(Number(roadData.speedLimitKmh))
+            ? Number(roadData.speedLimitKmh)
+            : (Number.isFinite(Number(roadData.speedLimit)) ? Number(roadData.speedLimit) : null);
+        if (normalizedLimitKmh !== null && normalizedLimitKmh > 0) {
+            currentSpeedLimit = normalizedLimitKmh;
+            const displayLimit = currentSpeedUnit === 'mph'
+                ? Math.round(normalizedLimitKmh / 1.609344)
+                : Math.round(normalizedLimitKmh);
 
             if (currentCountry === 'US') {
                 // US MUTCD Rectangular White Sign
-                if (valUs) valUs.innerText = roadData.speedLimit;
+                if (valUs) valUs.innerText = displayLimit;
                 if (badgeUs) badgeUs.classList.remove('hidden');
                 if (badgeKr) badgeKr.classList.add('hidden');
             } else {
                 // Korea / International Red Circle Sign
-                if (valKr) valKr.innerText = roadData.speedLimit;
+                if (valKr) valKr.innerText = displayLimit;
                 if (badgeKr) badgeKr.classList.remove('hidden');
                 if (badgeUs) badgeUs.classList.add('hidden');
             }
@@ -2180,60 +2242,61 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function getPositionSpeedKmh(pos) {
+        const coords = pos && pos.coords;
+        if (!coords) return 0;
+        if (coords.speed !== null && Number.isFinite(Number(coords.speed)) && Number(coords.speed) >= 0) {
+            return Number(coords.speed) * 3.6;
+        }
+        if (!lastGpsPosition || !lastGpsTimestamp || !Number.isFinite(Number(pos.timestamp))) return 0;
+        const timeDeltaSec = (Number(pos.timestamp) - Number(lastGpsTimestamp)) / 1000;
+        if (timeDeltaSec <= 0.5) return 0;
+        const distMeters = ShadowRouter.calculateDistanceMeters(
+            lastGpsPosition.lat,
+            lastGpsPosition.lng,
+            Number(coords.latitude),
+            Number(coords.longitude)
+        );
+        const calcSpeedMps = distMeters / timeDeltaSec;
+        return calcSpeedMps < 50 ? calcSpeedMps * 3.6 : 0;
+    }
+
     function updateGpsSpeedometer(pos) {
         const speedEl = document.getElementById('speed-val');
         if (!speedEl) return;
-
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
-
-        let kmh = 0;
-        if (pos.coords.speed !== null && !isNaN(pos.coords.speed) && pos.coords.speed > 0) {
-            kmh = Math.round(pos.coords.speed * 3.6);
-        } else if (lastGpsPosition && lastGpsTimestamp) {
-            const timeDeltaSec = (pos.timestamp - lastGpsTimestamp) / 1000;
-            if (timeDeltaSec > 0.5) {
-                const distMeters = ShadowRouter.distanceToRoute(lat, lng, [[lastGpsPosition.lng, lastGpsPosition.lat]]);
-                const calcSpeedMps = distMeters / timeDeltaSec;
-                if (calcSpeedMps < 50) { // upper bound ~ 180km/h
-                    kmh = Math.round(calcSpeedMps * 3.6);
-                }
-            }
-        }
-
-        // If US country, convert speedometer display to mph if unit is mph!
-        const displaySpeed = currentCountry === 'US' ? Math.round(kmh * 0.621371) : kmh;
+        const kmh = getPositionSpeedKmh(pos);
+        const displaySpeed = currentSpeedUnit === 'mph' ? Math.round(kmh * 0.621371) : Math.round(kmh);
         speedEl.innerText = displaySpeed;
-
-        // Fetch nearby OSM country and speed-limit data for the current road
         updateSpeedLimitDisplay(lat, lng);
-
-        checkSpeedingHazard(displaySpeed);
+        // Speed comparison remains in km/h regardless of the display unit.
+        checkSpeedingHazard(kmh);
     }
 
-    function checkSpeedingHazard(currentSpeed) {
+    function checkSpeedingHazard(currentSpeedKmh) {
         const warningOverlay = document.getElementById('speeding-warning-overlay');
         const isKo = I18n.getLanguage().startsWith('ko');
         const now = Date.now();
-        const unitText = currentCountry === 'US' ? 'mph' : (isKo ? '킬로미터' : 'km/h');
+        const unitText = currentSpeedUnit;
+        const displayLimit = currentSpeedLimit === null ? 0 : (currentSpeedUnit === 'mph'
+            ? Math.round(currentSpeedLimit * 0.621371)
+            : Math.round(currentSpeedLimit));
 
-        // Only evaluate speeding if speed limit data exists for current road!
-        if (currentSpeedLimit !== null && currentSpeed > currentSpeedLimit) {
+        // Both operands are normalized km/h. Conversion is presentation-only.
+        if (currentSpeedLimit !== null && currentSpeedKmh > currentSpeedLimit) {
             if (!isSpeedingWarningActive) {
                 isSpeedingWarningActive = true;
                 if (warningOverlay) warningOverlay.classList.remove('hidden');
                 lastSpeedingAnnounceTime = now;
-                TTSVoice.speak(isKo ? `과속 위험! 제한속도 ${currentSpeedLimit}${unitText}를 초과했습니다. 속도를 줄이세요.` : `Speed warning! Speed limit is ${currentSpeedLimit} ${unitText}. Please reduce speed.`, true, 'speeding');
+                TTSVoice.speak(isKo ? `과속 위험! 제한속도 ${displayLimit}${unitText}를 초과했습니다. 속도를 줄이세요.` : `Speed warning! Speed limit is ${displayLimit} ${unitText}. Please reduce speed.`, true, 'speeding');
             } else if (now - lastSpeedingAnnounceTime > 8000) {
-                // Repeat warning chime every 8 seconds while speeding
                 lastSpeedingAnnounceTime = now;
-                TTSVoice.speak(isKo ? `속도 경고! 제한속도 ${currentSpeedLimit}${unitText} 감속하세요.` : `Speed warning! Please reduce speed below ${currentSpeedLimit} ${unitText}.`, true, 'speeding');
+                TTSVoice.speak(isKo ? `속도 경고! 제한속도 ${displayLimit}${unitText} 감속하세요.` : `Speed warning! Please reduce speed below ${displayLimit} ${unitText}.`, true, 'speeding');
             }
-        } else {
-            if (isSpeedingWarningActive) {
-                isSpeedingWarningActive = false;
-                if (warningOverlay) warningOverlay.classList.add('hidden');
-            }
+        } else if (isSpeedingWarningActive) {
+            isSpeedingWarningActive = false;
+            if (warningOverlay) warningOverlay.classList.add('hidden');
         }
     }
 
@@ -2310,6 +2373,14 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        if (!isCurrentRouteReady()) {
+            const isKo = I18n.getLanguage().startsWith('ko');
+            alert(isKo
+                ? '새 출발지·목적지의 실제 도로 경로 계산이 끝날 때까지 내비게이션을 시작할 수 없습니다.'
+                : 'Navigation is disabled until a verified road route for the current origin and destination is ready.');
+            return;
+        }
+
         if (!currentEnd) {
             alert(isKo ? "목적지를 먼저 선택해 주세요." : "Please select a destination first.");
             openSearchModal();
@@ -2356,7 +2427,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const lat = pos.coords.latitude;
                 const lng = pos.coords.longitude;
-                const rawSpeedKmh = (pos.coords.speed !== null && !isNaN(pos.coords.speed) && pos.coords.speed > 0) ? (pos.coords.speed * 3.6) : 0;
+                const rawSpeedKmh = getPositionSpeedKmh(pos);
                 const hasHwHeading = (pos.coords.heading !== null && !isNaN(pos.coords.heading) && pos.coords.heading >= 0);
 
                 // CRITICAL FOR DYNAMIC ROUTING: Keep currentStart synced to vehicle's actual coordinates!

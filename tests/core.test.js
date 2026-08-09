@@ -29,13 +29,15 @@ sandbox.window = sandbox;
 sandbox.self = sandbox;
 vm.createContext(sandbox);
 
-for (const file of ['js/suncalc.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/offline-map.js']) {
+for (const file of ['js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/geocoder.js', 'js/offline-map.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), sandbox, { filename: file });
 }
 
 const ShadowRouter = sandbox.ShadowRouter;
 const OfflineMap = sandbox.OfflineMap;
 const SceneShadow = sandbox.SceneShadow;
+const RouteState = sandbox.RouteState;
+const Geocoder = sandbox.Geocoder;
 
 test('distance and bearing calculations handle normal and invalid inputs', () => {
     assert.equal(ShadowRouter.calculateDistanceMeters(0, 0, 0, 0), 0);
@@ -105,4 +107,85 @@ test('scene occlusion reports building and tunnel sources without fabricating ge
     const buildingScene = { ...scene, tunnels: [] };
     const buildingBlocked = SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], { altitude: 10, azimuth: 90 }, buildingScene, 0);
     assert.equal(buildingBlocked.source, 'building');
+});
+
+test('route request identity rejects stale origin, destination, mode, and toll results', () => {
+    const start = { lat: 37, lng: 127 };
+    const end = { lat: 37.1, lng: 127.1 };
+    const key = RouteState.createRouteRequestKey(start, end, 'fastest', false, 1000);
+    assert.equal(RouteState.isRouteRequestKeyCurrent(key, start, end, 'fastest', false, 1000), true);
+    assert.equal(RouteState.isRouteRequestKeyCurrent(key, { lat: 38, lng: 127 }, end, 'fastest', false, 1000), false);
+    assert.equal(RouteState.isRouteRequestKeyCurrent(key, start, end, 'shade', false, 1000), false);
+    assert.equal(RouteState.isRouteRequestKeyCurrent(key, start, end, 'fastest', true, 1000), false);
+});
+
+test('OSM maxspeed values normalize to km/h while preserving regional display units', () => {
+    assert.equal(Geocoder.detectCountry(40.7, -74), 'US');
+    assert.equal(Geocoder.detectCountry(51.5, -0.1), 'GB');
+    assert.equal(Geocoder.parseMaxspeed('30 mph', 'US').speedLimitKmh, 48.28032);
+    assert.equal(Geocoder.parseMaxspeed('50 km/h', 'US').speedLimitKmh, 50);
+    assert.equal(Geocoder.parseMaxspeed('50', 'GB').sourceUnit, 'mph');
+    assert.equal(Geocoder.parseMaxspeed('50', 'INT').sourceUnit, 'km/h');
+    assert.equal(Geocoder.parseMaxspeed('signals', 'US'), null);
+});
+
+test('step time lookup scales OSRM 100 seconds to an adjusted 142-second route', () => {
+    const coordinates = [[127, 37], [127.01, 37], [127.02, 37]];
+    const steps = [
+        { distance: 1111, duration: 50, geometry: { coordinates: [coordinates[0], coordinates[1]] } },
+        { distance: 1111, duration: 50, geometry: { coordinates: [coordinates[1], coordinates[2]] } }
+    ];
+    const lookup = ShadowRouter.buildStepTimeLookup(coordinates, steps, 142);
+    assert.ok(Math.abs(lookup[0] - 0) < 1e-9);
+    assert.ok(Math.abs(lookup[1] - 71) < 0.5);
+    assert.equal(lookup[2], 142);
+
+    const analyzed = ShadowRouter.analyzeRouteSegments(coordinates, new Date(0), 142, steps);
+    assert.equal(analyzed.segments.length, 2);
+    const lastPass = analyzed.segments[1].passTime.getTime() / 1000;
+    assert.ok(lastPass > 71 && lastPass < 142);
+});
+
+test('toll-free candidate filtering rejects routes with OSRM toll indicators', () => {
+    assert.equal(ShadowRouter.routeContainsToll({ legs: [{ steps: [{ classes: ['toll'] }] }] }), true);
+    assert.equal(ShadowRouter.routeContainsToll({ legs: [{ steps: [{ intersections: [{ classes: ['motorway'] }] }] }] }), false);
+});
+
+test('toll-free routing adds exclusion to direct and via-point OSRM requests', async () => {
+    const originalFetch = sandbox.fetch;
+    const requestedUrls = [];
+    sandbox.window.SceneShadow = null;
+    sandbox.fetch = async (url) => {
+        requestedUrls.push(String(url));
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                routes: [{
+                    distance: 1000,
+                    duration: 100,
+                    geometry: { coordinates: [[0, 0], [0.01, 0]] },
+                    legs: [{ steps: [] }]
+                }]
+            })
+        };
+    };
+    try {
+        await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 },
+            { lat: 0, lng: 1 },
+            new Date(0),
+            true
+        );
+    } finally {
+        sandbox.fetch = originalFetch;
+        sandbox.window.SceneShadow = SceneShadow;
+    }
+    assert.equal(requestedUrls.length, 5);
+    assert.ok(requestedUrls.every(url => url.includes('exclude=toll')));
+});
+
+test('continental-scale coordinates are valid inputs and are not rejected by distance alone', () => {
+    assert.equal(ShadowRouter.areValidRouteCoordinates({ lat: 40, lng: -100 }, { lat: 40, lng: 100 }), true);
+    assert.equal(ShadowRouter.areValidRouteCoordinates({ lat: 91, lng: 0 }, { lat: 0, lng: 0 }), false);
 });

@@ -97,7 +97,34 @@ window.Geocoder = (function () {
             return 'KR';
         }
 
+        // UK roads commonly use mph even when the OSM value has no suffix.
+        if (lat >= 49.5 && lat <= 59.5 && lng >= -8.5 && lng <= 2.0) {
+            return 'GB';
+        }
+
         return 'INT'; // International / European Default
+    }
+
+    function parseMaxspeed(rawValue, country) {
+        const raw = String(rawValue || '').trim().toLowerCase();
+        if (!raw || /^(signals|none|variable|national|walk|living_street)$/.test(raw)) return null;
+        const match = raw.match(/\d+(?:[.,]\d+)?/);
+        if (!match) return null;
+        const numeric = Number(match[0].replace(',', '.'));
+        if (!Number.isFinite(numeric) || numeric <= 0 || numeric > 300) return null;
+
+        const explicitMph = /\bmph\b/.test(raw);
+        const explicitKmh = /\b(?:km\/h|kmh|kph)\b/.test(raw);
+        const sourceUnit = explicitMph
+            ? 'mph'
+            : (explicitKmh ? 'km/h' : ((country === 'US' || country === 'GB') ? 'mph' : 'km/h'));
+        const speedLimitKmh = sourceUnit === 'mph' ? numeric * 1.609344 : numeric;
+        return {
+            value: numeric,
+            sourceUnit,
+            speedLimitKmh,
+            displayUnit: (country === 'US' || country === 'GB') ? 'mph' : 'km/h'
+        };
     }
 
     /* OSM Overpass lookup for nearby speed-limit, tunnel, highway, toll and sign tags */
@@ -110,7 +137,10 @@ window.Geocoder = (function () {
         let isToll = false;
         let isTollBoothAhead = false;
         let roadName = "";
-        let rawUnit = country === 'US' ? 'mph' : 'km/h';
+        let rawUnit = (country === 'US' || country === 'GB') ? 'mph' : 'km/h';
+        let speedLimitKmh = null;
+        let rawSpeedLimit = null;
+        let rawSpeedLimitUnit = null;
         let errorCode = null;
 
         try {
@@ -163,19 +193,14 @@ window.Geocoder = (function () {
                                 roadName = elem.tags.ref;
                             }
 
-                            if (elem.tags.maxspeed && !speedLimit) {
-                                const raw = elem.tags.maxspeed.trim().toLowerCase();
-                                if (raw.includes('mph')) {
-                                    rawUnit = 'mph';
-                                    const num = parseInt(raw, 10);
-                                    if (!isNaN(num)) speedLimit = num;
-                                } else {
-                                    const num = parseInt(raw, 10);
-                                    if (!isNaN(num) && num > 0 && num <= 140) {
-                                        speedLimit = num;
-                                        if (country === 'US') rawUnit = 'mph';
-                                        else rawUnit = 'km/h';
-                                    }
+                            if (elem.tags.maxspeed && speedLimitKmh === null) {
+                                const parsed = parseMaxspeed(elem.tags.maxspeed, country);
+                                if (parsed) {
+                                    speedLimitKmh = parsed.speedLimitKmh;
+                                    speedLimit = speedLimitKmh;
+                                    rawSpeedLimit = parsed.value;
+                                    rawSpeedLimitUnit = parsed.sourceUnit;
+                                    rawUnit = parsed.displayUnit;
                                 }
                             }
                         }
@@ -189,6 +214,9 @@ window.Geocoder = (function () {
         return {
             country: country,
             speedLimit: speedLimit,
+            speedLimitKmh: speedLimitKmh,
+            rawSpeedLimit: rawSpeedLimit,
+            rawSpeedLimitUnit: rawSpeedLimitUnit,
             isStopSignAhead: isStopSignAhead,
             isTunnel: isTunnel,
             isMotorway: isMotorway,
@@ -327,6 +355,7 @@ window.Geocoder = (function () {
         searchPlaces: searchPlaces,
         reverseGeocode: reverseGeocode,
         detectCountry: detectCountry,
+        parseMaxspeed: parseMaxspeed,
         fetchCurrentRoadSpeedLimitAndRules: fetchCurrentRoadSpeedLimitAndRules
     };
 })();

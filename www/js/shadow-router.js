@@ -16,6 +16,22 @@ window.ShadowRouter = (function () {
         return error;
     }
 
+    function routeContainsToll(route) {
+        return !!(route && route.legs && route.legs.some(leg => (leg.steps || []).some(step => {
+            if (step.toll === true || (Array.isArray(step.classes) && step.classes.includes('toll'))) return true;
+            return (step.intersections || []).some(intersection =>
+                Array.isArray(intersection.classes) && intersection.classes.includes('toll')
+            );
+        })));
+    }
+
+    function areValidRouteCoordinates(start, end) {
+        return [start, end].every(point => point &&
+            Number.isFinite(Number(point.lat)) && Number.isFinite(Number(point.lng)) &&
+            Number(point.lat) >= -90 && Number(point.lat) <= 90 &&
+            Number(point.lng) >= -180 && Number(point.lng) <= 180);
+    }
+
     async function fetchJsonWithTimeout(url, options = {}) {
         const timeoutMs = options.timeoutMs || 10000;
         const externalSignal = options.signal || null;
@@ -283,48 +299,93 @@ window.ShadowRouter = (function () {
     function buildStepTimeLookup(coordinates, steps, totalDurationSec) {
         const n = coordinates.length;
         const timeLookup = new Float64Array(n); // timeLookup[i] = elapsed seconds at coordinate i
-        if (!steps || steps.length === 0 || totalDurationSec <= 0) {
-            // Fallback: uniform speed distribution
-            let totalDist = 0;
-            const dists = [];
-            for (let i = 0; i < n - 1; i++) {
-                const d = calculateDistanceMeters(coordinates[i][1], coordinates[i][0], coordinates[i + 1][1], coordinates[i + 1][0]);
-                dists.push(d);
-                totalDist += d;
+        // Build cumulative route distance once. Step geometry is often a
+        // simplified/different point list, so coordinate indexes must not be
+        // used as a substitute for spatial matching.
+        const routeDistances = [0];
+        let routeTotalDistance = 0;
+        for (let i = 0; i < n - 1; i++) {
+            routeTotalDistance += calculateDistanceMeters(
+                coordinates[i][1], coordinates[i][0],
+                coordinates[i + 1][1], coordinates[i + 1][0]
+            );
+            routeDistances.push(routeTotalDistance);
+        }
+
+        const uniformFallback = () => {
+            for (let i = 0; i < n; i++) {
+                timeLookup[i] = routeTotalDistance > 0
+                    ? (routeDistances[i] / routeTotalDistance) * Math.max(0, totalDurationSec)
+                    : 0;
             }
-            let cumDist = 0;
-            for (let i = 0; i < n - 1; i++) {
-                timeLookup[i] = totalDist > 0 ? (cumDist / totalDist) * totalDurationSec : 0;
-                cumDist += dists[i];
-            }
-            timeLookup[n - 1] = totalDurationSec;
             return timeLookup;
+        };
+
+        if (!steps || steps.length === 0 || totalDurationSec <= 0 || routeTotalDistance <= 0) {
+            return uniformFallback();
         }
 
-        // Map step geometry coordinates to overall route coordinate indices
-        let coordIdx = 0;
-        let elapsedSec = 0;
+        const intervals = [];
+        let stepDistanceTotal = 0;
+        let stepDurationTotal = 0;
         for (const step of steps) {
-            const stepCoords = step.geometry ? step.geometry.coordinates : [];
-            const stepDur = step.duration || 0;
-            const stepDist = step.distance || 0;
-            let stepCumDist = 0;
-
-            for (let j = 0; j < stepCoords.length && coordIdx < n; j++) {
-                timeLookup[coordIdx] = Math.min(elapsedSec + (stepDist > 0 ? (stepCumDist / stepDist) * stepDur : 0), totalDurationSec);
-                if (j < stepCoords.length - 1) {
-                    stepCumDist += calculateDistanceMeters(stepCoords[j][1], stepCoords[j][0], stepCoords[j + 1][1], stepCoords[j + 1][0]);
+            const stepCoords = step.geometry && Array.isArray(step.geometry.coordinates)
+                ? step.geometry.coordinates
+                : [];
+            let stepDistance = Number(step.distance) || 0;
+            if (stepDistance <= 0 && stepCoords.length > 1) {
+                for (let i = 0; i < stepCoords.length - 1; i++) {
+                    stepDistance += calculateDistanceMeters(
+                        stepCoords[i][1], stepCoords[i][0],
+                        stepCoords[i + 1][1], stepCoords[i + 1][0]
+                    );
                 }
-                coordIdx++;
             }
-            // Avoid double-counting shared coordinate between consecutive steps
-            if (coordIdx > 0 && coordIdx < n) coordIdx--;
-            elapsedSec += stepDur;
+            const stepDuration = Math.max(0, Number(step.duration) || 0);
+            if (stepDistance > 0 && stepDuration >= 0) {
+                intervals.push({ distance: stepDistance, duration: stepDuration });
+                stepDistanceTotal += stepDistance;
+                stepDurationTotal += stepDuration;
+            }
         }
-        // Fill any remaining coordinates
-        for (let i = coordIdx; i < n; i++) {
-            timeLookup[i] = totalDurationSec;
+
+        if (!intervals.length || stepDistanceTotal <= 0 || stepDurationTotal <= 0) {
+            return uniformFallback();
         }
+
+        // Scale the OSRM base step durations to the time-of-day-adjusted
+        // route duration, then interpolate by cumulative physical distance.
+        const durationScale = totalDurationSec / stepDurationTotal;
+        const distanceScale = stepDistanceTotal / routeTotalDistance;
+        let intervalStartDistance = 0;
+        let intervalStartTime = 0;
+        for (let i = 0; i < n; i++) {
+            const targetDistance = routeDistances[i] * distanceScale;
+            let interval = intervals[intervals.length - 1];
+            let intervalEndDistance = stepDistanceTotal;
+            let cursorDistance = 0;
+            let cursorTime = 0;
+            for (const candidate of intervals) {
+                const candidateEnd = cursorDistance + candidate.distance;
+                if (targetDistance <= candidateEnd || candidate === intervals[intervals.length - 1]) {
+                    interval = candidate;
+                    intervalStartDistance = cursorDistance;
+                    intervalStartTime = cursorTime;
+                    intervalEndDistance = candidateEnd;
+                    break;
+                }
+                cursorDistance = candidateEnd;
+                cursorTime += candidate.duration * durationScale;
+            }
+            const fraction = intervalEndDistance > intervalStartDistance
+                ? (targetDistance - intervalStartDistance) / (intervalEndDistance - intervalStartDistance)
+                : 0;
+            timeLookup[i] = Math.max(0, Math.min(totalDurationSec,
+                intervalStartTime + fraction * interval.duration * durationScale));
+        }
+        // Rounding and sparse step geometry must never leave the route ending
+        // before the adjusted duration.
+        timeLookup[n - 1] = totalDurationSec;
         return timeLookup;
     }
 
@@ -412,14 +473,11 @@ window.ShadowRouter = (function () {
     }
 
     async function fetchAndAnalyzeRoutes(start, end, dateObj, isTollFreeOnly = false, options = {}) {
-        // Trans-Oceanic / Cross-Continental Driving Distance Check (> 1500 km)
-        const straightDistMeters = calculateDistanceMeters(start.lat, start.lng, end.lat, end.lng);
-        if (straightDistMeters > 1500000) {
-            const km = Math.round(straightDistMeters / 1000);
-            const err = new Error(`TRANS_OCEANIC_ROUTE_ERROR:${km}`);
-            err.code = "TRANS_OCEANIC";
-            err.distanceKm = km;
-            throw err;
+        // Let OSRM decide whether a long-distance route is connected. A
+        // straight-line threshold incorrectly rejected valid continental
+        // drives before the routing service was even asked.
+        if (!areValidRouteCoordinates(start, end)) {
+            throw createApiError('INVALID_COORDINATES', 'routeNetworkError', 'Start/end coordinates are invalid');
         }
 
         const timeOfDayAdjustment = getTimeOfDayAdjustment(dateObj);
@@ -451,9 +509,10 @@ window.ShadowRouter = (function () {
             { lat: midLat - (perpLat / norm) * offsetScale * 1.8, lng: midLng - (perpLng / norm) * offsetScale * 1.8 }
         ];
 
+        const tollQuery = isTollFreeOnly ? '&exclude=toll' : '';
         const urls = [
             directUrl,
-            ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true`)
+            ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true${tollQuery}`)
         ];
 
         const responses = await Promise.allSettled(urls.map(u => fetchJsonWithTimeout(u, {
@@ -467,15 +526,22 @@ window.ShadowRouter = (function () {
             }
         });
 
-        if (rawCandidates.length === 0) {
+        const filteredCandidates = isTollFreeOnly
+            ? rawCandidates.filter(route => !routeContainsToll(route))
+            : rawCandidates;
+
+        if (filteredCandidates.length === 0) {
+            if (isTollFreeOnly && rawCandidates.length > 0) {
+                throw createApiError('TOLL_FREE_UNAVAILABLE', 'routeNetworkError', 'All returned routes contain toll indicators');
+            }
             throw createApiError('ROUTE_UNAVAILABLE', 'routeNetworkError', 'OSRM returned no usable routes');
         }
 
         // Deduplicate route candidates by distance and duration, skipping excessive detours (> 1.60x)
         const uniqueRoutes = [];
-        const minDuration = Math.min(...rawCandidates.map(r => r.duration));
+        const minDuration = Math.min(...filteredCandidates.map(r => r.duration));
 
-        for (const r of rawCandidates) {
+        for (const r of filteredCandidates) {
             if (r.duration > minDuration * 1.60) continue;
             const isDuplicate = uniqueRoutes.some(u => 
                 Math.abs(u.distance - r.distance) < 80 && Math.abs(u.duration - r.duration) < 15
@@ -485,7 +551,7 @@ window.ShadowRouter = (function () {
             }
         }
 
-        if (uniqueRoutes.length === 0) uniqueRoutes.push(rawCandidates[0]);
+        if (uniqueRoutes.length === 0) uniqueRoutes.push(filteredCandidates[0]);
 
         const analyzedRoutes = await Promise.all(uniqueRoutes.map(async (r, idx) => {
             const baseDuration = r.duration;
@@ -703,6 +769,9 @@ window.ShadowRouter = (function () {
         calculateSegmentGlare: calculateSegmentGlare,
         estimateSegmentShade: estimateSegmentShade,
         calculateSolarUvIntensity: calculateSolarUvIntensity,
+        buildStepTimeLookup: buildStepTimeLookup,
+        routeContainsToll: routeContainsToll,
+        areValidRouteCoordinates: areValidRouteCoordinates,
         analyzeRouteSegments: analyzeRouteSegments,
         analyzeRouteSegmentsAsync: analyzeRouteSegmentsAsync,
         fetchAndAnalyzeRoutes: fetchAndAnalyzeRoutes

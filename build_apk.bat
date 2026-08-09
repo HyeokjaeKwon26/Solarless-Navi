@@ -11,14 +11,22 @@ set "WWW_DIR=%ROOT_DIR%www"
 echo ===================================================
 echo [1/4] Configuring optional JDK 17 Environment
 echo ===================================================
-if not defined JAVA_HOME if exist "%ROOT_DIR%bak\jdk17\jdk-17.0.10+7" (
-    set "JAVA_HOME=%ROOT_DIR%bak\jdk17\jdk-17.0.10+7"
+if not defined JAVA_HOME (
+    if exist "%ROOT_DIR%bak\jdk17\jdk-17.0.10+7\bin\java.exe" set "JAVA_HOME=%ROOT_DIR%bak\jdk17\jdk-17.0.10+7"
 )
-if defined JAVA_HOME set "PATH=%JAVA_HOME%\bin;%PATH%"
+if not defined JAVA_HOME (
+    echo [ERROR] JDK 17 is required. Set JAVA_HOME to a JDK 17 installation.
+    exit /b 1
+)
+if not exist "%JAVA_HOME%\bin\java.exe" (
+    echo [ERROR] JAVA_HOME does not point to a valid JDK: %JAVA_HOME%
+    exit /b 1
+)
+set "PATH=%JAVA_HOME%\bin;%PATH%"
 echo JAVA_HOME: %JAVA_HOME%
-java -version
+"%JAVA_HOME%\bin\java.exe" -version
 if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Java 17 or a configured JAVA_HOME is required.
+    echo [ERROR] Unable to execute the configured JDK.
     exit /b 1
 )
 
