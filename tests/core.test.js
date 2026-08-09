@@ -19,6 +19,7 @@ const sandbox = {
     Float64Array,
     Promise,
     AbortController,
+    fflate: require('fflate'),
     setTimeout,
     clearTimeout,
     isFinite,
@@ -167,6 +168,68 @@ test('scene coverage falls back to heuristics for uncovered route segments', () 
     const sun = { altitude: 10, azimuth: 90 };
     assert.equal(SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, scene, 0).source, 'building');
     assert.equal(SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, scene, 1).source, 'heuristic');
+});
+
+test('precomputed scene packs are loaded once, cached, and produce a precision scene', async () => {
+    const originalFetch = sandbox.fetch;
+    const manifestUrl = 'https://example.test/scene-ma/manifest.json';
+    const tileNames = [];
+    const tileMap = {};
+    for (let x = -1; x <= 1; x++) {
+        for (let y = -1; y <= 1; y++) {
+            const key = `${x}:${y}`;
+            const file = `${x}_${y}.json`;
+            tileNames.push(file);
+            tileMap[key] = { pack: 'pilot', file };
+        }
+    }
+    const terrain = [];
+    for (let lat = 40.98; lat <= 41.06; lat += 0.0009) {
+        for (let lng = -74.02; lng <= -73.92; lng += 0.0011) terrain.push([Number(lat.toFixed(6)), Number(lng.toFixed(6)), 20]);
+    }
+    const tilePayload = { schema: 1, buildings: [], tunnels: [], terrain };
+    const files = {};
+    for (const file of tileNames) files[file] = require('fflate').strToU8(JSON.stringify(tilePayload));
+    const zipBytes = require('fflate').zipSync(files, { level: 6 });
+    const manifest = {
+        schema: 2,
+        region: 'MA',
+        releaseTag: 'pilot',
+        baseUrl: 'https://example.test/scene-ma',
+        tileSizeM: 5000,
+        tilePaddingMeters: 4500,
+        terrainSpacingM: 100,
+        grid: { latOrigin: 41, lngOrigin: -74, cosLat: Math.cos(42 * Math.PI / 180) },
+        packs: { pilot: { path: 'pilot.zip', bytes: zipBytes.length, tiles: tileNames.length } },
+        tiles: tileMap
+    };
+    let fetchCount = 0;
+    sandbox.fetch = async url => {
+        fetchCount++;
+        if (String(url) === manifestUrl) return { ok: true, status: 200, json: async () => manifest };
+        return { ok: true, status: 200, arrayBuffer: async () => zipBytes.buffer.slice(zipBytes.byteOffset, zipBytes.byteOffset + zipBytes.byteLength) };
+    };
+    try {
+        SceneShadow.clearCaches();
+        const coordinates = [[-73.970, 41.022], [-73.969, 41.023]];
+        const options = {
+            precomputedManifestUrl: manifestUrl,
+            precomputedRegionBounds: { south: 40, west: -75, north: 43, east: -69 },
+            dateObj: new Date('2026-08-09T12:00:00Z'),
+            durationSec: 600
+        };
+        const first = await SceneShadow.fetchPrecomputedSceneForRoute(coordinates, options);
+        assert.equal(first.source, 'GitHub precomputed Massachusetts scene tiles');
+        assert.equal(first.precisionReady, true);
+        assert.equal(first.tileKeys.length, 9);
+        const countAfterFirst = fetchCount;
+        const second = await SceneShadow.fetchPrecomputedSceneForRoute(coordinates, options);
+        assert.equal(second.precisionReady, true);
+        assert.equal(fetchCount, countAfterFirst);
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.clearCaches();
+    }
 });
 
 test('solar worker handles heuristic and precision scene messages without scope errors', () => {
@@ -478,6 +541,30 @@ test('scene service failure does not fail an otherwise valid OSRM route', async 
         assert.ok(result && result.routes && result.routes.fastest);
         assert.equal(result.analysisMode, 'heuristic');
         assert.ok([result.routes.fastest, result.routes.glareFree, result.routes.shade].every(route => route.analysisMode === 'heuristic'));
+    } finally {
+        sandbox.fetch = originalFetch;
+        sandbox.window.SceneShadow = originalScene;
+    }
+});
+
+test('scene lookup prefers precomputed tiles before live Overpass fallback', async () => {
+    const originalFetch = sandbox.fetch;
+    const originalScene = sandbox.window.SceneShadow;
+    const calls = [];
+    sandbox.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ routes: [{ distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] }] })
+    });
+    sandbox.window.SceneShadow = {
+        fetchPrecomputedSceneForRoute: async () => { calls.push('precomputed'); return null; },
+        fetchSceneForRoute: async () => { calls.push('overpass'); return null; }
+    };
+    try {
+        await ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false);
+        assert.ok(calls.length >= 2);
+        assert.equal(calls[0], 'precomputed');
+        assert.equal(calls[1], 'overpass');
     } finally {
         sandbox.fetch = originalFetch;
         sandbox.window.SceneShadow = originalScene;

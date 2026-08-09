@@ -23,6 +23,14 @@ android/local.properties
 *.aab
 *.mapping
 
+# Offline scene preprocessing inputs and generated release assets.  The small
+# manifest under data/scene/ma/ is intentionally tracked; raw OSM/DEM sources
+# and tile bundles are published as versioned release assets instead.
+data/source/
+data/work/
+data/generated/
+data/release/
+
 # OS / Editor Files
 .DS_Store
 Thumbs.db

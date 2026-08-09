@@ -982,17 +982,28 @@ window.ShadowRouter = (function () {
             let refinedAnalyzed = null;
             let fallbackReason = null;
             try {
+                const sceneOptions = {
+                    dateObj,
+                    durationSec: route.durationSec,
+                    timeLookup: buildStepTimeLookup(route.raw.geometry.coordinates, route.routeSteps, route.durationSec),
+                    signal: options.signal,
+                    timeoutMs: 12000,
+                    terrainTimeoutMs: 10000,
+                    precomputedTimeoutMs: options.precomputedTimeoutMs || 8000,
+                    precomputedManifestUrl: options.precomputedManifestUrl,
+                    maxRouteMeters: 250000
+                };
+                // Prefer immutable, precomputed regional scene tiles.  Only
+                // when a tile is missing or the manifest is unavailable do we
+                // fall back to the live Overpass/DEM scene request.
+                if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchPrecomputedSceneForRoute === 'function') {
+                    scene = await window.SceneShadow.fetchPrecomputedSceneForRoute(route.raw.geometry.coordinates, sceneOptions);
+                }
                 if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
-                    scene = await window.SceneShadow.fetchSceneForRoute(route.raw.geometry.coordinates, {
-                        dateObj,
-                        durationSec: route.durationSec,
-                        timeLookup: buildStepTimeLookup(route.raw.geometry.coordinates, route.routeSteps, route.durationSec),
-                        signal: options.signal,
-                        timeoutMs: 12000,
-                        terrainTimeoutMs: 10000,
-                        maxRouteMeters: 250000
-                    });
-                    if (scene && useSceneCache) cacheScene(route.id, scene);
+                    scene = await window.SceneShadow.fetchSceneForRoute(route.raw.geometry.coordinates, sceneOptions);
+                }
+                if (scene && useSceneCache) {
+                    cacheScene(route.id, scene);
                 }
                 if (isPrecisionScene(scene)) {
                     refinedAnalyzed = await analyzeRouteSegmentsAsync(route.raw.geometry.coordinates, dateObj, route.durationSec, route.routeSteps, scene, options.signal);

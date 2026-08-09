@@ -26,9 +26,16 @@
     const DEFAULT_MAX_SCENE_TILES = 8;
     const DEFAULT_SCENE_TILE_ROUTE_METERS = 5000;
     const MAX_SHADOW_RAY_DISTANCE_METERS = 4500;
+    const PRECOMPUTED_MANIFEST_URL = 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/ma/manifest.json';
+    const PRECOMPUTED_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+    const PRECOMPUTED_CACHE_MAX_ENTRIES = 64;
     const overpassCache = new Map();
     const terrainCache = new Map();
     const terrainInflight = new Map();
+    const precomputedTileCache = new Map();
+    const precomputedTileInflight = new Map();
+    let precomputedManifestCache = null;
+    let precomputedManifestInflight = null;
 
     function finite(value) {
         return value !== null && value !== '' && Number.isFinite(Number(value));
@@ -265,6 +272,231 @@
             if (timer) clearTimeout(timer);
             if (externalSignal && abortHandler) externalSignal.removeEventListener('abort', abortHandler);
         }
+    }
+
+    function sceneTileGridPoint(lat, lng, grid) {
+        const source = grid || {};
+        const originLat = finite(source.latOrigin) ? Number(source.latOrigin) : 41;
+        const originLng = finite(source.lngOrigin) ? Number(source.lngOrigin) : -74;
+        const cosLat = finite(source.cosLat) ? Number(source.cosLat) : Math.cos(42 * RAD);
+        return {
+            x: (Number(lng) - originLng) * RAD * EARTH_RADIUS * cosLat,
+            y: (Number(lat) - originLat) * RAD * EARTH_RADIUS
+        };
+    }
+
+    function sceneTileKeyForCoordinate(lat, lng, manifest) {
+        const grid = manifest && manifest.grid;
+        const tileSize = Number(manifest && manifest.tileSizeM) || DEFAULT_SCENE_TILE_ROUTE_METERS;
+        const point = sceneTileGridPoint(lat, lng, grid);
+        return `${Math.floor(point.x / tileSize)}:${Math.floor(point.y / tileSize)}`;
+    }
+
+    function routeSceneTileKeys(coordinates, manifest, paddingMeters) {
+        const tileSize = Number(manifest && manifest.tileSizeM) || DEFAULT_SCENE_TILE_ROUTE_METERS;
+        const radius = Math.max(0, Math.ceil(Number(paddingMeters || manifest && manifest.tilePaddingMeters || MAX_SHADOW_RAY_DISTANCE_METERS) / tileSize));
+        const base = new Set();
+        for (const coordinate of coordinates || []) {
+            if (!Array.isArray(coordinate) || !finite(coordinate[0]) || !finite(coordinate[1])) continue;
+            base.add(sceneTileKeyForCoordinate(Number(coordinate[1]), Number(coordinate[0]), manifest));
+        }
+        const result = new Set();
+        for (const key of base) {
+            const [x, y] = key.split(':').map(Number);
+            for (let dx = -radius; dx <= radius; dx++) {
+                for (let dy = -radius; dy <= radius; dy++) result.add(`${x + dx}:${y + dy}`);
+            }
+        }
+        return [...result];
+    }
+
+    function getPrecomputedCacheValue(key) {
+        const record = precomputedTileCache.get(key);
+        if (!record) return undefined;
+        if (record.expiresAt <= Date.now()) {
+            precomputedTileCache.delete(key);
+            return undefined;
+        }
+        precomputedTileCache.delete(key);
+        precomputedTileCache.set(key, record);
+        return record.value;
+    }
+
+    function setPrecomputedCacheValue(key, value) {
+        precomputedTileCache.delete(key);
+        precomputedTileCache.set(key, { value, expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS });
+        while (precomputedTileCache.size > PRECOMPUTED_CACHE_MAX_ENTRIES) {
+            precomputedTileCache.delete(precomputedTileCache.keys().next().value);
+        }
+    }
+
+    function openPrecomputedDb() {
+        if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+        if (!openPrecomputedDb.promise) {
+            openPrecomputedDb.promise = new Promise(resolve => {
+                try {
+                    const request = indexedDB.open('solarless-scene-cache', 1);
+                    request.onupgradeneeded = () => {
+                        if (!request.result.objectStoreNames.contains('tiles')) request.result.createObjectStore('tiles');
+                        if (!request.result.objectStoreNames.contains('manifests')) request.result.createObjectStore('manifests');
+                    };
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => resolve(null);
+                } catch (error) {
+                    resolve(null);
+                }
+            });
+        }
+        return openPrecomputedDb.promise;
+    }
+
+    async function readStoredSceneValue(storeName, key) {
+        const db = await openPrecomputedDb();
+        if (!db) return null;
+        return new Promise(resolve => {
+            try {
+                const request = db.transaction(storeName, 'readonly').objectStore(storeName).get(key);
+                request.onsuccess = () => resolve(request.result || null);
+                request.onerror = () => resolve(null);
+            } catch (error) {
+                resolve(null);
+            }
+        });
+    }
+
+    async function writeStoredSceneValue(storeName, key, value) {
+        const db = await openPrecomputedDb();
+        if (!db) return;
+        try {
+            const transaction = db.transaction(storeName, 'readwrite');
+            transaction.objectStore(storeName).put(value, key);
+            if (storeName === 'tiles') {
+                transaction.oncomplete = () => { pruneStoredSceneTiles().catch(() => {}); };
+            }
+        } catch (error) {
+            // IndexedDB is an optional persistence layer; memory cache remains valid.
+        }
+    }
+
+    async function pruneStoredSceneTiles() {
+        const db = await openPrecomputedDb();
+        if (!db) return;
+        const keys = await new Promise(resolve => {
+            try {
+                const request = db.transaction('tiles', 'readonly').objectStore('tiles').getAllKeys();
+                request.onsuccess = () => resolve(request.result || []);
+                request.onerror = () => resolve([]);
+            } catch (error) {
+                resolve([]);
+            }
+        });
+        if (keys.length <= PRECOMPUTED_CACHE_MAX_ENTRIES) return;
+        try {
+            const transaction = db.transaction('tiles', 'readwrite');
+            const store = transaction.objectStore('tiles');
+            for (const key of keys.slice(0, keys.length - PRECOMPUTED_CACHE_MAX_ENTRIES)) store.delete(key);
+        } catch (error) {
+            // Best-effort bound; a later successful write will retry pruning.
+        }
+    }
+
+    async function loadPrecomputedManifest(options = {}) {
+        const manifestUrl = options.precomputedManifestUrl || PRECOMPUTED_MANIFEST_URL;
+        if (precomputedManifestCache && precomputedManifestCache.url === manifestUrl) return precomputedManifestCache.value;
+        if (precomputedManifestInflight) return precomputedManifestInflight;
+        precomputedManifestInflight = (async () => {
+            const stored = await readStoredSceneValue('manifests', manifestUrl);
+            if (stored && stored.value && (!stored.expiresAt || stored.expiresAt > Date.now())) {
+                precomputedManifestCache = { url: manifestUrl, value: stored.value };
+                return stored.value;
+            }
+            try {
+                const value = await fetchJsonWithTimeout(manifestUrl, {
+                    signal: options.signal,
+                    timeoutMs: options.precomputedTimeoutMs || 5000
+                });
+                precomputedManifestCache = { url: manifestUrl, value };
+                await writeStoredSceneValue('manifests', manifestUrl, { value, expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS });
+                return value;
+            } catch (error) {
+                return null;
+            }
+        })().finally(() => { precomputedManifestInflight = null; });
+        return precomputedManifestInflight;
+    }
+
+    function sceneTileUrl(manifest, pack) {
+        const base = String(manifest.baseUrl || '').replace(/\/$/, '');
+        const relative = manifest.packs && manifest.packs[pack] && manifest.packs[pack].path;
+        if (!base || !relative) return null;
+        return `${base}/${relative}`;
+    }
+
+    async function loadPrecomputedPack(manifest, pack, options = {}) {
+        const cacheKey = `${manifest.releaseTag || 'scene'}:${pack}`;
+        const cached = getPrecomputedCacheValue(cacheKey);
+        if (cached) return cached;
+        if (precomputedTileInflight.has(cacheKey)) return precomputedTileInflight.get(cacheKey);
+        const url = sceneTileUrl(manifest, pack);
+        if (!url) return null;
+        const promise = (async () => {
+            const fetchFn = root.fetch || (typeof fetch === 'function' ? fetch : null);
+            if (!fetchFn) return null;
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            let timer = null;
+            let abortHandler = null;
+            try {
+                if (controller) {
+                    timer = setTimeout(() => controller.abort(), options.precomputedTimeoutMs || 10000);
+                    if (options.signal) {
+                        abortHandler = () => controller.abort();
+                        if (options.signal.aborted) controller.abort();
+                        else options.signal.addEventListener('abort', abortHandler, { once: true });
+                    }
+                }
+                const response = await fetchFn(url, controller ? { signal: controller.signal } : {});
+                if (!response || !response.ok) throw new Error(`HTTP ${response && response.status || 0}`);
+                const bytes = new Uint8Array(await response.arrayBuffer());
+                const expectedHash = manifest.packs && manifest.packs[pack] && manifest.packs[pack].sha256;
+                if (expectedHash && root.crypto && root.crypto.subtle && typeof root.crypto.subtle.digest === 'function') {
+                    const digest = new Uint8Array(await root.crypto.subtle.digest('SHA-256', bytes));
+                    const actualHash = [...digest].map(value => value.toString(16).padStart(2, '0')).join('');
+                    if (actualHash.toLowerCase() !== String(expectedHash).toLowerCase()) throw new Error('scene tile checksum mismatch');
+                }
+                if (!root.fflate || typeof root.fflate.unzipSync !== 'function') throw new Error('scene tile decompressor unavailable');
+                const files = root.fflate.unzipSync(bytes);
+                const parsed = {};
+                for (const [name, content] of Object.entries(files)) {
+                    if (!name.endsWith('.json')) continue;
+                    const text = root.fflate.strFromU8(content);
+                    parsed[name] = JSON.parse(text);
+                    setPrecomputedCacheValue(`${manifest.releaseTag || 'scene'}:tile:${name}`, parsed[name]);
+                    await writeStoredSceneValue('tiles', `${manifest.releaseTag || 'scene'}:tile:${name}`, { value: parsed[name], expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS });
+                }
+                setPrecomputedCacheValue(cacheKey, parsed);
+                return parsed;
+            } finally {
+                if (timer) clearTimeout(timer);
+                if (options.signal && abortHandler) options.signal.removeEventListener('abort', abortHandler);
+            }
+        })().finally(() => precomputedTileInflight.delete(cacheKey));
+        precomputedTileInflight.set(cacheKey, promise);
+        return promise;
+    }
+
+    async function loadPrecomputedTile(manifest, tileKey, options = {}) {
+        const tileMeta = manifest.tiles && manifest.tiles[tileKey];
+        if (!tileMeta) return null;
+        const cacheKey = `${manifest.releaseTag || 'scene'}:tile:${tileMeta.file}`;
+        const cached = getPrecomputedCacheValue(cacheKey);
+        if (cached) return cached;
+        const stored = await readStoredSceneValue('tiles', cacheKey);
+        if (stored && stored.value && (!stored.expiresAt || stored.expiresAt > Date.now())) {
+            setPrecomputedCacheValue(cacheKey, stored.value);
+            return stored.value;
+        }
+        const pack = await loadPrecomputedPack(manifest, tileMeta.pack, options);
+        return pack && pack[tileMeta.file] ? pack[tileMeta.file] : null;
     }
 
     function readOverpassGeometry(element, origin) {
@@ -600,6 +832,151 @@
         };
     }
 
+    async function fetchPrecomputedSceneForRoute(coordinates, options = {}) {
+        if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
+        const routeLengthMeters = calculateRouteLengthMeters(coordinates);
+        if (routeLengthMeters > Number(options.maxRouteMeters || 250000)) return null;
+        const regionBounds = options.precomputedRegionBounds || { south: 41.1, west: -73.7, north: 43.0, east: -69.7 };
+        const routeLatitudes = coordinates.map(coordinate => Number(coordinate[1])).filter(Number.isFinite);
+        const routeLongitudes = coordinates.map(coordinate => Number(coordinate[0])).filter(Number.isFinite);
+        if (!routeLatitudes.length || !routeLongitudes.length ||
+            Math.max(...routeLatitudes) < Number(regionBounds.south) || Math.min(...routeLatitudes) > Number(regionBounds.north) ||
+            Math.max(...routeLongitudes) < Number(regionBounds.west) || Math.min(...routeLongitudes) > Number(regionBounds.east)) return null;
+        const manifest = await loadPrecomputedManifest(options);
+        if (!manifest || manifest.schema !== 2 || !manifest.tiles || !manifest.packs) return null;
+        const tileKeys = routeSceneTileKeys(coordinates, manifest, options.precomputedPaddingMeters);
+        const maxTiles = Number(options.maxPrecomputedTiles || 64);
+        if (!tileKeys.length || tileKeys.length > maxTiles) return null;
+        if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
+        if (tileKeys.some(key => !manifest.tiles[key])) return null;
+        let tileValues;
+        try {
+            tileValues = await Promise.all(tileKeys.map(key => loadPrecomputedTile(manifest, key, options)));
+        } catch (error) {
+            if (options.signal && options.signal.aborted) throw error;
+            return null;
+        }
+        if (tileValues.some(tile => !tile)) return null;
+
+        const originCoordinate = coordinates[Math.floor(coordinates.length / 2)];
+        const origin = { lat: Number(originCoordinate[1]), lng: Number(originCoordinate[0]) };
+        const buildings = new Map();
+        const tunnels = new Map();
+        const terrain = new Map();
+        for (const tile of tileValues) {
+            for (const building of tile.buildings || []) {
+                const key = String(building.id || `building:${JSON.stringify(building.polygon)}`);
+                if (!buildings.has(key)) buildings.set(key, {
+                    id: building.id,
+                    polygon: (building.polygon || []).filter(point => Array.isArray(point) && finite(point[0]) && finite(point[1]))
+                        .map(point => projectPoint(Number(point[0]), Number(point[1]), origin)),
+                    height: Number(building.height) || 6,
+                    heightEstimated: !!building.heightEstimated,
+                    ground: finite(building.ground) ? Number(building.ground) : null,
+                    relevantProfileIndices: []
+                });
+            }
+            for (const tunnel of tile.tunnels || []) {
+                const key = String(tunnel.id || `tunnel:${JSON.stringify(tunnel.line)}`);
+                if (!tunnels.has(key)) tunnels.set(key, {
+                    id: tunnel.id,
+                    line: (tunnel.line || []).filter(point => Array.isArray(point) && finite(point[0]) && finite(point[1]))
+                        .map(point => projectPoint(Number(point[0]), Number(point[1]), origin))
+                });
+            }
+            for (const sample of tile.terrain || []) {
+                if (!Array.isArray(sample) || sample.length < 3 || !finite(sample[0]) || !finite(sample[1]) || !finite(sample[2])) continue;
+                const local = projectPoint(Number(sample[0]), Number(sample[1]), origin);
+                const key = quantizePoint(Number(sample[0]), Number(sample[1]));
+                if (!terrain.has(key)) terrain.set(key, {
+                    key, lat: Number(sample[0]), lng: Number(sample[1]), x: local.x, y: local.y, elevation: Number(sample[2])
+                });
+            }
+        }
+        const terrainSamples = [...terrain.values()];
+        const plan = makeTerrainPlan(coordinates, options);
+        const profiles = plan.profiles.map(profile => {
+            const coordinate = coordinates[profile.coordinateIndex];
+            const lat = Number(coordinate[1]);
+            const lng = Number(coordinate[0]);
+            const anchorPoint = projectPoint(lat, lng, origin);
+            const anchorMatch = findNearestTerrainSample(anchorPoint, terrainSamples, 180);
+            const elevations = profile.distances.map(distance => {
+                const probe = destinationPoint(lat, lng, Number(profile.direction), Number(distance));
+                const match = findNearestTerrainSample(projectPoint(probe.lat, probe.lng, origin), terrainSamples, 180);
+                return match ? Number(match.sample.elevation) : null;
+            });
+            return {
+                coordinateIndex: profile.coordinateIndex,
+                anchor: anchorMatch ? anchorMatch.sample : null,
+                direction: profile.direction,
+                elevation: profile.elevation,
+                distances: profile.distances,
+                elevations
+            };
+        });
+        const allBuildings = [...buildings.values()].filter(building => building.polygon.length >= 3).map(building => ({
+            ...building,
+            bounds: computeBounds(building.polygon)
+        }));
+        const routePoints = coordinates.map(coordinate => projectPoint(Number(coordinate[1]), Number(coordinate[0]), origin));
+        const routeBounds = computeBounds(routePoints);
+        const buildingCandidates = routeBounds ? allBuildings.filter(building => {
+            const bounds = building.bounds;
+            if (!bounds) return true;
+            const dx = Math.max(bounds.minX - routeBounds.maxX, routeBounds.minX - bounds.maxX, 0);
+            const dy = Math.max(bounds.minY - routeBounds.maxY, routeBounds.minY - bounds.maxY, 0);
+            return Math.hypot(dx, dy) <= MAX_SHADOW_RAY_DISTANCE_METERS;
+        }) : allBuildings;
+        const relevantBuildings = selectRelevantBuildings(buildingCandidates, profiles, MAX_SHADOW_RAY_DISTANCE_METERS);
+        const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, (_, segmentIndex) => {
+            const nearbyProfile = profiles
+                .filter(profile => profile.anchor && profile.elevations.length > 0 && profile.elevations.every(finite))
+                .sort((a, b) => Math.abs(a.coordinateIndex - segmentIndex) - Math.abs(b.coordinateIndex - segmentIndex))[0];
+            const profileSpacing = coordinates.length / Math.max(1, profiles.length - 1);
+            const terrainCovered = !!nearbyProfile && Math.abs(nearbyProfile.coordinateIndex - segmentIndex) <= Math.max(2, profileSpacing * 1.5);
+            const nearbyRelevantBuildings = relevantBuildings.filter(building =>
+                (building.relevantProfileIndices || []).some(index =>
+                    Math.abs(Number(index) - segmentIndex) <= Math.max(2, profileSpacing * 1.5)));
+            return {
+                buildings: true,
+                tunnels: true,
+                terrain: terrainCovered,
+                buildingGround: nearbyRelevantBuildings.every(building => finite(building.ground))
+            };
+        });
+        const terrainAvailable = terrainSamples.length > 0 && profiles.some(profile => profile.elevations.some(finite));
+        const buildingGroundAvailable = relevantBuildings.every(building => finite(building.ground));
+        return {
+            origin,
+            baseElevation: terrainSamples[0] && finite(terrainSamples[0].elevation) ? terrainSamples[0].elevation : null,
+            buildings: relevantBuildings,
+            // Keep only corridor-near buildings attached to the route scene;
+            // the manifest remains the source of truth for the full tile
+            // counts, and retaining every building from nine neighbor tiles
+            // would unnecessarily inflate mobile memory usage.
+            allBuildings: buildingCandidates,
+            tunnels: [...tunnels.values()],
+            terrainSamples,
+            terrainProfiles: profiles,
+            segmentCoverage,
+            coverage: {
+                buildings: true,
+                tunnels: true,
+                terrain: terrainAvailable,
+                buildingGround: buildingGroundAvailable,
+                relevantBuildings: relevantBuildings.length,
+                totalBuildings: allBuildings.length,
+                precomputedTiles: tileKeys.length
+            },
+            precisionReady: terrainAvailable && buildingGroundAvailable &&
+                segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround),
+            source: 'GitHub precomputed Massachusetts scene tiles',
+            sampleCount: terrainSamples.length,
+            tileKeys
+        };
+    }
+
     function findNearestTerrainSample(point, terrainSamples, maxDistance = Infinity) {
         let nearest = null;
         let nearestDistance = Infinity;
@@ -761,10 +1138,19 @@
         routeBbox,
         bboxMetrics,
         splitRouteIntoSceneTiles,
+        fetchPrecomputedSceneForRoute,
         fetchSceneForRoute,
         getSegmentOcclusion,
         calculateRouteLengthMeters,
         getCacheStats: () => ({ overpass: overpassCache.size, terrain: terrainCache.size, ttlMs: CACHE_TTL_MS }),
-        clearCaches: () => { overpassCache.clear(); terrainCache.clear(); terrainInflight.clear(); }
+        clearCaches: () => {
+            overpassCache.clear();
+            terrainCache.clear();
+            terrainInflight.clear();
+            precomputedTileCache.clear();
+            precomputedTileInflight.clear();
+            precomputedManifestCache = null;
+            precomputedManifestInflight = null;
+        }
     };
 });

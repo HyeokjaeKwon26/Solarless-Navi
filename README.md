@@ -21,7 +21,7 @@
 ## ✨ 핵심 듀얼 기능 (Core Dual Pillars)
 
 ### 🌲 1. 그늘 가능성 추정 경로 안내
-* **장면 데이터 보정**: OSM Overpass의 건물/터널 형상·건물 높이 태그와 OpenTopoData ASTER30m 고도 표본을 이용해 태양 광선 차단 가능성을 검사합니다. API가 실패하거나 데이터가 없는 구간은 도로 방향 기반 휴리스틱 추정으로 표시됩니다.
+* **장면 데이터 보정**: 매사추세츠 사전계산 장면 타일이 있으면 먼저 GitHub Release에서 5km 타일 묶음을 받아 로컬 캐시하고, 없을 때만 OSM Overpass/OpenTopoData를 시도합니다. 두 경로가 모두 실패하거나 데이터가 없는 구간은 도로 방향 기반 휴리스틱 추정으로 표시됩니다.
 * **휴리스틱·실험용 추정**: 건물 높이가 없으면 층수 또는 보수적인 기본 높이를 사용하고, DEM은 제한된 방향 표본만 조회합니다. 실제 차광률·UV 선량·온도를 측정하지 않습니다.
 * **실험용 비교 지표**: 실제 차광률이나 실내 온도를 측정하지 않고 경로 간 상대적인 태양 노출 가능성만 비교합니다.
 
@@ -94,7 +94,8 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
 | **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
 | **Solar Calculations** | Astronomical AA+ Julian Day Formulas (`SunCalc.js`) |
-| **Building / Terrain Occlusion** | OpenStreetMap `Overpass API` + OpenTopoData `ASTER30m` (bounded ray probes) |
+| **Building / Terrain Occlusion** | GitHub precomputed Massachusetts 5 km scene tiles → Overpass + OpenTopoData fallback (bounded ray probes) |
+| **Scene Tile Archive** | fflate (MIT) for local ZIP tile extraction |
 | **Audio & TTS** | Capacitor Native TextToSpeech & Web Audio Synth |
 
 ---
@@ -120,6 +121,7 @@ cmd /c "build_apk.bat"
 ### 실행 범위와 한계
 * 경로 계산은 무료 공개 OSRM 서비스에 의존하며, 네트워크 장애나 이용 제한이 발생할 수 있습니다.
 * Nominatim, Photon, Overpass 및 지도 타일(Esri/CARTO)을 사용할 때 검색어와 위치 정보가 해당 외부 서비스로 전송될 수 있습니다.
+* 매사추세츠 장면 타일은 앱 시작 시 전체를 받지 않습니다. 경로 주변 5km 타일만 필요할 때 다운로드하고 IndexedDB에 캐시합니다. 타일이 없거나 GitHub 다운로드가 실패하면 기존 Overpass → 휴리스틱 순서로 안전하게 fallback합니다.
 * 시간은 OSRM geometry/step을 재사용하면서 시간대별 고정 보정을 적용한 **예상시간**이며 실시간 교통 정보가 아닙니다. 시간 슬라이더 변경은 OSRM을 다시 호출하지 않고 태양 분석을 갱신합니다.
 * 건물·터널·지형 데이터가 조회되면 제한된 2.5D 광선 교차 결과를 반영하지만, 데이터 범위·높이 태그·DEM 해상도에 따라 **휴리스틱, 부분 장면, 정밀 장면** 계층으로 표시됩니다. 역할별로 같은 계층의 최단 기준과만 비교하며, 장면 API 실패 시 해당 역할은 휴리스틱으로 fallback합니다. 실제 차광률, UV 선량, 온도 또는 안전을 보장하지 않습니다.
 * 공개 OSRM, Overpass, OpenTopoData, Nominatim/Photon 및 Esri/CARTO 타일은 rate limit·장애·정책 변경이 있을 수 있습니다. 지도 출처 표시는 라이선스 조건상 제거할 수 없습니다.
@@ -175,7 +177,7 @@ cmd /c "build_apk.bat"
 ## ✨ Core Dual Pillars
 
 ### 🌲 1. Estimated Shade-Possibility Route Guidance
-* **Scene-assisted estimate**: Uses OSM Overpass building/tunnel geometry and OpenTopoData ASTER30m elevation samples for bounded 2.5D sun-ray checks. Missing or failed external data falls back to the road-direction heuristic and is labeled accordingly.
+* **Scene-assisted estimate**: Uses a precomputed Massachusetts 5 km tile when available, then falls back to OSM Overpass building/tunnel geometry and OpenTopoData ASTER30m elevation samples for bounded 2.5D sun-ray checks. Missing or failed data falls back to the road-direction heuristic and is labeled accordingly.
 * **Heuristic estimate**: Building heights without tags use a level-based or conservative default height, while terrain is sampled along a few sun-facing probes; this is not a complete 3D building/terrain model.
 * **Experimental comparison only**: It does not measure actual shade coverage, cabin temperature, or UV dose.
 
@@ -246,7 +248,8 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
 | **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
 | **Solar Calculations** | Astronomical AA+ Julian Day Formulas (`SunCalc.js`) |
-| **Building / Terrain Occlusion** | OpenStreetMap `Overpass API` + OpenTopoData `ASTER30m` (bounded ray probes) |
+| **Building / Terrain Occlusion** | GitHub precomputed Massachusetts 5 km scene tiles → Overpass + OpenTopoData fallback (bounded ray probes) |
+| **Scene Tile Archive** | fflate (MIT) for local ZIP tile extraction |
 | **Audio & TTS** | Capacitor Native TextToSpeech & Web Audio Synth |
 
 ---
@@ -268,6 +271,7 @@ Release builds require JDK 17, Android SDK/Gradle, and a signing keystore. Keep 
 ### Scope and limitations
 * Routing depends on the free public OSRM service and may fail or be rate-limited.
 * Search terms and location data may be sent to Nominatim, Photon, Overpass, and the selected map-tile providers (Esri/CARTO).
+* Massachusetts scene tiles are downloaded only for the route corridor and cached locally; the app does not download the whole state at startup. If a GitHub tile is unavailable, it tries Overpass/OpenTopoData and then uses the heuristic tier.
 * Durations are OSRM geometry/step durations with a fixed time-of-day adjustment, not live traffic information. Moving the time slider reuses the geometry and refreshes solar analysis without another OSRM request.
 * Buildings, tunnels, and terrain can adjust shade scores when optional OSM/DEM requests succeed. Routes expose heuristic, partial-scene, or precision-scene metadata; each role compares only within the same tier and falls back to heuristic when its scene data fails. These estimates do not guarantee shade, direct-sun reduction, temperature, or safety.
 * Public OSRM, Overpass, OpenTopoData, Nominatim/Photon, and Esri/CARTO tile services can be rate-limited or unavailable. Attribution links are required by the providers' licenses and cannot be removed.
