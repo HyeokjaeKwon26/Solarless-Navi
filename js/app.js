@@ -63,6 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let wakeLockSentinel = null;
     let apiNoticeTimer = null;
     let solarRefreshTimer = null;
+    let lastSolarStaleNotice = 0;
 
     /* Free Map Panning & 8-Second Auto Recenter Toast Variables */
     let isUserMapPanning = false;
@@ -1671,6 +1672,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sunPointer) sunPointer.style.transform = `rotate(${az}deg)`;
 
         checkAndUpdateMapTileTheme();
+        if (isRealTimeMode && routeData && Number.isFinite(Number(routeData.calculatedAt))) {
+            const routeAgeMs = Date.now() - Number(routeData.calculatedAt);
+            if (routeAgeMs >= 5 * 60 * 1000 && Date.now() - lastSolarStaleNotice >= 5 * 60 * 1000) {
+                lastSolarStaleNotice = Date.now();
+                showApiNotice(I18n.getLanguage().startsWith('ko')
+                    ? '태양 위치 추정값이 오래되었습니다. 최신 값이 필요하면 경로를 다시 계산하세요.'
+                    : 'Solar estimates are older than five minutes. Recalculate the route for fresh values.');
+            }
+        }
         return sunPos;
     }
 
@@ -1709,6 +1719,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (requestController.signal.aborted || routeAbortController !== requestController) return;
             routeData = nextRouteData;
+            routeData.calculatedAt = Date.now();
             routeData.requestKey = requestKey;
             if (routeData.routes) {
                 Object.values(routeData.routes).forEach(route => {
@@ -1872,7 +1883,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function getCurrentRouteRequestKey(dateObj) {
         if (!window.RouteState || typeof window.RouteState.createRouteRequestKey !== 'function') return null;
         const timeToken = isRealTimeMode
-            ? Math.floor(dateObj.getTime() / 60000)
+            ? 'realtime'
             : dateObj.getTime();
         return window.RouteState.createRouteRequestKey(
             currentStart,

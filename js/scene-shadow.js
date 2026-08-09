@@ -17,11 +17,14 @@
     const DEG = 180 / Math.PI;
     const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
     const TERRAIN_ENDPOINT = 'https://api.opentopodata.org/v1/aster30m?locations=';
+    const CACHE_TTL_MS = 10 * 60 * 1000;
+    const OVERPASS_CACHE_MAX_ENTRIES = 12;
+    const TERRAIN_CACHE_MAX_ENTRIES = 512;
     const overpassCache = new Map();
     const terrainCache = new Map();
 
     function finite(value) {
-        return Number.isFinite(Number(value));
+        return value !== null && value !== '' && Number.isFinite(Number(value));
     }
 
     function clamp(value, min, max) {
@@ -35,6 +38,18 @@
         const a = Math.sin(dLat / 2) ** 2 +
             Math.cos(lat1 * RAD) * Math.cos(lat2 * RAD) * Math.sin(dLng / 2) ** 2;
         return EARTH_RADIUS * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+    }
+
+    function calculateRouteLengthMeters(coordinates) {
+        if (!Array.isArray(coordinates) || coordinates.length < 2) return 0;
+        let total = 0;
+        for (let i = 0; i < coordinates.length - 1; i++) {
+            total += calculateDistanceMeters(
+                Number(coordinates[i][1]), Number(coordinates[i][0]),
+                Number(coordinates[i + 1][1]), Number(coordinates[i + 1][0])
+            );
+        }
+        return Number.isFinite(total) ? total : 0;
     }
 
     function projectPoint(lat, lng, origin) {
@@ -147,6 +162,25 @@
         return [bbox.south, bbox.west, bbox.north, bbox.east].map(v => Number(v).toFixed(3)).join(',');
     }
 
+    function getExpiringCacheValue(cache, key) {
+        const entry = cache.get(key);
+        if (!entry) return undefined;
+        if (entry.expiresAt <= Date.now()) {
+            cache.delete(key);
+            return undefined;
+        }
+        // Refresh insertion order for a small LRU-like bound.
+        cache.delete(key);
+        cache.set(key, entry);
+        return entry.value;
+    }
+
+    function setExpiringCacheValue(cache, key, value, maxEntries) {
+        cache.delete(key);
+        cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+        while (cache.size > maxEntries) cache.delete(cache.keys().next().value);
+    }
+
     async function fetchJsonWithTimeout(url, options = {}) {
         const fetchFn = root.fetch || (typeof fetch === 'function' ? fetch : null);
         if (!fetchFn) throw new Error('fetch unavailable');
@@ -195,7 +229,8 @@
         // Local projected coordinates depend on the origin. Include it in the
         // cache key so two nearby routes cannot reuse shifted geometry.
         const key = `${bboxKey(bbox)}|${origin.lat.toFixed(3)},${origin.lng.toFixed(3)}`;
-        if (overpassCache.has(key)) return overpassCache.get(key);
+        const cached = getExpiringCacheValue(overpassCache, key);
+        if (cached !== undefined) return cached;
         const query = `[out:json][timeout:15];(way["building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});way["building:part"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});way["tunnel"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});way["covered"](${bbox.south},${bbox.west},${bbox.north},${bbox.east}););out tags geom;`;
         const promise = fetchJsonWithTimeout(`${OVERPASS_ENDPOINT}?data=${encodeURIComponent(query)}`, {
             signal: options.signal,
@@ -230,11 +265,12 @@
             }
             return { buildings, tunnels, available: true };
         });
-        overpassCache.set(key, promise);
+        setExpiringCacheValue(overpassCache, key, promise, OVERPASS_CACHE_MAX_ENTRIES);
         try {
             return await promise;
         } catch (error) {
-            overpassCache.delete(key);
+            const current = getExpiringCacheValue(overpassCache, key);
+            if (current === promise) overpassCache.delete(key);
             throw error;
         }
     }
@@ -304,7 +340,8 @@
         const elevations = new Map();
         const missing = [];
         for (const record of pointRecords) {
-            if (terrainCache.has(record.key)) elevations.set(record.key, terrainCache.get(record.key));
+            const cached = getExpiringCacheValue(terrainCache, record.key);
+            if (cached !== undefined) elevations.set(record.key, cached);
             else missing.push(record);
         }
         const batchSize = 80;
@@ -320,7 +357,7 @@
                 batch.forEach((record, index) => {
                     const value = results[index] && Number(results[index].elevation);
                     if (Number.isFinite(value)) {
-                        terrainCache.set(record.key, value);
+                        setExpiringCacheValue(terrainCache, record.key, value, TERRAIN_CACHE_MAX_ENTRIES);
                         elevations.set(record.key, value);
                     }
                 });
@@ -335,6 +372,12 @@
 
     async function fetchSceneForRoute(coordinates, options = {}) {
         if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
+        const routeLengthMeters = calculateRouteLengthMeters(coordinates);
+        const maxRouteMeters = Number(options.maxRouteMeters || 250000);
+        // Large corridors make Overpass bboxes and DEM probes disproportionately
+        // expensive. OSRM remains available; only the optional scene layer is
+        // skipped for such routes.
+        if (routeLengthMeters > maxRouteMeters) return null;
         const originCoordinate = coordinates[Math.floor(coordinates.length / 2)];
         const origin = { lat: Number(originCoordinate[1]), lng: Number(originCoordinate[0]) };
         const bbox = routeBbox(coordinates, options.paddingMeters || 250);
@@ -367,6 +410,18 @@
             elevations: profile.probeKeys.map(key => terrain.has(key) ? terrain.get(key) : null)
         }));
         const terrainAvailable = terrainSamples.some(p => finite(p.elevation));
+        const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, (_, segmentIndex) => {
+            const nearbyProfile = profiles
+                .filter(profile => profile.anchor && profile.elevations.every(finite))
+                .sort((a, b) => Math.abs(a.coordinateIndex - segmentIndex) - Math.abs(b.coordinateIndex - segmentIndex))[0];
+            const profileSpacing = coordinates.length / Math.max(1, profiles.length - 1);
+            const terrainCovered = !!nearbyProfile && Math.abs(nearbyProfile.coordinateIndex - segmentIndex) <= Math.max(2, profileSpacing * 1.5);
+            return {
+                buildings: !!overpass.available,
+                tunnels: !!overpass.available,
+                terrain: terrainCovered
+            };
+        });
         return {
             origin,
             baseElevation: finite(baseElevation) ? baseElevation : null,
@@ -374,9 +429,10 @@
             tunnels: overpass.tunnels || [],
             terrainSamples,
             terrainProfiles: profiles,
+            segmentCoverage,
             coverage: {
-                buildings: !!overpass.available && (overpass.buildings || []).length > 0,
-                tunnels: !!overpass.available && (overpass.tunnels || []).length > 0,
+                buildings: !!overpass.available,
+                tunnels: !!overpass.available,
                 terrain: terrainAvailable
             },
             source: 'OpenStreetMap Overpass + OpenTopoData ASTER30m',
@@ -404,6 +460,7 @@
         let bestScore = Infinity;
         for (const profile of scene.terrainProfiles || []) {
             if (!profile.anchor) continue;
+            if (!Array.isArray(profile.elevations) || !profile.elevations.every(finite)) continue;
             const spatial = Math.hypot(point.x - profile.anchor.x, point.y - profile.anchor.y) / 1000;
             const directional = angularDifference(Number(profile.direction) || 0, sunAzimuth) / 90;
             const indexPenalty = Math.abs((profile.coordinateIndex || 0) - (segmentIndex || 0)) / 10;
@@ -413,6 +470,13 @@
         return best;
     }
 
+    function getSegmentCoverage(scene, segmentIndex) {
+        if (scene && Array.isArray(scene.segmentCoverage) && scene.segmentCoverage[segmentIndex]) {
+            return scene.segmentCoverage[segmentIndex];
+        }
+        return (scene && scene.coverage) || { buildings: false, terrain: false, tunnels: false };
+    }
+
     function getSegmentOcclusion(p1, p2, sunPosition, scene, segmentIndex) {
         if (!scene || !sunPosition || !finite(sunPosition.altitude) || !finite(sunPosition.azimuth)) return null;
         if (sunPosition.altitude <= -6) return { shadeScore: 1, source: 'night', buildingBlocked: false, terrainBlocked: false, tunnel: false };
@@ -420,9 +484,10 @@
         if (!origin) return null;
         const point = projectPoint(Number(p1[0]), Number(p1[1]), origin);
         const direction = { x: Math.sin(Number(sunPosition.azimuth) * RAD), y: Math.cos(Number(sunPosition.azimuth) * RAD) };
+        const segmentCoverage = getSegmentCoverage(scene, segmentIndex);
         const roadElevation = nearestTerrainElevation(point, scene);
         let tunnel = false;
-        for (const tunnelData of scene.tunnels || []) {
+        for (const tunnelData of segmentCoverage.tunnels ? (scene.tunnels || []) : []) {
             if (distanceToPolyline(point, tunnelData.line) < 14 || distanceToPolyline(projectPoint(Number(p2[0]), Number(p2[1]), origin), tunnelData.line) < 14) {
                 tunnel = true;
                 break;
@@ -431,7 +496,7 @@
         if (tunnel) return { shadeScore: 1, source: 'tunnel', buildingBlocked: false, terrainBlocked: false, tunnel: true };
 
         let buildingBlocked = false;
-        if (scene.coverage && scene.coverage.buildings) {
+        if (segmentCoverage.buildings) {
             for (const building of scene.buildings || []) {
                 const bounds = building.bounds;
                 if (bounds && (direction.x > 0 ? bounds.maxX < point.x : bounds.minX > point.x)) continue;
@@ -448,14 +513,14 @@
         }
 
         let terrainBlocked = false;
-        const profile = scene.coverage && scene.coverage.terrain ? getNearestProfile(point, Number(sunPosition.azimuth), segmentIndex, scene) : null;
+        const profile = segmentCoverage.terrain ? getNearestProfile(point, Number(sunPosition.azimuth), segmentIndex, scene) : null;
         if (profile && finite(roadElevation)) {
             terrainBlocked = isTerrainRayOccluded(Number(roadElevation), Number(sunPosition.altitude), profile.distances, profile.elevations, 2);
         }
         if (buildingBlocked && terrainBlocked) return { shadeScore: 1, source: 'building+terrain', buildingBlocked, terrainBlocked, tunnel: false };
         if (buildingBlocked) return { shadeScore: 0.88, source: 'building', buildingBlocked, terrainBlocked, tunnel: false };
         if (terrainBlocked) return { shadeScore: 0.78, source: 'terrain', buildingBlocked, terrainBlocked, tunnel: false };
-        if ((scene.coverage && scene.coverage.buildings) || (scene.coverage && scene.coverage.terrain)) {
+        if (segmentCoverage.buildings || segmentCoverage.terrain || segmentCoverage.tunnels) {
             return { shadeScore: 0, source: 'scene-clear', buildingBlocked, terrainBlocked, tunnel: false };
         }
         return { shadeScore: null, source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false };
@@ -470,6 +535,9 @@
         calculateDistanceMeters,
         routeBbox,
         fetchSceneForRoute,
-        getSegmentOcclusion
+        getSegmentOcclusion,
+        calculateRouteLengthMeters,
+        getCacheStats: () => ({ overpass: overpassCache.size, terrain: terrainCache.size, ttlMs: CACHE_TTL_MS }),
+        clearCaches: () => { overpassCache.clear(); terrainCache.clear(); }
     };
 });

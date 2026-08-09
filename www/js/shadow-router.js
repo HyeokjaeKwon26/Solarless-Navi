@@ -114,16 +114,45 @@ window.ShadowRouter = (function () {
         return R * c;
     }
 
+    function projectPointToSegment(carLat, carLng, a, b) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) return Infinity;
+        if (![carLat, carLng, a[1], a[0], b[1], b[0]].every(Number.isFinite)) return Infinity;
+
+        // Use a local equirectangular projection for the short road segments
+        // returned by OSRM. Both off-route distance and road snapping use this
+        // same projection so their thresholds cannot disagree.
+        const latScale = 111320;
+        const lngScale = latScale * Math.max(0.01, Math.cos(Number(carLat) * Math.PI / 180));
+        const ax = (Number(a[0]) - carLng) * lngScale;
+        const ay = (Number(a[1]) - carLat) * latScale;
+        const bx = (Number(b[0]) - carLng) * lngScale;
+        const by = (Number(b[1]) - carLat) * latScale;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const lengthSq = dx * dx + dy * dy;
+        const t = lengthSq > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSq)) : 0;
+        const projectedLng = Number(a[0]) + (Number(b[0]) - Number(a[0])) * t;
+        const projectedLat = Number(a[1]) + (Number(b[1]) - Number(a[1])) * t;
+        return { t, lat: projectedLat, lng: projectedLng };
+    }
+
+    function pointToSegmentDistanceMeters(carLat, carLng, a, b) {
+        const projected = projectPointToSegment(carLat, carLng, a, b);
+        if (!projected || projected === Infinity) return Infinity;
+        const projectedLat = projected.lat;
+        const projectedLng = projected.lng;
+        return calculateDistanceMeters(carLat, carLng, projectedLat, projectedLng);
+    }
+
     function distanceToRoute(carLat, carLng, coordinates) {
         if (!coordinates || coordinates.length < 2) return 0;
         let minDistance = Infinity;
 
-        for (let i = 0; i < coordinates.length; i++) {
-            const dist = calculateDistanceMeters(carLat, carLng, coordinates[i][1], coordinates[i][0]);
-            if (dist < minDistance) minDistance = dist;
+        for (let i = 0; i < coordinates.length - 1; i++) {
+            minDistance = Math.min(minDistance, pointToSegmentDistanceMeters(carLat, carLng, coordinates[i], coordinates[i + 1]));
         }
 
-        return minDistance;
+        return Number.isFinite(minDistance) ? minDistance : 0;
     }
 
     function snapPositionAndHeadingToRoad(carLat, carLng, rawHeading, coordinates) {
@@ -143,18 +172,11 @@ window.ShadowRouter = (function () {
             const bLat = coordinates[i + 1][1];
             const bLng = coordinates[i + 1][0];
 
-            const dx = bLng - aLng;
-            const dy = bLat - aLat;
-            const lenSq = dx * dx + dy * dy;
-
-            let t = 0;
-            if (lenSq > 0) {
-                t = ((carLng - aLng) * dx + (carLat - aLat) * dy) / lenSq;
-                t = Math.max(0, Math.min(1, t));
-            }
-
-            const projLat = aLat + t * dy;
-            const projLng = aLng + t * dx;
+            const projection = projectPointToSegment(carLat, carLng, coordinates[i], coordinates[i + 1]);
+            if (!projection || projection === Infinity) continue;
+            const t = projection.t;
+            const projLat = projection.lat;
+            const projLng = projection.lng;
             const distMeters = calculateDistanceMeters(carLat, carLng, projLat, projLng);
 
             if (distMeters < minDistance) {
@@ -468,6 +490,7 @@ window.ShadowRouter = (function () {
             totalUvExposureUnits: isFinite(totalUv) ? totalUv : 0,
             coordinates: coordinates,
             sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
+            segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
             sceneSource: scene && scene.source ? scene.source : 'heuristic fallback'
         };
     }
@@ -553,6 +576,13 @@ window.ShadowRouter = (function () {
 
         if (uniqueRoutes.length === 0) uniqueRoutes.push(filteredCandidates[0]);
 
+        // Scene services are optional and significantly more expensive than
+        // OSRM. Analyse only the fastest two candidates with scene data; all
+        // other candidates keep the fast heuristic analysis and remain usable.
+        const sceneCandidates = new Set([...uniqueRoutes]
+            .sort((a, b) => Number(a.duration || Infinity) - Number(b.duration || Infinity))
+            .slice(0, 2));
+
         const analyzedRoutes = await Promise.all(uniqueRoutes.map(async (r, idx) => {
             const baseDuration = r.duration;
             const liveDuration = Math.round(baseDuration * timeOfDayAdjustment);
@@ -588,15 +618,23 @@ window.ShadowRouter = (function () {
             }
 
             let scene = null;
-            if (window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
-                scene = await window.SceneShadow.fetchSceneForRoute(r.geometry.coordinates, {
-                    dateObj,
-                    durationSec: liveDuration,
-                    timeLookup: buildStepTimeLookup(r.geometry.coordinates, routeSteps, liveDuration),
-                    signal: options.signal,
-                    timeoutMs: 12000,
-                    terrainTimeoutMs: 10000
-                });
+            if (sceneCandidates.has(r) && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
+                try {
+                    scene = await window.SceneShadow.fetchSceneForRoute(r.geometry.coordinates, {
+                        dateObj,
+                        durationSec: liveDuration,
+                        timeLookup: buildStepTimeLookup(r.geometry.coordinates, routeSteps, liveDuration),
+                        signal: options.signal,
+                        timeoutMs: 12000,
+                        terrainTimeoutMs: 10000,
+                        maxRouteMeters: 250000
+                    });
+                } catch (sceneError) {
+                    if (options.signal && options.signal.aborted) throw sceneError;
+                    // Scene data is an optional enhancement. Never turn an
+                    // otherwise valid OSRM route into a routing failure.
+                    console.warn('Scene data unavailable; using heuristic route analysis.', sceneError);
+                }
             }
             // Keep the OSRM route even when optional scene services are down.
             const analyzed = await analyzeRouteSegmentsAsync(r.geometry.coordinates, dateObj, liveDuration, routeSteps, scene);
@@ -763,6 +801,7 @@ window.ShadowRouter = (function () {
         calculateBearing: calculateBearing,
         calculateDistanceMeters: calculateDistanceMeters,
         distanceToRoute: distanceToRoute,
+        pointToSegmentDistanceMeters: pointToSegmentDistanceMeters,
         snapHeadingToRoad: snapHeadingToRoad,
         snapPositionAndHeadingToRoad: snapPositionAndHeadingToRoad,
         calculateRemainingRouteDistance: calculateRemainingRouteDistance,

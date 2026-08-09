@@ -10,13 +10,21 @@
         return `${Number(point.lat).toFixed(6)},${Number(point.lng).toFixed(6)}`;
     }
 
+    function normalizeTimeToken(timeToken) {
+        // Real-time routes remain valid across a minute boundary.  The route
+        // calculation uses the current time for solar estimates, but a clock
+        // tick alone must not make an otherwise unchanged road route unusable.
+        if (timeToken === 'realtime') return 'realtime';
+        return Number.isFinite(Number(timeToken)) ? String(Number(timeToken)) : 'time-unknown';
+    }
+
     function createRouteRequestKey(start, end, mode, tollFree, timeToken) {
         return [
             coordinatePart(start),
             coordinatePart(end),
             String(mode || ''),
             tollFree ? 'toll-free' : 'standard',
-            Number.isFinite(Number(timeToken)) ? String(Number(timeToken)) : 'time-unknown'
+            normalizeTimeToken(timeToken)
         ].join('|');
     }
 
@@ -24,5 +32,5 @@
         return !!key && key === createRouteRequestKey(start, end, mode, tollFree, timeToken);
     }
 
-    return { createRouteRequestKey, isRouteRequestKeyCurrent };
+    return { createRouteRequestKey, isRouteRequestKeyCurrent, normalizeTimeToken };
 });

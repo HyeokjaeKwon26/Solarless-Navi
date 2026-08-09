@@ -83,8 +83,39 @@ window.Geocoder = (function () {
         return R * c;
     }
 
-    /* Fast Country Detection Bounding Box Logic */
-    function detectCountry(lat, lng) {
+    function pointInPolygon(lat, lng, polygon) {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            const a = polygon[i];
+            const b = polygon[j];
+            const intersects = ((a[1] > lat) !== (b[1] > lat)) &&
+                (lng < (b[0] - a[0]) * (lat - a[1]) / ((b[1] - a[1]) || Number.EPSILON) + a[0]);
+            if (intersects) inside = !inside;
+        }
+        return inside;
+    }
+
+    // Conservative Great Britain outline. A broad UK bbox includes Ireland,
+    // France, Belgium and the Netherlands, which can silently select mph.
+    // Ambiguous points intentionally fall back to the international km/h mode.
+    const GREAT_BRITAIN_POLYGON = [
+        [-5.8, 50.0], [-4.0, 50.0], [-2.0, 50.5], [0.2, 50.7], [1.8, 51.0],
+        [1.7, 52.1], [1.3, 52.7], [1.7, 53.4], [0.5, 54.0], [-0.2, 54.5],
+        [-1.4, 55.0], [-2.0, 55.6], [-3.0, 58.7], [-5.0, 58.7], [-6.0, 57.5],
+        [-5.5, 56.0], [-4.7, 55.3], [-4.8, 54.5], [-3.5, 53.5], [-4.5, 52.8],
+        [-5.3, 52.2], [-4.0, 51.5], [-5.2, 50.8]
+    ];
+
+    /* Country detection uses explicit ISO data when available, then a
+     * conservative local boundary. It never treats a broad European bbox as
+     * proof of UK units. */
+    function detectCountry(lat, lng, countryCode = '') {
+        const explicit = String(countryCode || '').trim().toUpperCase();
+        if (explicit === 'US' || explicit === 'USA') return 'US';
+        if (explicit === 'GB' || explicit === 'UK' || explicit === 'GBR') return 'GB';
+        if (explicit === 'KR' || explicit === 'KOR') return 'KR';
+        if (explicit) return 'INT';
+
         // USA Mainland, Alaska, Hawaii
         if ((lat >= 24 && lat <= 50 && lng >= -125 && lng <= -66) ||
             (lat >= 50 && lat <= 72 && lng >= -180 && lng <= -130) ||
@@ -98,11 +129,40 @@ window.Geocoder = (function () {
         }
 
         // UK roads commonly use mph even when the OSM value has no suffix.
-        if (lat >= 49.5 && lat <= 59.5 && lng >= -8.5 && lng <= 2.0) {
+        if (pointInPolygon(Number(lat), Number(lng), GREAT_BRITAIN_POLYGON)) {
             return 'GB';
         }
 
         return 'INT'; // International / European Default
+    }
+
+    function pointToSegmentDistanceMeters(lat, lng, a, b) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) return Infinity;
+        const latScale = 111320;
+        const lngScale = latScale * Math.max(0.01, Math.cos(Number(lat) * Math.PI / 180));
+        const ax = (Number(a[1]) - Number(lng)) * lngScale;
+        const ay = (Number(a[0]) - Number(lat)) * latScale;
+        const bx = (Number(b[1]) - Number(lng)) * lngScale;
+        const by = (Number(b[0]) - Number(lat)) * latScale;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const lengthSq = dx * dx + dy * dy;
+        const t = lengthSq > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSq)) : 0;
+        const projectedLat = Number(a[0]) + (Number(b[0]) - Number(a[0])) * t;
+        const projectedLng = Number(a[1]) + (Number(b[1]) - Number(a[1])) * t;
+        return getDistanceKm(lat, lng, projectedLat, projectedLng) * 1000;
+    }
+
+    function distanceToWayMeters(lat, lng, element) {
+        const geometry = element && Array.isArray(element.geometry) ? element.geometry : [];
+        if (geometry.length < 2) return Infinity;
+        let best = Infinity;
+        for (let i = 0; i < geometry.length - 1; i++) {
+            const a = [Number(geometry[i].lat), Number(geometry[i].lon)];
+            const b = [Number(geometry[i + 1].lat), Number(geometry[i + 1].lon)];
+            best = Math.min(best, pointToSegmentDistanceMeters(lat, lng, a, b));
+        }
+        return best;
     }
 
     function parseMaxspeed(rawValue, country) {
@@ -128,8 +188,8 @@ window.Geocoder = (function () {
     }
 
     /* OSM Overpass lookup for nearby speed-limit, tunnel, highway, toll and sign tags */
-    async function fetchCurrentRoadSpeedLimitAndRules(lat, lng) {
-        const country = detectCountry(lat, lng);
+    async function fetchCurrentRoadSpeedLimitAndRules(lat, lng, options = {}) {
+        const country = detectCountry(lat, lng, options.countryCode);
         let speedLimit = null;
         let isStopSignAhead = false;
         let isTunnel = false;
@@ -156,7 +216,7 @@ window.Geocoder = (function () {
               node(around:90,${lat},${lng})["highway"="toll_booth"];
               way(around:90,${lat},${lng})["barrier"="toll_booth"];
             );
-            out tags;`;
+             out tags geom;`;
 
             const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
@@ -164,46 +224,37 @@ window.Geocoder = (function () {
                 timeoutMs: 5000,
                 messageKey: 'routeNetworkError'
             });
-            if (data && data.elements && data.elements.length > 0) {
-                for (let elem of data.elements) {
-                        if (elem.tags) {
-                            if (elem.tags.highway === 'stop') {
-                                isStopSignAhead = true;
-                            }
+            if (data && Array.isArray(data.elements) && data.elements.length > 0) {
+                const wayCandidates = data.elements.filter(elem => elem.type === 'way' && elem.tags &&
+                    (elem.tags.highway || elem.tags.maxspeed) && Array.isArray(elem.geometry) && elem.geometry.length >= 2);
+                const matchedWay = wayCandidates
+                    .map(elem => ({ elem, distance: distanceToWayMeters(lat, lng, elem) }))
+                    .sort((a, b) => a.distance - b.distance)[0]?.elem || null;
 
-                            if (elem.tags.barrier === 'toll_booth' || elem.tags.highway === 'toll_booth') {
-                                isTollBoothAhead = true;
-                            }
+                // Point signs and toll booths are independent of the current
+                // way, but road properties must come from the nearest geometry.
+                for (const elem of data.elements) {
+                    const tags = elem.tags || {};
+                    if (tags.highway === 'stop') isStopSignAhead = true;
+                    if (tags.barrier === 'toll_booth' || tags.highway === 'toll_booth') isTollBoothAhead = true;
+                }
 
-                            if (elem.tags.highway === 'motorway' || elem.tags.highway === 'motorway_link') {
-                                isMotorway = true;
-                            }
-
-                            if (elem.tags.toll === 'yes') {
-                                isToll = true;
-                            }
-
-                            if (elem.tags.tunnel === 'yes' || elem.tags.tunnel === 'building_passage' || elem.tags.covered === 'yes' || (elem.tags.layer && parseInt(elem.tags.layer, 10) < 0)) {
-                                isTunnel = true;
-                            }
-
-                            if (elem.tags.name && !roadName) {
-                                roadName = elem.tags.name;
-                            } else if (elem.tags.ref && !roadName) {
-                                roadName = elem.tags.ref;
-                            }
-
-                            if (elem.tags.maxspeed && speedLimitKmh === null) {
-                                const parsed = parseMaxspeed(elem.tags.maxspeed, country);
-                                if (parsed) {
-                                    speedLimitKmh = parsed.speedLimitKmh;
-                                    speedLimit = speedLimitKmh;
-                                    rawSpeedLimit = parsed.value;
-                                    rawSpeedLimitUnit = parsed.sourceUnit;
-                                    rawUnit = parsed.displayUnit;
-                                }
-                            }
+                if (matchedWay && matchedWay.tags) {
+                    const tags = matchedWay.tags;
+                    isMotorway = tags.highway === 'motorway' || tags.highway === 'motorway_link';
+                    isToll = tags.toll === 'yes';
+                    isTunnel = tags.tunnel === 'yes' || tags.tunnel === 'building_passage' || tags.covered === 'yes' || (tags.layer && parseInt(tags.layer, 10) < 0);
+                    roadName = tags.name || tags.ref || '';
+                    if (tags.maxspeed) {
+                        const parsed = parseMaxspeed(tags.maxspeed, country);
+                        if (parsed) {
+                            speedLimitKmh = parsed.speedLimitKmh;
+                            speedLimit = speedLimitKmh;
+                            rawSpeedLimit = parsed.value;
+                            rawSpeedLimitUnit = parsed.sourceUnit;
+                            rawUnit = parsed.displayUnit;
                         }
+                    }
                 }
             }
         } catch (e) {
@@ -356,6 +407,8 @@ window.Geocoder = (function () {
         reverseGeocode: reverseGeocode,
         detectCountry: detectCountry,
         parseMaxspeed: parseMaxspeed,
+        pointToSegmentDistanceMeters: pointToSegmentDistanceMeters,
+        distanceToWayMeters: distanceToWayMeters,
         fetchCurrentRoadSpeedLimitAndRules: fetchCurrentRoadSpeedLimitAndRules
     };
 })();

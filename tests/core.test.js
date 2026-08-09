@@ -109,6 +109,26 @@ test('scene occlusion reports building and tunnel sources without fabricating ge
     assert.equal(buildingBlocked.source, 'building');
 });
 
+test('scene coverage falls back to heuristics for uncovered route segments', () => {
+    const scene = {
+        origin: { lat: 0, lng: 0 },
+        coverage: { buildings: true, terrain: false, tunnels: false },
+        segmentCoverage: [{ buildings: true, terrain: false, tunnels: false }, { buildings: false, terrain: false, tunnels: false }],
+        buildings: [{
+            polygon: [{ x: 30, y: -10 }, { x: 60, y: -10 }, { x: 60, y: 10 }, { x: 30, y: 10 }],
+            bounds: { minX: 30, maxX: 60, minY: -10, maxY: 10 },
+            height: 30,
+            ground: 0
+        }],
+        tunnels: [],
+        terrainSamples: [],
+        terrainProfiles: []
+    };
+    const sun = { altitude: 10, azimuth: 90 };
+    assert.equal(SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, scene, 0).source, 'building');
+    assert.equal(SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, scene, 1).source, 'heuristic');
+});
+
 test('route request identity rejects stale origin, destination, mode, and toll results', () => {
     const start = { lat: 37, lng: 127 };
     const end = { lat: 37.1, lng: 127.1 };
@@ -117,6 +137,22 @@ test('route request identity rejects stale origin, destination, mode, and toll r
     assert.equal(RouteState.isRouteRequestKeyCurrent(key, { lat: 38, lng: 127 }, end, 'fastest', false, 1000), false);
     assert.equal(RouteState.isRouteRequestKeyCurrent(key, start, end, 'shade', false, 1000), false);
     assert.equal(RouteState.isRouteRequestKeyCurrent(key, start, end, 'fastest', true, 1000), false);
+});
+
+test('real-time route identity stays valid across a minute boundary', () => {
+    const start = { lat: 37, lng: 127 };
+    const end = { lat: 37.1, lng: 127.1 };
+    const key = RouteState.createRouteRequestKey(start, end, 'fastest', false, 'realtime');
+    assert.equal(RouteState.isRouteRequestKeyCurrent(key, start, end, 'fastest', false, 'realtime'), true);
+    assert.equal(RouteState.isRouteRequestKeyCurrent(key, start, end, 'fastest', false, 1735689900000), false);
+    assert.equal(RouteState.normalizeTimeToken('realtime'), 'realtime');
+});
+
+test('off-route distance uses the nearest point on a route segment', () => {
+    const route = [[0, 0], [0.01, 0]];
+    const distance = ShadowRouter.distanceToRoute(0.0005, 0.005, route);
+    assert.ok(distance > 50 && distance < 65, `expected about 56m, got ${distance}`);
+    assert.ok(ShadowRouter.pointToSegmentDistanceMeters(0.0005, 0.005, route[0], route[1]) < 65);
 });
 
 test('OSM maxspeed values normalize to km/h while preserving regional display units', () => {
@@ -149,6 +185,26 @@ test('step time lookup scales OSRM 100 seconds to an adjusted 142-second route',
 test('toll-free candidate filtering rejects routes with OSRM toll indicators', () => {
     assert.equal(ShadowRouter.routeContainsToll({ legs: [{ steps: [{ classes: ['toll'] }] }] }), true);
     assert.equal(ShadowRouter.routeContainsToll({ legs: [{ steps: [{ intersections: [{ classes: ['motorway'] }] }] }] }), false);
+});
+
+test('scene service failure does not fail an otherwise valid OSRM route', async () => {
+    const originalFetch = sandbox.fetch;
+    const originalScene = sandbox.window.SceneShadow;
+    sandbox.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ routes: [{ distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] }] })
+    });
+    sandbox.window.SceneShadow = { fetchSceneForRoute: async () => { throw new Error('mock scene outage'); } };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false
+        );
+        assert.ok(result && result.routes && result.routes.fastest);
+    } finally {
+        sandbox.fetch = originalFetch;
+        sandbox.window.SceneShadow = originalScene;
+    }
 });
 
 test('toll-free routing adds exclusion to direct and via-point OSRM requests', async () => {
@@ -188,4 +244,39 @@ test('toll-free routing adds exclusion to direct and via-point OSRM requests', a
 test('continental-scale coordinates are valid inputs and are not rejected by distance alone', () => {
     assert.equal(ShadowRouter.areValidRouteCoordinates({ lat: 40, lng: -100 }, { lat: 40, lng: 100 }), true);
     assert.equal(ShadowRouter.areValidRouteCoordinates({ lat: 91, lng: 0 }, { lat: 0, lng: 0 }), false);
+});
+
+test('country detection does not classify Ireland or continental Europe as Great Britain', () => {
+    assert.equal(Geocoder.detectCountry(51.5, -0.1), 'GB');
+    assert.equal(Geocoder.detectCountry(53.35, -6.26), 'INT');
+    assert.equal(Geocoder.detectCountry(48.86, 2.35), 'INT');
+    assert.equal(Geocoder.detectCountry(50.85, 4.35), 'INT');
+});
+
+test('nearest OSM way geometry determines the speed limit', async () => {
+    const originalFetch = sandbox.fetch;
+    sandbox.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ elements: [
+            { type: 'way', id: 1, tags: { highway: 'primary', maxspeed: '30 mph', name: 'Nearby Road' }, geometry: [{ lat: 40, lon: -74.0002 }, { lat: 40, lon: -74.0001 }] },
+            { type: 'way', id: 2, tags: { highway: 'motorway', maxspeed: '70 mph', name: 'Distant Highway' }, geometry: [{ lat: 40.01, lon: -74.01 }, { lat: 40.01, lon: -74.00 }] }
+        ] })
+    });
+    try {
+        const road = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(40, -74);
+        assert.equal(road.roadName, 'Nearby Road');
+        assert.equal(road.rawSpeedLimit, 30);
+        assert.equal(road.rawSpeedLimitUnit, 'mph');
+    } finally {
+        sandbox.fetch = originalFetch;
+    }
+});
+
+test('scene caches expose a finite TTL and bounded entry counts', () => {
+    SceneShadow.clearCaches();
+    const stats = SceneShadow.getCacheStats();
+    assert.ok(stats.ttlMs > 0);
+    assert.equal(stats.overpass, 0);
+    assert.equal(stats.terrain, 0);
 });
