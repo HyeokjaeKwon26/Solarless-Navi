@@ -65,9 +65,9 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Sync Capacitor assets
+      - name: Sync Capacitor Android plugins and assets
         shell: bash
-        run: npx cap copy android
+        run: npx cap sync android
 
       - name: Build Android debug APK
         shell: bash
