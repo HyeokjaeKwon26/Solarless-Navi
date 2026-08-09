@@ -57,6 +57,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Ensure Android SDK packages
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          test -n "$sdk_root"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
       - name: Sync Capacitor assets
         shell: bash
         run: npx cap copy android
@@ -65,5 +73,8 @@ jobs:
         shell: bash
         run: |
           cd android
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          test -n "$sdk_root"
+          printf 'sdk.dir=%s\n' "$sdk_root" > local.properties
           chmod +x gradlew
           bash ./gradlew assembleDebug --no-daemon
