@@ -73,6 +73,12 @@ function runSolarWorkerMessage(data, importAvailable = true) {
     return messages[0].result;
 }
 
+function suppressExpectedWarnings(task) {
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    return Promise.resolve().then(task).finally(() => { console.warn = originalWarn; });
+}
+
 test('distance and bearing calculations handle normal and invalid inputs', () => {
     assert.equal(ShadowRouter.calculateDistanceMeters(0, 0, 0, 0), 0);
     assert.ok(Math.abs(ShadowRouter.calculateDistanceMeters(0, 0, 0, 1) - 111194.9) < 200);
@@ -222,15 +228,54 @@ test('worker failure resolves immediately and disables repeated worker creation'
         vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), local, { filename: file });
     }
     const started = Date.now();
-    const first = await Promise.race([
-        local.ShadowRouter.analyzeRouteSegmentsAsync([[127, 37], [127.001, 37]], new Date(0), 100, null),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('worker fallback waited too long')), 500))
-    ]);
-    const second = await local.ShadowRouter.analyzeRouteSegmentsAsync([[127, 37], [127.001, 37]], new Date(0), 100, null);
+    const results = await suppressExpectedWarnings(async () => {
+        const first = await Promise.race([
+            local.ShadowRouter.analyzeRouteSegmentsAsync([[127, 37], [127.001, 37]], new Date(0), 100, null),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('worker fallback waited too long')), 500))
+        ]);
+        const second = await local.ShadowRouter.analyzeRouteSegmentsAsync([[127, 37], [127.001, 37]], new Date(0), 100, null);
+        const third = await local.ShadowRouter.analyzeRouteSegmentsAsync([[127, 37], [127.001, 37]], new Date(0), 100, null);
+        return { first, second, third };
+    });
+    const { first, second, third } = results;
     assert.equal(first.analysisMode, 'heuristic');
     assert.equal(second.analysisMode, 'heuristic');
+    assert.equal(third.analysisMode, 'heuristic');
     assert.ok(Date.now() - started < 500);
-    assert.equal(constructorCount, 1);
+    assert.equal(constructorCount, 2);
+});
+
+test('silent worker timeout terminates the generation and does not repeat the delay', async () => {
+    let constructorCount = 0;
+    let lastWorker = null;
+    function SilentWorker() { constructorCount++; lastWorker = this; }
+    SilentWorker.prototype.postMessage = () => {};
+    SilentWorker.prototype.terminate = function () { this.terminated = true; };
+    const local = { ...sandbox, Worker: SilentWorker };
+    local.window = local;
+    local.self = local;
+    vm.createContext(local);
+    for (const file of ['js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js']) {
+        vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), local, { filename: file });
+    }
+    const coordinates = [[127, 37], [127.001, 37]];
+    const results = await suppressExpectedWarnings(async () => ({
+        first: await local.ShadowRouter.analyzeRouteSegmentsAsync(coordinates, new Date(0), 100, null, null, null, { timeoutMs: 15 }),
+        second: await local.ShadowRouter.analyzeRouteSegmentsAsync(coordinates, new Date(0), 100, null, null, null, { timeoutMs: 15 }),
+        third: await local.ShadowRouter.analyzeRouteSegmentsAsync(coordinates, new Date(0), 100, null, null, null, { timeoutMs: 15 })
+    }));
+    const { first, second, third } = results;
+    if (lastWorker && lastWorker.onmessage) lastWorker.onmessage({ data: { id: 1, result: { analysisMode: 'scene' } } });
+    assert.equal(first.analysisMode, 'heuristic');
+    assert.equal(second.analysisMode, 'heuristic');
+    assert.equal(third.analysisMode, 'heuristic');
+    assert.equal(constructorCount, 2);
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+        local.ShadowRouter.analyzeRouteSegmentsAsync(coordinates, new Date(0), 100, null, null, controller.signal, { timeoutMs: 15 }),
+        error => error && error.name === 'AbortError'
+    );
 });
 
 test('route request identity rejects stale origin, destination, mode, and toll results', () => {
@@ -312,6 +357,32 @@ test('route roles preserve OSRM duration for fastest regardless of solar scores'
     assert.equal(roles.shade.id, 'slow');
 });
 
+test('route roles reject long detours with noise-level improvements', () => {
+    const routes = [
+        { id: 'fast', durationSec: 100, candidateIndex: 0, analyzed: { avgGlareRisk: 0.50, totalUvExposureUnits: 1, avgShadeCoverage: 0.40 } },
+        { id: 'slow-noise', durationSec: 150, candidateIndex: 1, analyzed: { avgGlareRisk: 0.495, totalUvExposureUnits: 0.995, avgShadeCoverage: 0.405 } }
+    ];
+    const roles = ShadowRouter.selectRouteRoles(routes);
+    assert.equal(roles.fastest.id, 'fast');
+    assert.equal(roles.glareFree.id, 'fast');
+    assert.equal(roles.shade.id, 'fast');
+    assert.equal(routes[1].tradeoff.detourRatio, 1.5);
+});
+
+test('route roles accept a modest detour with meaningful glare or shade improvement', () => {
+    const routes = [
+        { id: 'fast', durationSec: 100, candidateIndex: 0, analyzed: { avgGlareRisk: 0.80, totalUvExposureUnits: 1, avgShadeCoverage: 0.20 } },
+        { id: 'glare', durationSec: 115, candidateIndex: 1, analyzed: { avgGlareRisk: 0.20, totalUvExposureUnits: 0.95, avgShadeCoverage: 0.25 } },
+        { id: 'shade', durationSec: 120, candidateIndex: 2, analyzed: { avgGlareRisk: 0.70, totalUvExposureUnits: 0.80, avgShadeCoverage: 0.80 } }
+    ];
+    const roles = ShadowRouter.selectRouteRoles(routes);
+    assert.equal(roles.fastest.id, 'fast');
+    assert.equal(roles.glareFree.id, 'glare');
+    assert.equal(roles.shade.id, 'shade');
+    assert.ok(routes[1].tradeoff.glareImprovement > 0.05);
+    assert.ok(routes[2].tradeoff.uvReductionPct >= 5);
+});
+
 test('exposure reduction uses the same-tier refined fastest baseline', () => {
     const fastest = { id: 'fast', analyzed: { totalUvExposureUnits: 0.5 } };
     const glare = { id: 'glare', analyzed: { totalUvExposureUnits: 0.25 } };
@@ -364,9 +435,9 @@ test('scene service failure does not fail an otherwise valid OSRM route', async 
     });
     sandbox.window.SceneShadow = { fetchSceneForRoute: async () => { throw new Error('mock scene outage'); } };
     try {
-        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes(
             { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false
-        );
+        ));
         assert.ok(result && result.routes && result.routes.fastest);
         assert.equal(result.analysisMode, 'heuristic');
         assert.ok([result.routes.fastest, result.routes.glareFree, result.routes.shade].every(route => route.analysisMode === 'heuristic'));
@@ -397,7 +468,7 @@ test('identical route groups invoke scene analysis once and return scene-tier re
         };
     };
     try {
-        const result = await ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false);
+        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false));
         assert.equal(sceneCalls, 1);
         assert.equal(result.analysisMode, 'scene');
         assert.equal(result.routes.fastest.analysisMode, 'scene');
@@ -435,7 +506,7 @@ test('partial scene failure falls back every final comparison to heuristic mode'
         };
     };
     try {
-        const result = await ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false);
+        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false));
         assert.ok(sceneCalls > 1);
         assert.equal(result.analysisMode, 'heuristic');
         assert.ok([result.routes.fastest, result.routes.glareFree, result.routes.shade].every(route => route.analysisMode === 'heuristic'));
@@ -494,30 +565,50 @@ test('building ground elevation uses the nearest valid DEM sample and does not f
     const originalFetch = sandbox.fetch;
     SceneShadow.clearCaches();
     let terrainAvailable = true;
+    let activeOrigin = { lat: 0, lng: 0 };
+    const testDate = new Date('2024-06-21T12:00:00Z');
+    function buildingAtSunRay(id, distanceMeters, height) {
+        const sun = sandbox.SunCalc.getPosition(testDate, activeOrigin.lat, activeOrigin.lng);
+        const azimuth = Number(sun.azimuth) * Math.PI / 180;
+        const centerLat = activeOrigin.lat + distanceMeters * Math.cos(azimuth) / 111320;
+        const centerLng = activeOrigin.lng + distanceMeters * Math.sin(azimuth) / (111320 * Math.max(0.01, Math.cos(activeOrigin.lat * Math.PI / 180)));
+        const halfLat = 0.00004;
+        const halfLng = 0.00004;
+        return {
+            type: 'way', id,
+            tags: { building: 'yes', height: String(height) },
+            geometry: [
+                { lat: centerLat - halfLat, lon: centerLng - halfLng },
+                { lat: centerLat + halfLat, lon: centerLng - halfLng },
+                { lat: centerLat + halfLat, lon: centerLng + halfLng },
+                { lat: centerLat - halfLat, lon: centerLng + halfLng }
+            ]
+        };
+    }
+    function irrelevantFarBuilding() {
+        const centerLat = activeOrigin.lat + 0.02;
+        const centerLng = activeOrigin.lng + 0.02;
+        return {
+            type: 'way', id: 99,
+            tags: { building: 'yes', height: '30' },
+            geometry: [
+                { lat: centerLat - 0.0001, lon: centerLng - 0.0001 },
+                { lat: centerLat + 0.0001, lon: centerLng - 0.0001 },
+                { lat: centerLat + 0.0001, lon: centerLng + 0.0001 },
+                { lat: centerLat - 0.0001, lon: centerLng + 0.0001 }
+            ]
+        };
+    }
     sandbox.fetch = async url => {
         if (String(url).includes('overpass-api.de')) {
             return {
                 ok: true,
                 status: 200,
-                json: async () => ({ elements: [{
-                    type: 'way', id: 1,
-                    tags: { building: 'yes', height: '12' },
-                    geometry: [
-                        { lat: -0.00005, lon: 0.00001 },
-                        { lat: 0.00005, lon: 0.00001 },
-                        { lat: 0.00005, lon: 0.00009 },
-                        { lat: -0.00005, lon: 0.00009 }
-                    ]
-                }, {
-                    type: 'way', id: 2,
-                    tags: { building: 'yes', height: '18' },
-                    geometry: [
-                        { lat: -0.00005, lon: 0.00091 },
-                        { lat: 0.00005, lon: 0.00091 },
-                        { lat: 0.00005, lon: 0.00099 },
-                        { lat: -0.00005, lon: 0.00099 }
-                    ]
-                }] })
+                json: async () => ({ elements: [
+                    buildingAtSunRay(1, 30, 12),
+                    buildingAtSunRay(2, 210, 18),
+                    irrelevantFarBuilding()
+                ] })
             };
         }
         if (String(url).includes('opentopodata')) {
@@ -532,19 +623,24 @@ test('building ground elevation uses the nearest valid DEM sample and does not f
         throw new Error(`unexpected URL: ${url}`);
     };
     try {
+        activeOrigin = { lat: 0, lng: 0 };
         const scene = await SceneShadow.fetchSceneForRoute(
-            [[0, 0], [0.001, 0]], { dateObj: new Date(0), durationSec: 100 }
+            [[0, 0], [0.001, 0]], { dateObj: testDate, durationSec: 100 }
         );
         assert.equal(scene.buildings.length, 2);
+        assert.equal(scene.allBuildings.length, 3);
         assert.ok(scene.buildings.every(building => Number.isFinite(building.ground)));
         assert.notEqual(scene.buildings[0].ground, scene.buildings[1].ground);
 
         SceneShadow.clearCaches();
         terrainAvailable = false;
+        activeOrigin = { lat: 0, lng: 0.01 };
         const incomplete = await SceneShadow.fetchSceneForRoute(
-            [[0.01, 0], [0.011, 0]], { dateObj: new Date(0), durationSec: 100 }
+            [[0.01, 0], [0.011, 0]], { dateObj: testDate, durationSec: 100 }
         );
+        assert.equal(incomplete.buildings.length, 2);
         assert.equal(incomplete.buildings[0].ground, null);
+        assert.ok(incomplete.segmentCoverage.some(segment => segment.buildingGround === false));
         assert.equal(incomplete.precisionReady, false);
     } finally {
         sandbox.fetch = originalFetch;
@@ -561,9 +657,111 @@ test('large scene bbox is skipped before external API calls', async () => {
             [[0, 0], [2, 0]], { maxRouteMeters: 300000, maxBboxSpanDeg: 1.5 }
         );
         assert.equal(scene, null);
+        const diagonalScene = await SceneShadow.fetchSceneForRoute(
+            [[0, 0], [1, 1]], { maxRouteMeters: 300000, maxBboxSpanDeg: 1.5, maxBboxAreaKm2: 25, maxSceneTiles: 8 }
+        );
+        assert.equal(diagonalScene, null);
         assert.equal(calls, 0);
     } finally {
         sandbox.fetch = originalFetch;
+    }
+});
+
+test('scene bbox metrics account for latitude-scaled area and diagonal spans', () => {
+    const diagonal = SceneShadow.routeBbox([[0, 0], [0.01, 0.01]], 250);
+    const metrics = SceneShadow.bboxMetrics(diagonal);
+    assert.ok(metrics.widthMeters > 1000 && metrics.heightMeters > 1000);
+    assert.ok(metrics.areaKm2 > 1 && metrics.areaKm2 < 3);
+    const broad = SceneShadow.bboxMetrics({ south: 0, west: 0, north: 1, east: 1 });
+    assert.ok(broad.areaKm2 > 10000);
+});
+
+test('scene tiles deduplicate OSM ids and reuse overlapping tile cache', async () => {
+    const originalFetch = sandbox.fetch;
+    SceneShadow.clearCaches();
+    let overpassCalls = 0;
+    let terrainCalls = 0;
+    sandbox.fetch = async url => {
+        if (String(url).includes('overpass-api.de')) {
+            overpassCalls++;
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({ elements: [
+                    { type: 'way', id: 7, tags: { building: 'yes', height: '10' }, geometry: [
+                        { lat: -0.0001, lon: 0.0001 }, { lat: 0.0001, lon: 0.0001 },
+                        { lat: 0.0001, lon: 0.0002 }, { lat: -0.0001, lon: 0.0002 }
+                    ] },
+                    { type: 'way', id: 8, tags: { building: 'yes', height: '12' }, geometry: [
+                        { lat: -0.0001, lon: 0.0003 }, { lat: 0.0001, lon: 0.0003 },
+                        { lat: 0.0001, lon: 0.0004 }, { lat: -0.0001, lon: 0.0004 }
+                    ] }
+                ] })
+            };
+        }
+        if (String(url).includes('opentopodata')) {
+            terrainCalls++;
+            return { ok: true, status: 200, json: async () => ({ results: Array.from({ length: 100 }, () => ({ elevation: 100 })) }) };
+        }
+        throw new Error(`unexpected URL: ${url}`);
+    };
+    const route = [[0, 0], [0.03, 0], [0.06, 0], [0.09, 0]];
+    try {
+        const first = await SceneShadow.fetchSceneForRoute(route, {
+            maxBboxAreaKm2: 0.2,
+            sceneTileRouteMeters: 3000,
+            maxSceneTiles: 8,
+            maxSceneTotalAreaKm2: 100,
+            dateObj: new Date('2024-06-21T12:00:00Z'),
+            durationSec: 200
+        });
+        assert.ok(overpassCalls > 1);
+        assert.equal(new Set(first.allBuildings.map(building => String(building.id))).size, first.allBuildings.length);
+        const callsAfterFirst = overpassCalls;
+        const terrainAfterFirst = terrainCalls;
+        const second = await SceneShadow.fetchSceneForRoute(route, {
+            maxBboxAreaKm2: 0.2,
+            sceneTileRouteMeters: 3000,
+            maxSceneTiles: 8,
+            maxSceneTotalAreaKm2: 100,
+            dateObj: new Date('2024-06-21T12:00:00Z'),
+            durationSec: 200
+        });
+        assert.equal(overpassCalls, callsAfterFirst);
+        assert.equal(terrainCalls, terrainAfterFirst);
+        assert.equal(second.allBuildings.length, first.allBuildings.length);
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.clearCaches();
+    }
+});
+
+test('aborting scene tiles prevents the next Overpass tile from starting', async () => {
+    const originalFetch = sandbox.fetch;
+    SceneShadow.clearCaches();
+    let overpassCalls = 0;
+    sandbox.fetch = async (url, options = {}) => new Promise((resolve, reject) => {
+        if (String(url).includes('overpass-api.de')) overpassCalls++;
+        const onAbort = () => reject(new Error('aborted'));
+        if (options.signal) {
+            if (options.signal.aborted) onAbort();
+            else options.signal.addEventListener('abort', onAbort, { once: true });
+        }
+    });
+    const controller = new AbortController();
+    try {
+        const promise = SceneShadow.fetchSceneForRoute([[0, 0], [0.03, 0], [0.06, 0]], {
+            maxBboxAreaKm2: 0.2,
+            sceneTileRouteMeters: 3000,
+            maxSceneTiles: 8,
+            signal: controller.signal
+        });
+        setTimeout(() => controller.abort(), 5);
+        await assert.rejects(promise);
+        assert.equal(overpassCalls, 1);
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.clearCaches();
     }
 });
 
@@ -614,6 +812,11 @@ test('country detection does not classify Ireland or continental Europe as Great
     assert.equal(Geocoder.detectCountry(43.6532, -79.3832), 'INT');
     assert.equal(Geocoder.detectCountry(32.5149, -117.0382), 'INT');
     assert.equal(Geocoder.detectCountry(47.6062, -122.3321), 'US');
+    assert.equal(Geocoder.detectCountry(60.7212, -135.0568), 'INT'); // Whitehorse
+    assert.equal(Geocoder.detectCountry(49.2827, -123.1207), 'INT'); // Vancouver
+    assert.equal(Geocoder.detectCountry(61.2181, -149.9003), 'US'); // Anchorage
+    assert.equal(Geocoder.detectCountry(58.3019, -134.4197), 'US'); // Juneau
+    assert.equal(Geocoder.detectCountry(21.3069, -157.8583), 'US'); // Hawaii
 });
 
 test('reverse-geocoded ISO country is cached and controls speed units', async () => {
@@ -646,6 +849,46 @@ test('reverse-geocoded ISO country is cached and controls speed units', async ()
         assert.equal(second.countryCode, 'CA');
         assert.equal(reverseCalls, 1);
         assert.equal(overpassCalls, 2);
+    } finally {
+        sandbox.fetch = originalFetch;
+    }
+});
+
+test('address and country reverse lookups share one in-flight response per cell', async () => {
+    const originalFetch = sandbox.fetch;
+    let reverseCalls = 0;
+    let overpassCalls = 0;
+    let reverseUrl = '';
+    sandbox.fetch = async url => {
+        if (String(url).includes('nominatim.openstreetmap.org/reverse')) {
+            reverseCalls++;
+            reverseUrl = String(url);
+            await new Promise(resolve => setTimeout(resolve, 15));
+            return { ok: true, status: 200, json: async () => ({
+                display_name: 'Example Road, Example City, Canada',
+                address: { country_code: 'ca' }
+            }) };
+        }
+        overpassCalls++;
+        return { ok: true, status: 200, json: async () => ({ elements: [] }) };
+    };
+    try {
+        const [address, country] = await Promise.all([
+            Geocoder.reverseGeocode(44, -79),
+            Geocoder.resolveCountryCode(44, -79)
+        ]);
+        assert.equal(address, 'Example Road, Example City, Canada');
+        assert.equal(country, 'CA');
+        assert.ok(reverseUrl.includes('addressdetails=1'));
+        assert.equal(reverseCalls, 1);
+
+        const road = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(44, -79);
+        assert.equal(road.countryCode, 'CA');
+        assert.equal(reverseCalls, 1);
+        assert.equal(overpassCalls, 1);
+
+        await Geocoder.resolveCountryCode(44.1, -79);
+        assert.equal(reverseCalls, 2);
     } finally {
         sandbox.fetch = originalFetch;
     }

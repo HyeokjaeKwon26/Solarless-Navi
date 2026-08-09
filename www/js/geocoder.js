@@ -9,8 +9,13 @@ window.Geocoder = (function () {
     const SEARCH_CACHE_MAX = 24;
     const searchCache = new Map();
     const COUNTRY_CACHE_TTL_MS = 15 * 60 * 1000;
+    const COUNTRY_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
     const COUNTRY_CACHE_MAX = 64;
+    const REVERSE_CACHE_TTL_MS = 15 * 60 * 1000;
+    const REVERSE_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
     const countryCache = new Map();
+    const reverseCache = new Map();
+    const reverseInFlight = new Map();
 
     function createApiError(code, messageKey, details, cause) {
         const error = new Error(code);
@@ -125,6 +130,17 @@ window.Geocoder = (function () {
         [-124.8, 48.9]
     ];
 
+    // Alaska is split into a conservative mainland and panhandle outline so
+    // Yukon/Whitehorse is not silently treated as US mph territory.
+    const ALASKA_MAINLAND_POLYGON = [
+        [-168.0, 54.5], [-160.0, 54.5], [-151.0, 57.0], [-145.0, 59.0],
+        [-141.0, 60.5], [-141.0, 72.0], [-170.0, 72.0], [-173.0, 65.0],
+        [-170.0, 60.0]
+    ];
+    const ALASKA_PANHANDLE_POLYGON = [
+        [-135.5, 57.5], [-133.0, 57.5], [-133.0, 59.0], [-135.5, 59.0]
+    ];
+
     function normalizeCountryCode(countryCode) {
         const value = String(countryCode || '').trim().toUpperCase();
         if (!value) return '';
@@ -135,7 +151,9 @@ window.Geocoder = (function () {
     }
 
     function countryCacheKey(lat, lng) {
-        return `${Number(lat).toFixed(2)},${Number(lng).toFixed(2)}`;
+        // ~110m cells reduce the chance that one cache entry straddles a
+        // national border while still suppressing repeated GPS lookups.
+        return `${Number(lat).toFixed(3)},${Number(lng).toFixed(3)}`;
     }
 
     function getCachedCountryCode(lat, lng) {
@@ -154,11 +172,50 @@ window.Geocoder = (function () {
         return entry.code;
     }
 
-    function setCachedCountryCode(lat, lng, code) {
+    function setCachedCountryCode(lat, lng, code, ttlMs = null) {
         const key = countryCacheKey(lat, lng);
         countryCache.delete(key);
-        countryCache.set(key, { code: normalizeCountryCode(code), expiresAt: Date.now() + COUNTRY_CACHE_TTL_MS });
+        const normalized = normalizeCountryCode(code);
+        const ttl = ttlMs || (normalized ? COUNTRY_CACHE_TTL_MS : COUNTRY_NEGATIVE_CACHE_TTL_MS);
+        countryCache.set(key, { code: normalized, expiresAt: Date.now() + ttl });
         while (countryCache.size > COUNTRY_CACHE_MAX) countryCache.delete(countryCache.keys().next().value);
+    }
+
+    function getReverseCache(key) {
+        const entry = reverseCache.get(key);
+        if (!entry) return null;
+        if (entry.expiresAt <= Date.now()) {
+            reverseCache.delete(key);
+            return null;
+        }
+        reverseCache.delete(key);
+        reverseCache.set(key, entry);
+        return entry.value;
+    }
+
+    function setReverseCache(key, value, ttlMs) {
+        reverseCache.delete(key);
+        reverseCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+        while (reverseCache.size > COUNTRY_CACHE_MAX) reverseCache.delete(reverseCache.keys().next().value);
+    }
+
+    function abortablePromise(promise, signal) {
+        if (!signal) return promise;
+        if (signal.aborted) return Promise.reject(createApiError('ABORTED', 'searchNetworkError', 'reverse geocode aborted'));
+        return new Promise((resolve, reject) => {
+            const onAbort = () => {
+                signal.removeEventListener('abort', onAbort);
+                reject(createApiError('ABORTED', 'searchNetworkError', 'reverse geocode aborted'));
+            };
+            signal.addEventListener('abort', onAbort, { once: true });
+            promise.then(value => {
+                signal.removeEventListener('abort', onAbort);
+                resolve(value);
+            }, error => {
+                signal.removeEventListener('abort', onAbort);
+                reject(error);
+            });
+        });
     }
 
     /* Country detection uses explicit ISO data when available, then a
@@ -175,8 +232,10 @@ window.Geocoder = (function () {
         // deliberately conservative; unknown points use international km/h.
         const inGreatLakesCanadaBand = Number(lat) > 43.2 && Number(lat) < 46.0 &&
             Number(lng) > -83.5 && Number(lng) < -77.0;
+        const inAlaska = pointInPolygon(Number(lat), Number(lng), ALASKA_MAINLAND_POLYGON) ||
+            pointInPolygon(Number(lat), Number(lng), ALASKA_PANHANDLE_POLYGON);
         if (!inGreatLakesCanadaBand && (pointInPolygon(Number(lat), Number(lng), CONTIGUOUS_US_POLYGON) ||
-            (lat >= 50 && lat <= 72 && lng >= -180 && lng <= -130) ||
+            inAlaska ||
             (lat >= 18 && lat <= 23 && lng >= -161 && lng <= -154))) {
             return 'US';
         }
@@ -194,29 +253,52 @@ window.Geocoder = (function () {
         return 'INT'; // International / European Default
     }
 
+    async function fetchReverseGeocodeData(lat, lng, options = {}) {
+        const key = countryCacheKey(lat, lng);
+        const cached = getReverseCache(key);
+        if (cached) return abortablePromise(Promise.resolve(cached), options.signal);
+        let request = reverseInFlight.get(key);
+        if (!request) {
+            const url = `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+            request = fetchJsonWithTimeout(url, {
+                signal: options.signal,
+                timeoutMs: options.timeoutMs || API_TIMEOUT_MS,
+                headers: { 'User-Agent': 'SolarisNav-MobileApp/1.0' },
+                messageKey: 'searchNetworkError'
+            }).then(data => {
+                const value = {
+                    displayName: data && data.display_name ? String(data.display_name) : '',
+                    countryCode: normalizeCountryCode(data && data.address && data.address.country_code),
+                    data: data || null
+                };
+                setReverseCache(key, value, value.displayName ? REVERSE_CACHE_TTL_MS : REVERSE_NEGATIVE_CACHE_TTL_MS);
+                setCachedCountryCode(lat, lng, value.countryCode);
+                return value;
+            }).catch(error => {
+                setReverseCache(key, { displayName: '', countryCode: '', data: null }, REVERSE_NEGATIVE_CACHE_TTL_MS);
+                setCachedCountryCode(lat, lng, '', COUNTRY_NEGATIVE_CACHE_TTL_MS);
+                throw error;
+            }).finally(() => {
+                if (reverseInFlight.get(key) === request) reverseInFlight.delete(key);
+            });
+            reverseInFlight.set(key, request);
+        }
+        return abortablePromise(request, options.signal);
+    }
+
     async function resolveCountryCode(lat, lng, options = {}) {
         const explicit = normalizeCountryCode(options.countryCode);
         if (explicit) return explicit;
         const cached = getCachedCountryCode(lat, lng);
         if (cached !== null) return cached;
-        let code = '';
         try {
-            const url = `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
-            const data = await fetchJsonWithTimeout(url, {
-                signal: options.signal,
-                timeoutMs: options.timeoutMs || API_TIMEOUT_MS,
-                headers: { 'User-Agent': 'SolarisNav-MobileApp/1.0' },
-                messageKey: 'searchNetworkError'
-            });
-            code = normalizeCountryCode(data && data.address && data.address.country_code);
+            const reverse = await fetchReverseGeocodeData(lat, lng, options);
+            return reverse.countryCode || null;
         } catch (error) {
-            // Country lookup is advisory.  Cache the unknown result briefly so
-            // GPS updates do not issue a reverse request every few seconds.
             if (options.signal && options.signal.aborted) throw error;
             console.warn('Country lookup warning:', error);
+            return null;
         }
-        setCachedCountryCode(lat, lng, code);
-        return code || null;
     }
 
     function pointToSegmentDistanceMeters(lat, lng, a, b) {
@@ -471,15 +553,11 @@ window.Geocoder = (function () {
         return finalResults.map(item => ({ ...item }));
     }
 
-    async function reverseGeocode(lat, lng) {
+    async function reverseGeocode(lat, lng, options = {}) {
         try {
-            const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
-            const data = await fetchJsonWithTimeout(url, {
-                headers: { 'User-Agent': 'SolarisNav-MobileApp/1.0' },
-                messageKey: 'searchNetworkError'
-            });
-            if (data && data.display_name) {
-                const parts = String(data.display_name).split(',');
+            const reverse = await fetchReverseGeocodeData(lat, lng, options);
+            if (reverse.displayName) {
+                const parts = reverse.displayName.split(',').map(part => part.trim());
                 return parts.slice(0, 3).join(', ').trim();
             }
         } catch (e) {
@@ -493,6 +571,7 @@ window.Geocoder = (function () {
         reverseGeocode: reverseGeocode,
         detectCountry: detectCountry,
         getCachedCountryCode: getCachedCountryCode,
+        resolveCountryCode: resolveCountryCode,
         parseMaxspeed: parseMaxspeed,
         pointToSegmentDistanceMeters: pointToSegmentDistanceMeters,
         distanceToWayMeters: distanceToWayMeters,

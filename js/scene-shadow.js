@@ -21,6 +21,11 @@
     const OVERPASS_CACHE_MAX_ENTRIES = 12;
     const TERRAIN_CACHE_MAX_ENTRIES = 512;
     const BUILDING_GROUND_MAX_SAMPLE_DISTANCE_METERS = 500;
+    const DEFAULT_MAX_BBOX_AREA_KM2 = 25;
+    const DEFAULT_MAX_SCENE_TOTAL_AREA_KM2 = 100;
+    const DEFAULT_MAX_SCENE_TILES = 8;
+    const DEFAULT_SCENE_TILE_ROUTE_METERS = 5000;
+    const MAX_SHADOW_RAY_DISTANCE_METERS = 4500;
     const overpassCache = new Map();
     const terrainCache = new Map();
     const terrainInflight = new Map();
@@ -160,8 +165,56 @@
         return { south: south - latPad, west: west - lngPad, north: north + latPad, east: east + lngPad };
     }
 
+    function bboxMetrics(bbox) {
+        if (!bbox || ![bbox.south, bbox.west, bbox.north, bbox.east].every(finite)) return null;
+        const midLat = (Number(bbox.south) + Number(bbox.north)) / 2;
+        const widthMeters = calculateDistanceMeters(midLat, Number(bbox.west), midLat, Number(bbox.east));
+        const heightMeters = calculateDistanceMeters(Number(bbox.south), Number(bbox.west), Number(bbox.north), Number(bbox.west));
+        if (![widthMeters, heightMeters].every(Number.isFinite)) return null;
+        return {
+            widthMeters,
+            heightMeters,
+            areaKm2: (widthMeters * heightMeters) / 1000000,
+            midLat
+        };
+    }
+
     function bboxKey(bbox) {
         return [bbox.south, bbox.west, bbox.north, bbox.east].map(v => Number(v).toFixed(3)).join(',');
+    }
+
+    function splitRouteIntoSceneTiles(coordinates, options = {}) {
+        const maxTileRouteMeters = Number(options.sceneTileRouteMeters || DEFAULT_SCENE_TILE_ROUTE_METERS);
+        const paddingMeters = Number(options.paddingMeters || 250);
+        const tiles = [];
+        let chunk = [coordinates[0]];
+        let chunkDistance = 0;
+        for (let i = 1; i < coordinates.length; i++) {
+            const previous = coordinates[i - 1];
+            const current = coordinates[i];
+            chunk.push(current);
+            chunkDistance += calculateDistanceMeters(
+                Number(previous[1]), Number(previous[0]),
+                Number(current[1]), Number(current[0])
+            );
+            if (chunkDistance >= maxTileRouteMeters && chunk.length >= 2) {
+                const bbox = routeBbox(chunk, paddingMeters);
+                if (bbox) tiles.push({ bbox, routeCoordinates: chunk });
+                chunk = [current];
+                chunkDistance = 0;
+            }
+        }
+        if (chunk.length === 1 && coordinates.length > 1) chunk.unshift(coordinates[coordinates.length - 2]);
+        if (chunk.length >= 2) {
+            const bbox = routeBbox(chunk, paddingMeters);
+            if (bbox) tiles.push({ bbox, routeCoordinates: chunk });
+        }
+        const unique = new Map();
+        for (const tile of tiles) {
+            const key = bboxKey(tile.bbox);
+            if (!unique.has(key)) unique.set(key, tile);
+        }
+        return [...unique.values()];
     }
 
     function getExpiringCacheValue(cache, key) {
@@ -227,54 +280,89 @@
         }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
     }
 
+    function parseOverpassData(data, origin) {
+        const buildings = [];
+        const tunnels = [];
+        const seenBuildings = new Set();
+        const seenTunnels = new Set();
+        for (const element of (data && data.elements) || []) {
+            const tags = element.tags || {};
+            const points = readOverpassGeometry(element, origin);
+            if (points.length < 2) continue;
+            const id = element.id !== undefined ? String(element.id) : `geometry:${points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(';')}`;
+            const isTunnel = tags.tunnel === 'yes' || tags.covered === 'yes' || tags.covered === 'true';
+            if (isTunnel && !seenTunnels.has(id)) {
+                seenTunnels.add(id);
+                tunnels.push({ id: element.id, line: points, bounds: computeBounds(points), tags: {
+                    tunnel: tags.tunnel || '', covered: tags.covered || '', layer: tags.layer || ''
+                }});
+            }
+            const buildingTag = tags.building || tags['building:part'];
+            if (points.length >= 3 && buildingTag && !seenBuildings.has(id)) {
+                seenBuildings.add(id);
+                buildings.push({
+                    id: element.id,
+                    polygon: points,
+                    bounds: computeBounds(points),
+                    height: parseHeight(tags),
+                    heightEstimated: !tags.height && !tags['building:levels'],
+                    ground: null,
+                    relevantProfileIndices: [],
+                    tags: { building: buildingTag, height: tags.height || '', levels: tags['building:levels'] || '' }
+                });
+            }
+        }
+        return { buildings, tunnels, available: data && data.available !== false };
+    }
+
     async function loadOverpassData(bbox, origin, options) {
-        // Local projected coordinates depend on the origin. Include it in the
-        // cache key so two nearby routes cannot reuse shifted geometry.
-        const key = `${bboxKey(bbox)}|${origin.lat.toFixed(3)},${origin.lng.toFixed(3)}`;
+        // Cache raw OSM elements by deterministic tile bbox, then project them
+        // for each route origin. This lets overlapping candidate routes share
+        // one public API response without mixing local coordinate systems.
+        const key = bboxKey(bbox);
         const cached = getExpiringCacheValue(overpassCache, key);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) {
+            try {
+                return parseOverpassData(await cached, origin);
+            } catch (error) {
+                const current = getExpiringCacheValue(overpassCache, key);
+                if (current === cached) overpassCache.delete(key);
+                throw error;
+            }
+        }
         const query = `[out:json][timeout:15];(way["building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});way["building:part"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});way["tunnel"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});way["covered"](${bbox.south},${bbox.west},${bbox.north},${bbox.east}););out tags geom;`;
         const promise = fetchJsonWithTimeout(`${OVERPASS_ENDPOINT}?data=${encodeURIComponent(query)}`, {
             signal: options.signal,
             timeoutMs: options.timeoutMs || 12000
-        }).then(data => {
-            const buildings = [];
-            const tunnels = [];
-            const seen = new Set();
-            for (const element of (data && data.elements) || []) {
-                const tags = element.tags || {};
-                const points = readOverpassGeometry(element, origin);
-                if (points.length < 2) continue;
-                const isTunnel = tags.tunnel === 'yes' || tags.covered === 'yes' || tags.covered === 'true';
-                if (isTunnel) {
-                    tunnels.push({ id: element.id, line: points, bounds: computeBounds(points), tags: {
-                        tunnel: tags.tunnel || '', covered: tags.covered || '', layer: tags.layer || ''
-                    }});
-                }
-                const buildingTag = tags.building || tags['building:part'];
-                if (points.length >= 3 && buildingTag && !seen.has(element.id)) {
-                    seen.add(element.id);
-                    buildings.push({
-                        id: element.id,
-                        polygon: points,
-                        bounds: computeBounds(points),
-                        height: parseHeight(tags),
-                        heightEstimated: !tags.height && !tags['building:levels'],
-                        ground: 0,
-                        tags: { building: buildingTag, height: tags.height || '', levels: tags['building:levels'] || '' }
-                    });
-                }
-            }
-            return { buildings, tunnels, available: true };
-        });
+        }).then(data => ({ elements: Array.isArray(data && data.elements) ? data.elements : [], available: true }));
         setExpiringCacheValue(overpassCache, key, promise, OVERPASS_CACHE_MAX_ENTRIES);
         try {
-            return await promise;
+            return parseOverpassData(await promise, origin);
         } catch (error) {
             const current = getExpiringCacheValue(overpassCache, key);
             if (current === promise) overpassCache.delete(key);
             throw error;
         }
+    }
+
+    function mergeOverpassData(results) {
+        const buildings = new Map();
+        const tunnels = new Map();
+        for (const result of results) {
+            for (const building of result.buildings || []) {
+                const key = building.id !== undefined ? String(building.id) : `building:${building.polygon.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(';')}`;
+                if (!buildings.has(key)) buildings.set(key, building);
+            }
+            for (const tunnel of result.tunnels || []) {
+                const key = tunnel.id !== undefined ? String(tunnel.id) : `tunnel:${tunnel.line.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(';')}`;
+                if (!tunnels.has(key)) tunnels.set(key, tunnel);
+            }
+        }
+        return {
+            buildings: [...buildings.values()],
+            tunnels: [...tunnels.values()],
+            available: results.length > 0 && results.every(result => result.available)
+        };
     }
 
     function quantizePoint(lat, lng) {
@@ -410,17 +498,35 @@
         const bbox = routeBbox(coordinates, options.paddingMeters || 250);
         if (!bbox) return null;
         const maxBboxSpanDeg = Number(options.maxBboxSpanDeg || 1.5);
-        if ((bbox.north - bbox.south) > maxBboxSpanDeg || (bbox.east - bbox.west) > maxBboxSpanDeg) {
-            // A single large Overpass corridor is more likely to hit service
-            // limits than to improve the estimate.  Keep OSRM usable and let
-            // ShadowRouter retain the common heuristic comparison tier.
+        const wholeMetrics = bboxMetrics(bbox);
+        if (!wholeMetrics) return null;
+        const maxBboxAreaKm2 = Number(options.maxBboxAreaKm2 || DEFAULT_MAX_BBOX_AREA_KM2);
+        const needsTiles = (bbox.north - bbox.south) > maxBboxSpanDeg ||
+            (bbox.east - bbox.west) > maxBboxSpanDeg || wholeMetrics.areaKm2 > maxBboxAreaKm2;
+        const tiles = needsTiles ? splitRouteIntoSceneTiles(coordinates, options) : [{ bbox, routeCoordinates: coordinates }];
+        const maxSceneTiles = Number(options.maxSceneTiles || DEFAULT_MAX_SCENE_TILES);
+        const totalTileAreaKm2 = tiles.reduce((total, tile) => total + (bboxMetrics(tile.bbox)?.areaKm2 || Infinity), 0);
+        const maxSceneTotalAreaKm2 = Number(options.maxSceneTotalAreaKm2 || DEFAULT_MAX_SCENE_TOTAL_AREA_KM2);
+        if (!tiles.length || tiles.length > maxSceneTiles || totalTileAreaKm2 > maxSceneTotalAreaKm2) {
+            // The optional scene layer must never turn a large route into an
+            // unbounded Overpass workload. OSRM remains available and the
+            // router will keep the common heuristic comparison tier.
             return null;
         }
         const plan = makeTerrainPlan(coordinates, options);
-        const overpassPromise = loadOverpassData(bbox, origin, options).catch(error => {
-            if (options.signal && options.signal.aborted) throw error;
-            return { buildings: [], tunnels: [], available: false, error: String(error && error.message || error) };
-        });
+        const overpassPromise = (async () => {
+            const results = [];
+            for (const tile of tiles) {
+                if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
+                try {
+                    results.push(await loadOverpassData(tile.bbox, origin, options));
+                } catch (error) {
+                    if (options.signal && options.signal.aborted) throw error;
+                    results.push({ buildings: [], tunnels: [], available: false, error: String(error && error.message || error) });
+                }
+            }
+            return mergeOverpassData(results);
+        })();
         const terrainPromise = loadTerrainSamples(plan.pointRecords, options).catch(error => {
             if (options.signal && options.signal.aborted) throw error;
             return new Map();
@@ -432,7 +538,6 @@
             const local = projectPoint(record.lat, record.lng, origin);
             return { key: record.key, lat: record.lat, lng: record.lng, x: local.x, y: local.y, elevation: terrain.has(record.key) ? terrain.get(record.key) : null };
         });
-        assignBuildingGroundElevations(overpass.buildings || [], terrainSamples);
         const profiles = plan.profiles.map(profile => ({
             coordinateIndex: profile.coordinateIndex,
             anchor: terrainSamples.find(p => p.key === profile.anchorKey) || null,
@@ -441,24 +546,37 @@
             distances: profile.distances,
             elevations: profile.probeKeys.map(key => terrain.has(key) ? terrain.get(key) : null)
         }));
+        const allBuildings = overpass.buildings || [];
+        const relevantBuildings = selectRelevantBuildings(allBuildings, profiles, MAX_SHADOW_RAY_DISTANCE_METERS);
+        assignBuildingGroundElevations(relevantBuildings, terrainSamples);
         const terrainAvailable = terrainSamples.some(p => finite(p.elevation));
-        const buildingGroundAvailable = (overpass.buildings || []).every(building => finite(building.ground));
+        const buildingGroundAvailable = relevantBuildings.every(building => finite(building.ground));
         const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, (_, segmentIndex) => {
             const nearbyProfile = profiles
                 .filter(profile => profile.anchor && profile.elevations.every(finite))
                 .sort((a, b) => Math.abs(a.coordinateIndex - segmentIndex) - Math.abs(b.coordinateIndex - segmentIndex))[0];
             const profileSpacing = coordinates.length / Math.max(1, profiles.length - 1);
             const terrainCovered = !!nearbyProfile && Math.abs(nearbyProfile.coordinateIndex - segmentIndex) <= Math.max(2, profileSpacing * 1.5);
+            const nearbyRelevantBuildings = relevantBuildings.filter(building =>
+                (building.relevantProfileIndices || []).some(index =>
+                    Math.abs(Number(index) - segmentIndex) <= Math.max(2, profileSpacing * 1.5)));
+            const segmentBuildingGround = nearbyRelevantBuildings.every(building => finite(building.ground));
             return {
                 buildings: !!overpass.available,
                 tunnels: !!overpass.available,
-                terrain: terrainCovered
+                terrain: terrainCovered,
+                buildingGround: !!overpass.available && segmentBuildingGround
             };
         });
         return {
             origin,
             baseElevation: finite(baseElevation) ? baseElevation : null,
-            buildings: overpass.buildings || [],
+            // Only buildings that can intersect a sampled sun ray are used by
+            // getSegmentOcclusion. Keep the full OSM result separately for
+            // diagnostics without allowing an irrelevant building to downgrade
+            // the analysis tier.
+            buildings: relevantBuildings,
+            allBuildings,
             tunnels: overpass.tunnels || [],
             terrainSamples,
             terrainProfiles: profiles,
@@ -467,14 +585,16 @@
                 buildings: !!overpass.available,
                 tunnels: !!overpass.available,
                 terrain: terrainAvailable,
-                buildingGround: !!overpass.available && buildingGroundAvailable
+                buildingGround: !!overpass.available && buildingGroundAvailable,
+                relevantBuildings: relevantBuildings.length,
+                totalBuildings: allBuildings.length
             },
             // A route is scene-comparable only when the shared Overpass data
             // and every route segment's DEM profile are available. Partial
             // coverage remains attached for diagnostics but forces the common
             // heuristic comparison tier in ShadowRouter.
             precisionReady: !!overpass.available && terrainAvailable && buildingGroundAvailable &&
-                segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain),
+                segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround),
             source: 'OpenStreetMap Overpass + OpenTopoData ASTER30m',
             sampleCount: terrainSamples.length
         };
@@ -520,6 +640,27 @@
                 building.groundSource = 'unresolved';
             }
         }
+    }
+
+    function selectRelevantBuildings(buildings, profiles, maxRayDistance = MAX_SHADOW_RAY_DISTANCE_METERS) {
+        const relevantBuildings = [];
+        for (const building of buildings || []) {
+            const profileIndices = [];
+            for (const profile of profiles || []) {
+                if (!profile.anchor || !finite(profile.elevation) || Number(profile.elevation) <= -0.833) continue;
+                const direction = {
+                    x: Math.sin(Number(profile.direction) * RAD),
+                    y: Math.cos(Number(profile.direction) * RAD)
+                };
+                const hitDistance = intersectRayWithPolygon(profile.anchor, direction, building.polygon, maxRayDistance);
+                if (hitDistance !== null) profileIndices.push(profile.coordinateIndex);
+            }
+            if (profileIndices.length > 0) {
+                building.relevantProfileIndices = profileIndices;
+                relevantBuildings.push(building);
+            }
+        }
+        return relevantBuildings;
     }
 
     function nearestTerrainElevation(point, scene) {
@@ -572,7 +713,7 @@
         if (tunnel) return { shadeScore: 1, source: 'tunnel', buildingBlocked: false, terrainBlocked: false, tunnel: true };
 
         let buildingBlocked = false;
-        if (segmentCoverage.buildings) {
+        if (segmentCoverage.buildings && segmentCoverage.buildingGround !== false) {
             for (const building of scene.buildings || []) {
                 const bounds = building.bounds;
                 if (bounds && (direction.x > 0 ? bounds.maxX < point.x : bounds.minX > point.x)) continue;
@@ -601,6 +742,9 @@
         if (buildingBlocked && terrainBlocked) return { shadeScore: 1, source: 'building+terrain', buildingBlocked, terrainBlocked, tunnel: false };
         if (buildingBlocked) return { shadeScore: 0.88, source: 'building', buildingBlocked, terrainBlocked, tunnel: false };
         if (terrainBlocked) return { shadeScore: 0.78, source: 'terrain', buildingBlocked, terrainBlocked, tunnel: false };
+        if (segmentCoverage.buildingGround === false && !terrainBlocked) {
+            return { shadeScore: null, source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false };
+        }
         if (segmentCoverage.buildings || segmentCoverage.terrain || segmentCoverage.tunnels) {
             return { shadeScore: 0, source: 'scene-clear', buildingBlocked, terrainBlocked, tunnel: false };
         }
@@ -615,10 +759,12 @@
         isTerrainRayOccluded,
         calculateDistanceMeters,
         routeBbox,
+        bboxMetrics,
+        splitRouteIntoSceneTiles,
         fetchSceneForRoute,
         getSegmentOcclusion,
         calculateRouteLengthMeters,
         getCacheStats: () => ({ overpass: overpassCache.size, terrain: terrainCache.size, ttlMs: CACHE_TTL_MS }),
-        clearCaches: () => { overpassCache.clear(); terrainCache.clear(); }
+        clearCaches: () => { overpassCache.clear(); terrainCache.clear(); terrainInflight.clear(); }
     };
 });

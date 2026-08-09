@@ -651,23 +651,71 @@ window.ShadowRouter = (function () {
         return { fastest, glareCandidates, shadeCandidates, precisionCandidates: selected };
     }
 
+    // A detour must provide a measurable purpose benefit before it can replace
+    // the fastest route. These conservative thresholds are noise guards, not
+    // medical protection claims: 5 percentage points is above normal heuristic
+    // variation, while a 35% time increase is the maximum acceptable detour.
+    const MAX_ALTERNATIVE_DETOUR_RATIO = 1.35;
+    const MIN_GLARE_IMPROVEMENT = 0.05;
+    const MIN_SHADE_IMPROVEMENT = 0.05;
+    const MIN_UV_REDUCTION_PCT = 5;
+
+    function calculateRouteTradeoff(fastest, candidate) {
+        const fastestDuration = routeDurationForSelection(fastest);
+        const candidateDuration = routeDurationForSelection(candidate);
+        const fastestAnalyzed = fastest && fastest.analyzed || {};
+        const candidateAnalyzed = candidate && candidate.analyzed || {};
+        const fastestUv = Number(fastestAnalyzed.totalUvExposureUnits) || 0;
+        const candidateUv = Number(candidateAnalyzed.totalUvExposureUnits) || 0;
+        const uvReductionPct = fastestUv > 0.00001
+            ? ((fastestUv - candidateUv) / fastestUv) * 100
+            : 0;
+        const tradeoff = {
+            detourRatio: fastestDuration > 0 && Number.isFinite(candidateDuration) ? candidateDuration / fastestDuration : Infinity,
+            extraDurationSec: Number.isFinite(candidateDuration) && Number.isFinite(fastestDuration)
+                ? Math.max(0, candidateDuration - fastestDuration) : Infinity,
+            glareImprovement: (Number(fastestAnalyzed.avgGlareRisk) || 0) - (Number(candidateAnalyzed.avgGlareRisk) || 0),
+            uvReductionPct: Math.max(0, uvReductionPct),
+            shadeImprovement: (Number(candidateAnalyzed.avgShadeCoverage) || 0) - (Number(fastestAnalyzed.avgShadeCoverage) || 0)
+        };
+        candidate.tradeoff = tradeoff;
+        return tradeoff;
+    }
+
+    function isMeaningfulGlareAlternative(tradeoff) {
+        return tradeoff.detourRatio <= MAX_ALTERNATIVE_DETOUR_RATIO &&
+            tradeoff.glareImprovement >= MIN_GLARE_IMPROVEMENT;
+    }
+
+    function isMeaningfulShadeAlternative(tradeoff) {
+        return tradeoff.detourRatio <= MAX_ALTERNATIVE_DETOUR_RATIO &&
+            (tradeoff.uvReductionPct >= MIN_UV_REDUCTION_PCT || tradeoff.shadeImprovement >= MIN_SHADE_IMPROVEMENT);
+    }
+
     function selectRouteRoles(routes) {
         if (!Array.isArray(routes) || routes.length === 0) return { fastest: null, glareFree: null, shade: null };
         const fastest = stableSortRoutes(routes, (a, b) => routeDurationForSelection(a) - routeDurationForSelection(b))[0];
         const alternatives = routes.filter(route => route.id !== fastest.id);
+        fastest.tradeoff = {
+            detourRatio: 1,
+            extraDurationSec: 0,
+            glareImprovement: 0,
+            uvReductionPct: 0,
+            shadeImprovement: 0
+        };
         if (alternatives.length === 0) return { fastest, glareFree: fastest, shade: fastest };
-        const glareFree = stableSortRoutes(alternatives, (a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk)[0];
-        const shadeSorted = stableSortRoutes(alternatives, (a, b) => {
-            const uvDifference = a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits;
-            return Math.abs(uvDifference) > 0.001 ? uvDifference : b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage;
-        });
-        const remainingForShade = alternatives.filter(route => route.id !== glareFree.id);
-        const shade = remainingForShade.length > 0
-            ? stableSortRoutes(remainingForShade, (a, b) => {
-                const uvDifference = a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits;
-                return Math.abs(uvDifference) > 0.001 ? uvDifference : b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage;
-            })[0]
-            : shadeSorted[0];
+        const scored = alternatives.map(route => ({ route, tradeoff: calculateRouteTradeoff(fastest, route) }));
+        const glarePool = scored.filter(item => isMeaningfulGlareAlternative(item.tradeoff));
+        const glareFree = glarePool.length > 0
+            ? stableSortRoutes(glarePool, (a, b) => a.route.analyzed.avgGlareRisk - b.route.analyzed.avgGlareRisk ||
+                a.tradeoff.extraDurationSec - b.tradeoff.extraDurationSec).map(item => item.route)[0]
+            : fastest;
+        const shadePool = scored.filter(item => item.route.id !== glareFree.id && isMeaningfulShadeAlternative(item.tradeoff));
+        const sameGlareShade = scored.find(item => item.route.id === glareFree.id && isMeaningfulShadeAlternative(item.tradeoff));
+        const shade = shadePool.length > 0
+            ? stableSortRoutes(shadePool, (a, b) => a.tradeoff.uvReductionPct > b.tradeoff.uvReductionPct ? -1 :
+                (a.tradeoff.uvReductionPct < b.tradeoff.uvReductionPct ? 1 : b.route.analyzed.avgShadeCoverage - a.route.analyzed.avgShadeCoverage)).map(item => item.route)[0]
+            : (sameGlareShade ? glareFree : fastest);
         return { fastest, glareFree, shade };
     }
 
@@ -926,6 +974,10 @@ window.ShadowRouter = (function () {
     let workerCallId = 0;
     const workerCallbacks = new Map();
     let workerUnavailable = false;
+    let workerGeneration = 0;
+    let workerRestartCount = 0;
+    const MAX_WORKER_RESTARTS = 1;
+    const DEFAULT_WORKER_TIMEOUT_MS = 8000;
 
     function createAbortError() {
         const error = new Error('Solar analysis request was aborted');
@@ -950,9 +1002,10 @@ window.ShadowRouter = (function () {
         }
     }
 
-    function fallbackPendingWorkerCalls() {
+    function fallbackPendingWorkerCalls(generation = null) {
         const pending = Array.from(workerCallbacks.entries());
         pending.forEach(([id, callback]) => {
+            if (generation !== null && callback.generation !== generation) return;
             try {
                 if (callback.signal && callback.signal.aborted) {
                     settleWorkerCallback(id, 'reject', createAbortError());
@@ -965,33 +1018,44 @@ window.ShadowRouter = (function () {
         });
     }
 
-    function markWorkerUnavailable(error) {
+    function markWorkerUnavailable(error, generation = null, allowRestart = true) {
         if (error) console.warn('Solar Worker unavailable; using synchronous analysis:', error);
-        workerUnavailable = true;
+        if (generation !== null && generation !== workerGeneration) return;
         const failedWorker = solarWorker;
         solarWorker = null;
+        workerGeneration++;
         if (failedWorker && typeof failedWorker.terminate === 'function') {
             try { failedWorker.terminate(); } catch (terminateError) { /* best effort */ }
         }
         // Resolve all in-flight analyses immediately.  They must not remain
         // pending until the 8-second hung-worker safety timeout.
-        fallbackPendingWorkerCalls();
+        fallbackPendingWorkerCalls(generation);
+        if (allowRestart && workerRestartCount < MAX_WORKER_RESTARTS) {
+            workerRestartCount++;
+            workerUnavailable = false;
+        } else {
+            workerUnavailable = true;
+        }
     }
 
     function initSolarWorker() {
         if (workerUnavailable) return false;
         if (solarWorker) return true;
         try {
-            solarWorker = new Worker('js/solar-worker.js');
-            solarWorker.onmessage = function (e) {
+            const worker = new Worker('js/solar-worker.js');
+            const generation = ++workerGeneration;
+            solarWorker = worker;
+            worker.onmessage = function (e) {
+                if (solarWorker !== worker || workerGeneration !== generation) return;
                 const { id, result } = e.data;
                 if (workerCallbacks.has(id)) settleWorkerCallback(id, 'resolve', result);
             };
-            solarWorker.onerror = markWorkerUnavailable;
-            solarWorker.onmessageerror = markWorkerUnavailable;
+            worker.onerror = error => markWorkerUnavailable(error, generation, true);
+            worker.onmessageerror = error => markWorkerUnavailable(error, generation, true);
             return true;
         } catch (e) {
-            markWorkerUnavailable(e);
+            workerUnavailable = true;
+            fallbackPendingWorkerCalls();
             return false;
         }
     }
@@ -1000,7 +1064,7 @@ window.ShadowRouter = (function () {
      * Async version of analyzeRouteSegments that runs in a Web Worker.
      * Falls back to synchronous main-thread computation if Worker is unavailable.
      */
-    function analyzeRouteSegmentsAsync(coordinates, dateObj, durationSec, steps, scene = null, signal = null) {
+    function analyzeRouteSegmentsAsync(coordinates, dateObj, durationSec, steps, scene = null, signal = null, workerOptions = {}) {
         // Build time lookup on main thread (lightweight) so Worker gets it ready
         const timeLookup = buildStepTimeLookup(coordinates, steps, durationSec);
 
@@ -1014,6 +1078,8 @@ window.ShadowRouter = (function () {
         if (signal && signal.aborted) return Promise.reject(createAbortError());
 
         if (initSolarWorker() && solarWorker) {
+            const generation = workerGeneration;
+            const timeoutMs = Math.max(1, Number(workerOptions.timeoutMs || DEFAULT_WORKER_TIMEOUT_MS));
             return new Promise((resolve, reject) => {
                 const id = ++workerCallId;
                 const callback = {
@@ -1021,6 +1087,7 @@ window.ShadowRouter = (function () {
                     reject,
                     fallback,
                     signal,
+                    generation,
                     timeoutId: null,
                     abortHandler: null
                 };
@@ -1032,12 +1099,16 @@ window.ShadowRouter = (function () {
                 callback.timeoutId = setTimeout(() => {
                     if (workerCallbacks.has(id)) {
                         try {
-                            settleWorkerCallback(id, 'resolve', fallback());
+                            // A silent worker is unhealthy too. Terminate the
+                            // generation and settle every pending callback;
+                            // the bounded restart budget prevents repeated
+                            // multi-second stalls during one app session.
+                            markWorkerUnavailable(new Error('Solar Worker response timeout'), generation, true);
                         } catch (error) {
                             settleWorkerCallback(id, 'reject', error);
                         }
                     }
-                }, 8000);
+                }, timeoutMs);
 
                 try {
                     solarWorker.postMessage({
@@ -1049,7 +1120,7 @@ window.ShadowRouter = (function () {
                         scene
                     });
                 } catch (error) {
-                    markWorkerUnavailable(error);
+                    markWorkerUnavailable(error, generation, true);
                 }
             }).then(result => {
                 if (signal && signal.aborted) throw createAbortError();
@@ -1082,6 +1153,7 @@ window.ShadowRouter = (function () {
         areRoutesGeometricallySimilar: areRoutesGeometricallySimilar,
         selectPrecisionCandidates: selectPrecisionCandidates,
         selectRouteRoles: selectRouteRoles,
+        calculateRouteTradeoff: calculateRouteTradeoff,
         applyExposureReductions: applyExposureReductions,
         routeContainsToll: routeContainsToll,
         areValidRouteCoordinates: areValidRouteCoordinates,
