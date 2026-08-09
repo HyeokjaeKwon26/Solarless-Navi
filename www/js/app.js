@@ -49,6 +49,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let routeData = null;
     let selectedRouteObj = null;
     let activeRoutePolylineGroup = null;
+    let dynamicRemainingPolylineGroup = null;
+    let dynamicRemainingLayers = new Map();
+    let dynamicRemainingRouteId = null;
+    let dynamicRemainingSegmentIndex = null;
     let startMarker = null;
     let endMarker = null;
 
@@ -83,6 +87,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastRoadDataErrorNotice = 0;
     let speedLimitRequestGeneration = 0;
     let speedLimitAbortController = null;
+    let speedLimitRequestStartedAt = 0;
+    let lastSpeedLimitQueryPosition = null;
+    let lastSpeedLimitQuerySegment = null;
+    let lastSpeedLimitQueryHeading = null;
+    let lastSpeedLimitQueryRouteKey = null;
+    const SPEED_LIMIT_MIN_REFRESH_MS = 6000;
+    const SPEED_LIMIT_MAX_REFRESH_MS = 30000;
+    const SPEED_LIMIT_MOVE_REFRESH_METERS = 65;
+    const SPEED_LIMIT_HEADING_REFRESH_DEGREES = 25;
     let isSpeedingWarningActive = false;
     let lastSpeedingAnnounceTime = 0;
     let isAmbientLightDark = false;
@@ -275,6 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
         OfflineMap.registerOfflineTileCache(lightTileLayerEn);
 
         activeRoutePolylineGroup = L.featureGroup().addTo(map);
+        dynamicRemainingPolylineGroup = L.featureGroup().addTo(map);
 
         disableMapEventsOnUI();
         const attribution = document.getElementById('map-attribution');
@@ -307,7 +321,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderRecentDestinationHistory();
         updateModeButtonsHighlight();
         setNavigationButtonsEnabled(false);
-        requestUserGpsLocation(true);
+        setupPermissionOnboarding();
+        setupPipUi();
 
         setTimeout(checkGitHubLatestVersion, 2500);
     }
@@ -730,6 +745,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (bannerDesc) bannerDesc.innerText = descText;
             if (bannerIcon) bannerIcon.innerHTML = getManeuverIcon(nextManeuver.type, nextManeuver.modifier);
+            updatePipHud(descText, document.getElementById('sum-time')?.innerText || '--', formattedDist);
         } else {
             // No upcoming maneuver or arrived — show glare/safe status
             const formattedDist = '—';
@@ -744,6 +760,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 banner.classList.remove('hazard');
                 if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
             }
+            updatePipHud(bannerDesc ? bannerDesc.innerText : '--', document.getElementById('sum-time')?.innerText || '--', formattedDist);
         }
     }
 
@@ -1173,6 +1190,7 @@ document.addEventListener('DOMContentLoaded', () => {
             navigator.geolocation.clearWatch(gpsWatchId);
         }
         gpsWatchId = null;
+        stopVehicleMarkerAnimation();
     }
 
     async function enableKeepAwake() {
@@ -1213,9 +1231,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     // Android may revoke a screen WakeLock when the WebView is
                     // backgrounded. Release our sentinel explicitly as well.
                     disableKeepAwake();
+                    stopVehicleMarkerAnimation();
                     return;
                 }
                 if (isLiveNavActive) enableKeepAwake();
+                if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
                 if (currentEnd) {
                     console.log("App resumed to foreground. Refreshing GPS position...");
                     requestUserGpsLocation(false);
@@ -1224,13 +1244,79 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'hidden') disableKeepAwake();
+            if (document.visibilityState === 'hidden') {
+                disableKeepAwake();
+                stopVehicleMarkerAnimation();
+            }
             else {
                 if (isLiveNavActive) enableKeepAwake();
+                if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
                 updateSunInfo();
             }
         });
-        window.addEventListener('pagehide', () => disableKeepAwake());
+        window.addEventListener('pagehide', () => {
+            disableKeepAwake();
+            stopVehicleMarkerAnimation();
+        });
+    }
+
+    async function setupPermissionOnboarding() {
+        const overlay = document.getElementById('permission-onboarding');
+        const status = document.getElementById('permission-onboarding-status');
+        const request = document.getElementById('btn-request-location');
+        const skip = document.getElementById('btn-skip-onboarding');
+        if (!overlay || !request || !skip) return;
+        const hide = () => { overlay.classList.add('hidden'); try { localStorage.setItem('solarless_onboarding_seen', '1'); } catch (e) {} };
+        const update = async () => {
+            let state = 'prompt';
+            try {
+                if (navigator.permissions && navigator.permissions.query) state = (await navigator.permissions.query({ name: 'geolocation' })).state;
+            } catch (e) { /* WebView may not expose Permissions API. */ }
+            if (status) status.textContent = state === 'granted' ? I18n.getText('permissionAllowed') : (state === 'denied' ? I18n.getText('permissionDenied') : I18n.getText('permissionPrompt'));
+            let seen = false;
+            try { seen = localStorage.getItem('solarless_onboarding_seen') === '1'; } catch (e) {}
+            if (state === 'granted') { hide(); requestUserGpsLocation(true); }
+            else if (state === 'denied' || !seen) overlay.classList.remove('hidden');
+            else overlay.classList.add('hidden');
+        };
+        request.addEventListener('click', () => {
+            try { localStorage.setItem('solarless_onboarding_seen', '1'); } catch (e) {}
+            hide();
+            requestUserGpsLocation(true);
+        });
+        skip.addEventListener('click', hide);
+        await update();
+        window.addEventListener('pageshow', update);
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') update(); });
+    }
+
+    function setupPipUi() {
+        if (!window.PipController) return;
+        window.addEventListener('solarless:pipmode', event => {
+            if (map) setTimeout(() => map.invalidateSize({ animate: false }), 80);
+            if (event && event.detail && event.detail.inPip) stopVehicleMarkerAnimation();
+            else if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
+        });
+        const toggle = document.getElementById('toggle-pip-auto');
+        const status = document.getElementById('pip-support-status');
+        const settings = document.getElementById('btn-pip-settings');
+        if (toggle) {
+            toggle.checked = window.PipController.getAutoEnter();
+            toggle.addEventListener('change', () => { window.PipController.setAutoEnter(toggle.checked); window.PipController.update(); });
+        }
+        if (settings) settings.addEventListener('click', () => window.PipController.openSettings());
+        window.PipController.init().then(result => {
+            if (status) status.textContent = result && result.supported ? I18n.getText('pipSupported') : I18n.getText('pipUnsupported');
+        });
+    }
+
+    function updatePipHud(nextText, etaText, distanceText) {
+        const next = document.getElementById('pip-mini-next');
+        const eta = document.getElementById('pip-mini-eta');
+        const distance = document.getElementById('pip-mini-distance');
+        if (next && nextText !== undefined) next.textContent = nextText;
+        if (eta && etaText !== undefined) eta.textContent = etaText;
+        if (distance && distanceText !== undefined) distance.textContent = distanceText;
     }
 
     function setupSolarRefreshTimer() {
@@ -1395,119 +1481,150 @@ document.addEventListener('DOMContentLoaded', () => {
     let targetSnapLng = null;
     let targetSnapHeading = 0;
     let vehicleAnimFrameId = null;
+    let vehicleAnimationStartedAt = 0;
+    let vehicleAnimationFrom = null;
+    let lastVehicleMapPanAt = 0;
     let lastAppliedMapRotation = null;
     let stableGpsHeading = 0;
     let lastStableMovingGps = null;
 
-    function startVehicleMarkerAnimationLoop() {
-        if (vehicleAnimFrameId) return;
-
-        function animateFrame() {
-            if (targetSnapLat !== null && targetSnapLng !== null) {
-                if (currentSmoothLat === null || currentSmoothLng === null) {
-                    currentSmoothLat = targetSnapLat;
-                    currentSmoothLng = targetSnapLng;
-                    currentSmoothHeading = targetSnapHeading;
-                } else {
-                    // Low-pass EMA Filter for Position Smoothing (alpha = 0.20)
-                    currentSmoothLat += (targetSnapLat - currentSmoothLat) * 0.20;
-                    currentSmoothLng += (targetSnapLng - currentSmoothLng) * 0.20;
-
-                    // Shortest Arc Angular Difference Smoothing for Heading (beta = 0.15)
-                    let angleDiff = ((targetSnapHeading - currentSmoothHeading + 540) % 360) - 180;
-                    // Deadband hysteresis: ignore micro-wobbles under 1.8 degrees to prevent indoor rotation jitter
-                    if (Math.abs(angleDiff) > 1.8) {
-                        currentSmoothHeading = (currentSmoothHeading + angleDiff * 0.15 + 360) % 360;
-                    }
-                }
-
-                currentHeading = currentSmoothHeading;
-
-                const vehicleMarkerRotation = currentSmoothHeading;
-
-                const vehicleIconHtml = `
-                    <div class="vehicle-marker-wrapper">
-                        <div class="vehicle-radar-cone" style="transform: rotate(${vehicleMarkerRotation}deg); transform-origin: 50% 100%;"></div>
-                        <div class="vehicle-marker-core" style="transform: rotate(${vehicleMarkerRotation}deg);">
-                            <svg class="vehicle-svg-arrow" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="#ffffff" stroke="#0369a1" stroke-width="1.5" stroke-linejoin="round"/>
-                            </svg>
-                        </div>
-                    </div>
-                `;
-
-                const vehicleIcon = L.divIcon({
-                    className: 'custom-vehicle-marker',
-                    html: vehicleIconHtml,
-                    iconSize: [48, 48],
-                    iconAnchor: [24, 24]
-                });
-
-                if (startMarker) {
-                    startMarker.setLatLng([currentSmoothLat, currentSmoothLng]);
-                    startMarker.setIcon(vehicleIcon);
-                } else {
-                    startMarker = L.marker([currentSmoothLat, currentSmoothLng], { icon: vehicleIcon }).addTo(map);
-                }
-
-                const carArrow = document.getElementById('car-heading-arrow');
-                if (carArrow) carArrow.style.transform = `translate(-50%, -50%) rotate(${currentSmoothHeading}deg)`;
-
-                if (isLiveNavActive && !isUserMapPanning && map) {
-                    map.setView([currentSmoothLat, currentSmoothLng], 17.5, { animate: false });
-                    applyMapRotation(currentSmoothHeading);
-                }
-            }
-
-            vehicleAnimFrameId = requestAnimationFrame(animateFrame);
+    function stopVehicleMarkerAnimation() {
+        if (vehicleAnimFrameId !== null && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(vehicleAnimFrameId);
         }
+        vehicleAnimFrameId = null;
+        vehicleAnimationStartedAt = 0;
+        vehicleAnimationFrom = null;
+    }
 
+    function prefersReducedMotion() {
+        return isBatterySaverActive || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    }
+
+    function renderVehicleMarker() {
+        if (!map || currentSmoothLat === null || currentSmoothLng === null) return;
+        if (!startMarker) {
+            const vehicleIcon = L.divIcon({
+                className: 'custom-vehicle-marker',
+                html: `<div class="vehicle-marker-wrapper"><div class="vehicle-radar-cone"></div><div class="vehicle-marker-core"><svg class="vehicle-svg-arrow" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L4 21L12 17L20 21L12 2Z" fill="#ffffff" stroke="#0369a1" stroke-width="1.5" stroke-linejoin="round"/></svg></div></div>`,
+                iconSize: [48, 48],
+                iconAnchor: [24, 24]
+            });
+            startMarker = L.marker([currentSmoothLat, currentSmoothLng], { icon: vehicleIcon }).addTo(map);
+        } else {
+            startMarker.setLatLng([currentSmoothLat, currentSmoothLng]);
+        }
+        const markerElement = startMarker.getElement && startMarker.getElement();
+        if (markerElement) {
+            const cone = markerElement.querySelector('.vehicle-radar-cone');
+            const core = markerElement.querySelector('.vehicle-marker-core');
+            if (cone) cone.style.transform = `rotate(${currentSmoothHeading}deg)`;
+            if (core) core.style.transform = `rotate(${currentSmoothHeading}deg)`;
+        }
+        const carArrow = document.getElementById('car-heading-arrow');
+        if (carArrow) carArrow.style.transform = `translate(-50%, -50%) rotate(${currentSmoothHeading}deg)`;
+        const now = Date.now();
+        if (isLiveNavActive && !isUserMapPanning && map && now - lastVehicleMapPanAt >= 66) {
+            lastVehicleMapPanAt = now;
+            map.setView([currentSmoothLat, currentSmoothLng], 17.5, { animate: false });
+            applyMapRotation(currentSmoothHeading);
+        }
+    }
+
+    function startVehicleMarkerAnimationLoop() {
+        if (targetSnapLat === null || targetSnapLng === null) return;
+        if (!isLiveNavActive || prefersReducedMotion()) {
+            currentSmoothLat = targetSnapLat;
+            currentSmoothLng = targetSnapLng;
+            currentSmoothHeading = targetSnapHeading;
+            currentHeading = currentSmoothHeading;
+            renderVehicleMarker();
+            stopVehicleMarkerAnimation();
+            return;
+        }
+        if (vehicleAnimFrameId !== null) return;
+        vehicleAnimationFrom = {
+            lat: currentSmoothLat === null ? targetSnapLat : currentSmoothLat,
+            lng: currentSmoothLng === null ? targetSnapLng : currentSmoothLng,
+            heading: currentSmoothLat === null ? targetSnapHeading : currentSmoothHeading
+        };
+        vehicleAnimationStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const animateFrame = (timestamp) => {
+            if (!isLiveNavActive || document.visibilityState === 'hidden' || targetSnapLat === null || targetSnapLng === null) {
+                stopVehicleMarkerAnimation();
+                return;
+            }
+            const now = Number(timestamp) || Date.now();
+            const progress = Math.min(1, Math.max(0, (now - vehicleAnimationStartedAt) / 400));
+            const from = vehicleAnimationFrom || { lat: targetSnapLat, lng: targetSnapLng, heading: targetSnapHeading };
+            let headingDelta = ((targetSnapHeading - from.heading + 540) % 360) - 180;
+            currentSmoothLat = from.lat + (targetSnapLat - from.lat) * progress;
+            currentSmoothLng = from.lng + (targetSnapLng - from.lng) * progress;
+            currentSmoothHeading = (from.heading + headingDelta * progress + 360) % 360;
+            currentHeading = currentSmoothHeading;
+            renderVehicleMarker();
+            if (progress >= 1 || (Math.abs(targetSnapLat - currentSmoothLat) < 0.0000001 && Math.abs(targetSnapLng - currentSmoothLng) < 0.0000001 && Math.abs(headingDelta) < 0.5)) {
+                currentSmoothLat = targetSnapLat;
+                currentSmoothLng = targetSnapLng;
+                currentSmoothHeading = targetSnapHeading;
+                currentHeading = currentSmoothHeading;
+                renderVehicleMarker();
+                stopVehicleMarkerAnimation();
+                return;
+            }
+            vehicleAnimFrameId = requestAnimationFrame(animateFrame);
+        };
         vehicleAnimFrameId = requestAnimationFrame(animateFrame);
     }
 
-    function renderDynamicRemainingPath(carLat, carLng, carHeading) {
-        if (!selectedRouteObj || !selectedRouteObj.analyzed || !selectedRouteObj.analyzed.segments || !activeRoutePolylineGroup) {
+    function renderDynamicRemainingPath(carLat, carLng, carHeading, knownSnap = null) {
+        if (!selectedRouteObj || !selectedRouteObj.analyzed || !selectedRouteObj.analyzed.segments || !dynamicRemainingPolylineGroup) {
             return;
         }
 
         const coords = selectedRouteObj.analyzed.coordinates;
-        const snap = ShadowRouter.snapPositionAndHeadingToRoad(carLat, carLng, carHeading, coords);
+        const routeIdentity = selectedRouteObj.id || `geometry:${coords.length}:${JSON.stringify(coords[0])}:${JSON.stringify(coords[coords.length - 1])}`;
+        const snap = knownSnap || ShadowRouter.snapPositionAndHeadingToRoad(carLat, carLng, carHeading, coords);
+        if (selectedRouteObj.analyzed.segments.length === 0) return;
         const segIdx = Math.max(0, Math.min(selectedRouteObj.analyzed.segments.length - 1, snap.segmentIndex || 0));
         const segments = selectedRouteObj.analyzed.segments;
-
-        activeRoutePolylineGroup.clearLayers();
-
-        // 1. Current segment (from vehicle snapped position to end of this segment)
-        if (segIdx < segments.length) {
-            const curSeg = segments[segIdx];
-            let curColor = '#0284c7';
-            if (curSeg.glareRisk > 0.45) curColor = '#f59e0b';
-            else if (curSeg.shadeScore > 0.5) curColor = '#7c3aed';
-
-            L.polyline([[snap.lat, snap.lng], curSeg.p2], {
-                color: curColor,
-                weight: 8,
-                opacity: 0.95,
-                lineCap: 'round',
-                lineJoin: 'round'
-            }).addTo(activeRoutePolylineGroup);
+        if (dynamicRemainingRouteId !== routeIdentity) {
+            dynamicRemainingPolylineGroup.clearLayers();
+            dynamicRemainingLayers = new Map();
+            dynamicRemainingRouteId = routeIdentity;
+            dynamicRemainingSegmentIndex = null;
         }
-
-        // 2. All remaining forward segments to destination
-        for (let i = segIdx + 1; i < segments.length; i++) {
+        const colorForSegment = seg => seg.glareRisk > 0.45 ? '#f59e0b' : (seg.shadeScore > 0.5 ? '#7c3aed' : '#0284c7');
+        // Reuse one Leaflet layer per segment. GPS ticks update only the
+        // current segment; unchanged future layers keep their DOM/SVG path.
+        if (dynamicRemainingSegmentIndex === segIdx && dynamicRemainingLayers.size > 0) {
+            const currentLayer = dynamicRemainingLayers.get(segIdx);
+            if (currentLayer) currentLayer.setLatLngs([[snap.lat, snap.lng], segments[segIdx].p2]);
+            const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(snap.lat, snap.lng, coords, segIdx);
+            const totalDist = selectedRouteObj.distanceMeters || 1;
+            const remSec = Math.max(30, Math.round((remDistMeters / totalDist) * selectedRouteObj.durationSec));
+            const isKo = I18n.getLanguage().startsWith('ko');
+            const sumTimeEl = document.getElementById('sum-time');
+            const sumDistEl = document.getElementById('sum-dist');
+            if (sumTimeEl) sumTimeEl.innerText = `${Math.max(1, Math.round(remSec / 60))}${isKo ? 'm' : 'm'}`;
+            if (sumDistEl) sumDistEl.innerText = `${(remDistMeters / 1000).toFixed(1)} km`;
+            return;
+        }
+        for (let i = 0; i < segments.length; i++) {
             const seg = segments[i];
-            let segColor = '#0284c7';
-            if (seg.glareRisk > 0.45) segColor = '#f59e0b';
-            else if (seg.shadeScore > 0.5) segColor = '#7c3aed';
-
-            L.polyline([seg.p1, seg.p2], {
-                color: segColor,
-                weight: 8,
-                opacity: 0.95,
-                lineCap: 'round',
-                lineJoin: 'round'
-            }).addTo(activeRoutePolylineGroup);
+            let layer = dynamicRemainingLayers.get(i);
+            if (!layer) {
+                layer = L.polyline([], {
+                    color: colorForSegment(seg), weight: 8, opacity: 0.95,
+                    lineCap: 'round', lineJoin: 'round'
+                }).addTo(dynamicRemainingPolylineGroup);
+                dynamicRemainingLayers.set(i, layer);
+            }
+            if (i < segIdx) layer.setLatLngs([]);
+            else if (i === segIdx) layer.setLatLngs([[snap.lat, snap.lng], seg.p2]);
+            else layer.setLatLngs([seg.p1, seg.p2]);
         }
+        dynamicRemainingSegmentIndex = segIdx;
 
         // 3. Dynamic remaining distance and ETA calculation
         const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(snap.lat, snap.lng, coords, segIdx);
@@ -1537,7 +1654,7 @@ document.addEventListener('DOMContentLoaded', () => {
         startVehicleMarkerAnimationLoop();
 
         if (isLiveNavActive && selectedRouteObj) {
-            renderDynamicRemainingPath(snapResult.lat, snapResult.lng, snapResult.heading);
+            renderDynamicRemainingPath(snapResult.lat, snapResult.lng, snapResult.heading, snapResult);
         }
     }
 
@@ -1860,9 +1977,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isMidDrive || isLiveNavActive) {
             if (currentStart) {
                 updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
-                if (!isUserMapPanning && map) {
-                    map.setView([currentStart.lat, currentStart.lng], 17.5, { animate: true });
-                }
             }
         }
     }
@@ -2010,6 +2124,11 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             activeRoutePolylineGroup = L.featureGroup().addTo(map);
         }
+        if (!dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup = L.featureGroup().addTo(map);
+        dynamicRemainingPolylineGroup.clearLayers();
+        dynamicRemainingLayers = new Map();
+        dynamicRemainingRouteId = selectedRouteObj.id || null;
+        dynamicRemainingSegmentIndex = null;
 
         const endIcon = L.divIcon({
             className: 'custom-map-marker end',
@@ -2038,7 +2157,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const segments = selectedRouteObj.analyzed.segments;
-        if (segments) {
+        const useDynamicRemainingPath = isLiveDrive && isLiveNavActive;
+        if (segments && !useDynamicRemainingPath) {
             segments.forEach(seg => {
                 let segColor = '#0284c7';
                 if (seg.glareRisk > 0.45) segColor = '#f59e0b';
@@ -2070,6 +2190,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (activeRoutePolylineGroup) {
             activeRoutePolylineGroup.clearLayers();
         }
+        if (dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup.clearLayers();
+        dynamicRemainingLayers = new Map();
+        dynamicRemainingRouteId = null;
+        dynamicRemainingSegmentIndex = null;
         if (endMarker) {
             map.removeLayer(endMarker);
             endMarker = null;
@@ -2314,13 +2438,89 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    function getRoadRuleQueryContext(lat, lng) {
+        const context = { heading: currentHeading, segmentIndex: null, position: { lat, lng }, routeKey: null };
+        if (selectedRouteObj && selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)) {
+            context.routeKey = selectedRouteObj.id || verifiedRouteRequestKey || null;
+            const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, currentHeading, selectedRouteObj.analyzed.coordinates);
+            const segment = selectedRouteObj.analyzed.coordinates[snap.segmentIndex || 0];
+            const nextSegment = selectedRouteObj.analyzed.coordinates[(snap.segmentIndex || 0) + 1];
+            context.segmentIndex = snap.segmentIndex || 0;
+            if (segment && nextSegment) {
+                context.heading = ShadowRouter.calculateBearing(segment[1], segment[0], nextSegment[1], nextSegment[0]);
+                context.name = selectedRouteObj.maneuvers && selectedRouteObj.maneuvers.find(m => m.name)?.name || '';
+                context.ref = selectedRouteObj.maneuvers && selectedRouteObj.maneuvers.find(m => m.ref)?.ref || '';
+            }
+        }
+        return context;
+    }
+
+    function shouldRefreshRoadRules(now, context) {
+        if (!lastSpeedLimitQueryPosition) return true;
+        if (window.RouteState && typeof window.RouteState.shouldRefreshRoadRules === 'function') {
+            return window.RouteState.shouldRefreshRoadRules(now, {
+                lastPosition: lastSpeedLimitQueryPosition,
+                lastFetchAt: lastSpeedLimitFetchTime,
+                lastSegment: lastSpeedLimitQuerySegment,
+                lastHeading: lastSpeedLimitQueryHeading,
+                lastRouteKey: lastSpeedLimitQueryRouteKey
+            }, {
+                lat: context.position.lat,
+                lng: context.position.lng,
+                segmentIndex: context.segmentIndex,
+                heading: context.heading,
+                routeKey: context.routeKey
+            }, {
+                distanceMeters: ShadowRouter.calculateDistanceMeters,
+                minMoveMeters: SPEED_LIMIT_MOVE_REFRESH_METERS,
+                headingDelta: SPEED_LIMIT_HEADING_REFRESH_DEGREES,
+                maxAgeMs: SPEED_LIMIT_MAX_REFRESH_MS
+            });
+        }
+        const movedMeters = ShadowRouter.calculateDistanceMeters(
+            lastSpeedLimitQueryPosition.lat, lastSpeedLimitQueryPosition.lng,
+            context.position.lat, context.position.lng
+        );
+        const headingDelta = lastSpeedLimitQueryHeading === null
+            ? Infinity
+            : Math.abs(((context.heading - lastSpeedLimitQueryHeading + 540) % 360) - 180);
+        const segmentChanged = context.segmentIndex !== null && context.segmentIndex !== lastSpeedLimitQuerySegment;
+        const ttlExpired = now - lastSpeedLimitFetchTime >= SPEED_LIMIT_MAX_REFRESH_MS;
+        return ttlExpired || segmentChanged || movedMeters >= SPEED_LIMIT_MOVE_REFRESH_METERS ||
+            headingDelta >= SPEED_LIMIT_HEADING_REFRESH_DEGREES;
+    }
+
     /* COUNTRY-SPECIFIC ROAD SIGN DISPLAY (US MUTCD RECTANGULAR vs KR RED CIRCLE & US STOP SIGN) */
     async function updateSpeedLimitDisplay(lat, lng) {
         const now = Date.now();
+        const roadContext = getRoadRuleQueryContext(lat, lng);
+        const needsRefresh = shouldRefreshRoadRules(now, roadContext);
+        const requestInFlight = speedLimitAbortController && !speedLimitAbortController.signal.aborted;
+        const movedSinceQuery = lastSpeedLimitQueryPosition
+            ? ShadowRouter.calculateDistanceMeters(lastSpeedLimitQueryPosition.lat, lastSpeedLimitQueryPosition.lng, lat, lng)
+            : Infinity;
+        const headingSinceQuery = lastSpeedLimitQueryHeading === null
+            ? Infinity
+            : Math.abs(((roadContext.heading - lastSpeedLimitQueryHeading + 540) % 360) - 180);
+        const segmentChanged = roadContext.segmentIndex !== null && roadContext.segmentIndex !== lastSpeedLimitQuerySegment;
+        const urgentContextChange = segmentChanged || movedSinceQuery >= SPEED_LIMIT_MOVE_REFRESH_METERS ||
+            headingSinceQuery >= SPEED_LIMIT_HEADING_REFRESH_DEGREES ||
+            roadContext.routeKey !== lastSpeedLimitQueryRouteKey;
+        // Do cadence/spatial checks before touching the active request. A GPS
+        // tick must not abort a valid lookup and then return due to throttle.
+        if (!needsRefresh) return;
+        if (requestInFlight && now - speedLimitRequestStartedAt < SPEED_LIMIT_MIN_REFRESH_MS && !urgentContextChange) return;
+        if (lastSpeedLimitFetchTime && now - lastSpeedLimitFetchTime < SPEED_LIMIT_MIN_REFRESH_MS &&
+            !urgentContextChange) return;
+
         const requestGeneration = ++speedLimitRequestGeneration;
         if (speedLimitAbortController) speedLimitAbortController.abort();
-        if (now - lastSpeedLimitFetchTime < 6000) return; // 6-second throttle for API efficiency
         lastSpeedLimitFetchTime = now;
+        speedLimitRequestStartedAt = now;
+        lastSpeedLimitQueryPosition = { lat, lng };
+        lastSpeedLimitQuerySegment = roadContext.segmentIndex;
+        lastSpeedLimitQueryHeading = roadContext.heading;
+        lastSpeedLimitQueryRouteKey = roadContext.routeKey;
         const requestController = new AbortController();
         speedLimitAbortController = requestController;
 
@@ -2338,19 +2538,6 @@ document.addEventListener('DOMContentLoaded', () => {
             ? Geocoder.getCachedCountryCode(lat, lng)
             : null;
         let roadData;
-        let roadContext = { heading: currentHeading };
-        if (selectedRouteObj && selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)) {
-            const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, currentHeading, selectedRouteObj.analyzed.coordinates);
-            const segment = selectedRouteObj.analyzed.coordinates[snap.segmentIndex || 0];
-            const nextSegment = selectedRouteObj.analyzed.coordinates[(snap.segmentIndex || 0) + 1];
-            if (segment && nextSegment) {
-                roadContext = {
-                    heading: ShadowRouter.calculateBearing(segment[1], segment[0], nextSegment[1], nextSegment[0]),
-                    name: selectedRouteObj.maneuvers && selectedRouteObj.maneuvers.find(m => m.name)?.name || '',
-                    ref: selectedRouteObj.maneuvers && selectedRouteObj.maneuvers.find(m => m.ref)?.ref || ''
-                };
-            }
-        }
         try {
             roadData = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(lat, lng, {
                 countryCode: cachedCountryCode || undefined,
@@ -2359,6 +2546,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         } catch (error) {
             if (!requestController.signal.aborted && requestGeneration === speedLimitRequestGeneration) {
+                // Do not leave a previous road's limit visible after a lookup
+                // failure; an unknown limit is safer than a stale one.
+                currentSpeedLimit = null;
+                const staleLimit = document.getElementById('speed-limit-badge-kr');
+                const staleUsLimit = document.getElementById('speed-limit-badge-us');
+                if (staleLimit) staleLimit.classList.add('hidden');
+                if (staleUsLimit) staleUsLimit.classList.add('hidden');
                 showApiNotice(I18n.getText('roadDataUnavailable'));
             }
             return;
@@ -2504,6 +2698,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
         stopGpsWatch();
         isLiveNavActive = false;
+        if (window.PipController) window.PipController.setNavigationActive(false);
 
         const isKo = I18n.getLanguage().startsWith('ko');
         TTSVoice.speak(isKo ? "목적지 부근에 도착했습니다. 안내를 종료합니다." : "You have arrived at your destination. Navigation guidance completed.", true);
@@ -2555,6 +2750,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isLiveNavActive) {
             stopGpsWatch();
             isLiveNavActive = false;
+            if (window.PipController) window.PipController.setNavigationActive(false);
             recenterMapToVehicle();
 
             // Completely clear route lines, destination markers, and turn banner from map
@@ -2594,6 +2790,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         isLiveNavActive = true;
+        if (window.PipController) window.PipController.setNavigationActive(true);
         recenterMapToVehicle();
 
         const navStartTime = Date.now();
@@ -2709,11 +2906,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 updateVehicleMarkerPosition(lat, lng, heading);
 
-                // Only center map on vehicle if user is NOT panning manually!
-                if (!isUserMapPanning && !isArrived) {
-                    map.setView([lat, lng], 17.5, { animate: true });
-                    applyMapRotation(currentHeading);
-                }
+                // Marker rendering owns the throttled camera pan. Keeping a
+                // second animated setView here queues pans on every GPS fix.
 
                 const sunPos = SunCalc.getPosition(new Date(), lat, lng);
                 const glareRisk = ShadowRouter.calculateSegmentGlare(currentHeading, sunPos);

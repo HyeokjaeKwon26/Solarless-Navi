@@ -19,6 +19,9 @@ android/.idea/
 android/local.properties
 *.keystore
 *.jks
+*.apk
+*.aab
+*.mapping
 
 # OS / Editor Files
 .DS_Store

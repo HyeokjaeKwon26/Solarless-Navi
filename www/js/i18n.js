@@ -138,7 +138,21 @@ window.I18n = (function () {
             existingRouteKept: "이전 경로를 유지합니다.",
             searchNetworkError: "장소 검색 서버에 연결할 수 없습니다.",
             roadDataUnavailable: "도로 규칙 데이터를 불러오지 못했습니다. 제한속도/표지판 표시가 일시적으로 제한됩니다.",
-            mapAttribution: "지도 출처"
+            mapAttribution: "지도 출처",
+            permissionTitle: "위치 권한 안내",
+            permissionSubtitle: "내비게이션을 시작할 때 선택한 경우에만 GPS를 사용합니다.",
+            permissionAllow: "위치 허용",
+            permissionContinue: "GPS 없이 계속",
+            permissionChecking: "위치 권한을 확인하는 중…",
+            permissionAllowed: "위치 권한이 허용되었습니다.",
+            permissionDenied: "위치가 차단되었습니다. Android 설정에서 허용해 주세요.",
+            permissionPrompt: "허용 버튼을 누른 뒤에만 위치 권한을 요청합니다.",
+            pipTitle: "화면 속 화면(PiP)",
+            pipAutoTitle: "내비게이션 중 자동 진입",
+            pipAutoDesc: "선택 기능이며 오버레이·백그라운드 위치 권한을 요청하지 않습니다.",
+            pipSettings: "Android PiP 설정 열기",
+            pipUnsupported: "이 기기 또는 웹 빌드에서는 PiP를 사용할 수 없습니다.",
+            pipSupported: "이 Android 기기에서 PiP를 지원합니다."
         },
         'en-US': {
             docTitle: "SolarLess Navi | Smart Solar-Glare Avoidance Navigation",
@@ -263,7 +277,21 @@ window.I18n = (function () {
             existingRouteKept: "Keeping the previous route.",
             searchNetworkError: "The place-search services could not be reached.",
             roadDataUnavailable: "Road-rule data is unavailable; speed-limit and sign indicators may be incomplete.",
-            mapAttribution: "Map data"
+            mapAttribution: "Map data",
+            permissionTitle: "Location access",
+            permissionSubtitle: "GPS is used only after you choose to start navigation.",
+            permissionAllow: "Allow location",
+            permissionContinue: "Continue without GPS",
+            permissionChecking: "Checking location permission…",
+            permissionAllowed: "Location permission is allowed.",
+            permissionDenied: "Location is blocked. Enable it in Android settings.",
+            permissionPrompt: "Permission is requested only after you press Allow.",
+            pipTitle: "Picture-in-picture",
+            pipAutoTitle: "Auto-enter while navigating",
+            pipAutoDesc: "Optional; no overlay or background-location permission is requested.",
+            pipSettings: "Open Android PiP settings",
+            pipUnsupported: "PiP is not available in this web build/device.",
+            pipSupported: "PiP is supported on this Android device."
         }
     };
 
@@ -348,6 +376,15 @@ window.I18n = (function () {
         setElemText('satellite-title', dict.satelliteTitle);
         setElemText('satellite-desc', dict.satelliteDesc);
         setElemText('map-layer-subtitle', dict.mapLayerSubtitle);
+        setElemText('permission-onboarding-title', dict.permissionTitle);
+        setElemText('permission-onboarding-subtitle', dict.permissionSubtitle);
+        setElemText('btn-request-location', dict.permissionAllow);
+        setElemText('btn-skip-onboarding', dict.permissionContinue);
+        setElemText('permission-onboarding-status', dict.permissionChecking);
+        setElemText('pip-settings-title', dict.pipTitle);
+        setElemText('pip-auto-title', dict.pipAutoTitle);
+        setElemText('pip-auto-desc', dict.pipAutoDesc);
+        setElemText('btn-pip-settings', dict.pipSettings);
         setElemText('btn-about-app', dict.aboutAppBtn);
 
         setElemHtml('time-card-title', `<i class="fa-solid fa-clock"></i> ${dict.timeCardTitle}`);

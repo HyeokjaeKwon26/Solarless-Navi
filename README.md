@@ -297,3 +297,15 @@ This project is licensed under the **[GNU Affero General Public License v3.0 (GN
 * **Author**: **Hyeokjae Kwon, M.D., Ph.D. (권혁재 M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
 * **Freedom to Use & Share**: You are free to run, study, modify, and distribute this software under the terms of the AGPL-3.0.
 * **Strong Copyleft Requirement**: Any modifications, derivative works, or network/cloud-hosted services based on this project must also make their complete source code publicly available under the AGPL-3.0 license.
+
+## Runtime and Android limitations
+
+The route duration is an OSRM duration with a time-of-day adjustment, not live traffic. Shade, glare and exposure percentages are experimental estimates; they are not measured UV dose or medical protection. A real road route is not calculated offline: when OSRM fails, navigation remains disabled instead of using a synthetic curve.
+
+Location, search, road-rule and scene data may be sent to OSRM, Nominatim, Photon, Overpass, OpenTopoData and map tile providers. Public services can rate-limit or fail. The Android build declares optional Picture-in-Picture support on Android 8.0+ but does not request overlay or background-location permission. The current web GPS watcher is not a foreground service, so continuous background tracking is not promised. First-run onboarding explains the location request and permits continuing without GPS.
+
+## Build and release safety
+
+Node.js 20+, Android Studio/SDK, JDK 17 and the Gradle wrapper are required. `android\\gradlew.bat assembleDebug` creates a debug-signed APK for local testing. A release APK requires a private keystore supplied through Gradle properties or `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD`. `build_apk.bat` verifies the release with `apksigner` and will not copy a debug or unsigned APK. Keep the keystore, passwords, certificate fingerprint and mapping files outside the repository; set `EXPECTED_SIGNING_CERT_SHA256` when a certificate pin is required.
+
+The supported product target remains Android-focused. Runtime dependencies have no known audit findings in the production-only install; the development Capacitor CLI currently reports a transitive `tar` advisory that needs a separately tested Capacitor major upgrade.

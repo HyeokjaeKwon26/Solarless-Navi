@@ -78,12 +78,31 @@
         return schedule;
     }
 
+    function shouldRefreshRoadRules(now, state = {}, context = {}, config = {}) {
+        const lastPosition = state.lastPosition;
+        if (!lastPosition) return true;
+        if (context.routeKey && state.lastRouteKey && context.routeKey !== state.lastRouteKey) return true;
+        const distanceMeters = typeof config.distanceMeters === 'function'
+            ? config.distanceMeters(lastPosition.lat, lastPosition.lng, context.lat, context.lng)
+            : Infinity;
+        const minMoveMeters = Number(config.minMoveMeters || 65);
+        const headingDelta = state.lastHeading === null || state.lastHeading === undefined
+            ? Infinity
+            : Math.abs(((Number(context.heading) - Number(state.lastHeading) + 540) % 360) - 180);
+        const segmentChanged = context.segmentIndex !== null && context.segmentIndex !== undefined &&
+            context.segmentIndex !== state.lastSegment;
+        const ttlExpired = Number(now) - Number(state.lastFetchAt || 0) >= Number(config.maxAgeMs || 30000);
+        return ttlExpired || segmentChanged || distanceMeters >= minMoveMeters ||
+            headingDelta >= Number(config.headingDelta || 25);
+    }
+
     return {
         createRouteRequestKey,
         isRouteRequestKeyCurrent,
         normalizeTimeToken,
         rectsOverlap,
         findRectIntersections,
-        createDebouncedScheduler
+        createDebouncedScheduler,
+        shouldRefreshRoadRules
     };
 });

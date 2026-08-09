@@ -5,10 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>SolarLess Navi | 햇빛을 피하는 스마트 내비게이션</title>
     
-    <!-- Google Fonts (Outfit, Inter, JetBrains Mono) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <!-- Fonts use the platform stack so the first screen does not depend on a CDN. -->
     
     <!-- Leaflet CSS (Locally Bundled) -->
     <link rel="stylesheet" href="css/leaflet.css" />
@@ -21,6 +18,14 @@
 </head>
 <body>
     <div id="app-container">
+        <div class="start-search-overlay hidden" id="permission-onboarding" role="dialog" aria-modal="true" aria-labelledby="permission-onboarding-title">
+            <div class="start-search-card permission-card">
+                <div class="start-card-title"><i class="fa-solid fa-location-crosshairs" style="color:#38bdf8;"></i><div><h2 id="permission-onboarding-title">Location access</h2><p id="permission-onboarding-subtitle">Allow GPS only when you choose to start navigation.</p></div></div>
+                <p id="permission-onboarding-status" class="permission-status">Checking location permission…</p>
+                <p id="permission-onboarding-pip" class="permission-status">Picture-in-picture is optional and does not request background location.</p>
+                <div class="permission-actions"><button type="button" class="confirm-start-btn" id="btn-request-location"><i class="fa-solid fa-location-arrow"></i> Allow location</button><button type="button" class="about-app-link-btn" id="btn-skip-onboarding">Continue without GPS</button></div>
+            </div>
+        </div>
         <!-- Full-Screen Speeding Red Flash Warning Overlay -->
         <div class="speeding-warning-overlay hidden" id="speeding-warning-overlay"></div>
 
@@ -313,6 +318,16 @@
                 </div>
 
                 <!-- Map Layers & Styles Sub-Card -->
+                <div class="card settings-card pip-settings-card">
+                    <div class="card-header"><h3><i class="fa-solid fa-window-restore"></i> <span id="pip-settings-title">Picture-in-picture</span></h3></div>
+                    <div class="card-body">
+                        <div class="option-row"><div class="option-label-group"><span class="option-title" id="pip-auto-title">Auto-enter while navigating</span><span class="option-desc" id="pip-auto-desc">Optional Android PiP; no overlay or background-location permission.</span></div><label class="toggle-switch"><input type="checkbox" id="toggle-pip-auto"><span class="slider"></span></label></div>
+                        <button type="button" class="about-app-link-btn" id="btn-pip-settings">Open Android PiP settings</button>
+                        <small id="pip-support-status" class="permission-status"></small>
+                    </div>
+                </div>
+
+                <!-- Map Layers & Styles Sub-Card -->
                 <div class="card settings-card" style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(255, 255, 255, 0.08);">
                     <div class="card-header" style="border-bottom: 1px solid rgba(255, 255, 255, 0.06); padding-bottom: 8px;">
                         <h3 id="map-layer-subtitle" style="font-size: 13.5px; color: #94a3b8;"><i class="fa-solid fa-layer-group"></i> 지도 레이어 하위 설정</h3>
@@ -489,6 +504,7 @@
                 </div>
 
                 <div id="map"></div>
+                <div id="pip-mini-hud" class="pip-mini-hud" aria-live="polite"><span id="pip-mini-next">--</span><span id="pip-mini-eta">--</span><span id="pip-mini-distance">--</span></div>
                 <div class="map-bottom-overlay-stack" id="map-bottom-overlay-stack" aria-live="polite">
                     <div class="map-attribution" id="map-attribution" aria-label="Map attribution">
                         <span id="map-attribution-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · Tiles © <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a> / <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a></span>
@@ -612,6 +628,7 @@
     <script src="js/geocoder.js"></script>
     <script src="js/tts-voice.js"></script>
     <script src="js/offline-map.js"></script>
+    <script src="js/pip-controller.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

@@ -245,6 +245,43 @@ test('worker failure resolves immediately and disables repeated worker creation'
     assert.equal(constructorCount, 2);
 });
 
+test('silent worker is terminated on timeout and later calls use synchronous fallback', async () => {
+    let constructorCount = 0;
+    function SilentWorker() { constructorCount++; }
+    SilentWorker.prototype.postMessage = () => {};
+    SilentWorker.prototype.terminate = function () { this.terminated = true; };
+    const local = { ...sandbox, Worker: SilentWorker };
+    local.window = local;
+    local.self = local;
+    vm.createContext(local);
+    for (const file of ['js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js']) {
+        vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), local, { filename: file });
+    }
+    const request = () => local.ShadowRouter.analyzeRouteSegmentsAsync(
+        [[127, 37], [127.001, 37]], new Date(0), 100, null, null, null, { timeoutMs: 15 }
+    );
+    const first = await suppressExpectedWarnings(request);
+    assert.equal(first.analysisMode, 'heuristic');
+    const second = await suppressExpectedWarnings(request);
+    assert.equal(second.analysisMode, 'heuristic');
+    const started = Date.now();
+    const third = await suppressExpectedWarnings(request);
+    assert.ok(Date.now() - started < 100, 'worker should stay disabled after restart budget is exhausted');
+    assert.equal(third.analysisMode, 'heuristic');
+    assert.equal(constructorCount, 2);
+});
+
+test('road-rule refresh cadence ignores GPS jitter but refreshes route context changes', () => {
+    const distance = (aLat, aLng, bLat, bLng) => Math.abs(bLat - aLat) * 111320 + Math.abs(bLng - aLng) * 90000;
+    const config = { distanceMeters: distance, minMoveMeters: 65, headingDelta: 25, maxAgeMs: 30000 };
+    const state = { lastPosition: { lat: 37, lng: 127 }, lastFetchAt: 1000, lastSegment: 2, lastHeading: 90, lastRouteKey: 'route-a' };
+    assert.equal(RouteState.shouldRefreshRoadRules(2000, state, { lat: 37.0001, lng: 127, segmentIndex: 2, heading: 100, routeKey: 'route-a' }, config), false);
+    assert.equal(RouteState.shouldRefreshRoadRules(2000, state, { lat: 37.001, lng: 127, segmentIndex: 2, heading: 90, routeKey: 'route-a' }, config), true);
+    assert.equal(RouteState.shouldRefreshRoadRules(2000, state, { lat: 37, lng: 127, segmentIndex: 3, heading: 90, routeKey: 'route-a' }, config), true);
+    assert.equal(RouteState.shouldRefreshRoadRules(2000, state, { lat: 37, lng: 127, segmentIndex: 2, heading: 90, routeKey: 'route-b' }, config), true);
+    assert.equal(RouteState.shouldRefreshRoadRules(32001, state, { lat: 37, lng: 127, segmentIndex: 2, heading: 90, routeKey: 'route-a' }, config), true);
+});
+
 test('silent worker timeout terminates the generation and does not repeat the delay', async () => {
     let constructorCount = 0;
     let lastWorker = null;
@@ -979,4 +1016,14 @@ test('heading-up panning no longer resets the map DOM transform', () => {
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     assert.ok(html.includes('map-bottom-overlay-stack'));
     assert.ok(html.includes('openstreetmap.org/copyright'));
+});
+
+test('vehicle animation and remaining path use cancellable/reusable renderers', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('function stopVehicleMarkerAnimation()'));
+    assert.ok(appSource.includes('cancelAnimationFrame(vehicleAnimFrameId)'));
+    assert.ok(appSource.includes("document.visibilityState === 'hidden'"));
+    assert.ok(appSource.includes('dynamicRemainingLayers = new Map()'));
+    assert.ok(appSource.includes('knownSnap = null'));
+    assert.equal(appSource.includes('activeRoutePolylineGroup.clearLayers();\n\n        // 1. Current segment'), false);
 });

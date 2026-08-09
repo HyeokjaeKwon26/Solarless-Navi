@@ -1,5 +1,8 @@
 apply plugin: 'com.android.application'
 
+def configuredVersionCode = project.findProperty('appVersionCode')
+def configuredVersionName = project.findProperty('appVersionName')
+
 android {
     namespace "com.solaris.nav"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +10,10 @@ android {
         applicationId "com.solaris.nav"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // CI/release jobs may inject monotonically increasing values without
+        // putting a developer-specific version in source control.
+        versionCode configuredVersionCode ? configuredVersionCode.toString().toInteger() : 1
+        versionName configuredVersionName ? configuredVersionName.toString() : '1.0'
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -23,6 +28,7 @@ android {
     def releaseKeyAlias = project.findProperty('releaseKeyAlias') ?: System.getenv('RELEASE_KEY_ALIAS')
     def releaseKeyPassword = project.findProperty('releaseKeyPassword') ?: System.getenv('RELEASE_KEY_PASSWORD')
     def hasReleaseSigning = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it != null && it.toString().trim() }
+    project.ext.releaseSigningConfigured = hasReleaseSigning
 
     signingConfigs {
         release {
@@ -44,6 +50,15 @@ android {
         }
         debug {
         }
+    }
+}
+
+// A direct `assembleRelease` must not silently produce an unsigned APK. Debug
+// builds remain available without credentials; only release task graphs fail.
+gradle.taskGraph.whenReady { graph ->
+    def requestsRelease = graph.allTasks.any { task -> task.name.toLowerCase().contains('release') }
+    if (requestsRelease && !project.ext.releaseSigningConfigured) {
+        throw new GradleException('Release signing is not configured. Set releaseStoreFile/releaseStorePassword/releaseKeyAlias/releaseKeyPassword via user properties or RELEASE_* environment variables.')
     }
 }
 
