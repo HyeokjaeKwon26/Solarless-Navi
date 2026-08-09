@@ -54,10 +54,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Sync Capacitor assets
+        shell: bash
+        run: npx cap copy android
+
       - name: Build Android debug APK
         shell: bash
         run: |
-          npx cap copy android
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          bash ./gradlew assembleDebug --no-daemon
