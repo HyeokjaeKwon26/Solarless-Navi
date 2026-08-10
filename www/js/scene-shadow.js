@@ -27,6 +27,33 @@
     const DEFAULT_SCENE_TILE_ROUTE_METERS = 5000;
     const MAX_SHADOW_RAY_DISTANCE_METERS = 4500;
     const PRECOMPUTED_MANIFEST_URL = 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/ma/manifest.json';
+    const PRECOMPUTED_REGION_MANIFESTS = [
+        {
+            id: 'us-northeast',
+            url: 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/us-northeast/manifest.json',
+            bounds: { south: 38.74287, west: -80.52275, north: 47.46222, east: -66.87164 }
+        },
+        {
+            id: 'ma',
+            url: PRECOMPUTED_MANIFEST_URL,
+            bounds: { south: 41.1, west: -73.7, north: 43.0, east: -69.7 }
+        },
+        {
+            id: 'us-midwest',
+            url: 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/us-midwest/manifest.json',
+            bounds: { south: 36.0, west: -104.1, north: 49.5, east: -80.0 }
+        },
+        {
+            id: 'us-south',
+            url: 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/us-south/manifest.json',
+            bounds: { south: 24.3, west: -106.7, north: 39.1, east: -75.0 }
+        },
+        {
+            id: 'us-west',
+            url: 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/us-west/manifest.json',
+            bounds: { south: 31.3, west: -125.0, north: 49.1, east: -102.0 }
+        }
+    ];
     const PRECOMPUTED_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
     const PRECOMPUTED_CACHE_MAX_ENTRIES = 64;
     const overpassCache = new Map();
@@ -39,6 +66,14 @@
 
     function finite(value) {
         return value !== null && value !== '' && Number.isFinite(Number(value));
+    }
+
+    function precomputedSourceLabel(manifest) {
+        const region = String(manifest && (manifest.region || manifest.releaseTag) || '').trim();
+        if (region.toLowerCase() === 'ma' || region.toLowerCase().includes('massachusetts')) {
+            return 'GitHub precomputed Massachusetts scene tiles';
+        }
+        return region ? `GitHub precomputed ${region} scene tiles` : 'GitHub precomputed scene tiles';
     }
 
     function clamp(value, min, max) {
@@ -832,7 +867,7 @@
         };
     }
 
-    async function fetchPrecomputedSceneForRoute(coordinates, options = {}) {
+    async function fetchPrecomputedSceneForRouteSingle(coordinates, options = {}) {
         if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
         const routeLengthMeters = calculateRouteLengthMeters(coordinates);
         if (routeLengthMeters > Number(options.maxRouteMeters || 250000)) return null;
@@ -971,10 +1006,37 @@
             },
             precisionReady: terrainAvailable && buildingGroundAvailable &&
                 segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround),
-            source: 'GitHub precomputed Massachusetts scene tiles',
+            source: precomputedSourceLabel(manifest),
+            dataVersion: manifest.dataVersion || null,
+            profileResolution: manifest.profileResolution || null,
+            sceneCoverage: {
+                ...((manifest.sceneCoverage && typeof manifest.sceneCoverage === 'object') ? manifest.sceneCoverage : {}),
+                precomputedTiles: tileKeys.length
+            },
             sampleCount: terrainSamples.length,
             tileKeys
         };
+    }
+
+    async function fetchPrecomputedSceneForRoute(coordinates, options = {}) {
+        const candidates = options.precomputedManifestUrl
+            ? [{ id: options.precomputedRegion || 'custom', url: options.precomputedManifestUrl, bounds: options.precomputedRegionBounds }]
+            : (Array.isArray(options.precomputedRegions) && options.precomputedRegions.length
+            ? options.precomputedRegions
+            : PRECOMPUTED_REGION_MANIFESTS);
+        for (const candidate of candidates) {
+            if (!candidate || !candidate.url) continue;
+            const scene = await fetchPrecomputedSceneForRouteSingle(coordinates, {
+                ...options,
+                precomputedManifestUrl: candidate.url,
+                precomputedRegionBounds: candidate.bounds || options.precomputedRegionBounds
+            });
+            if (scene) {
+                scene.region = candidate.id || scene.region || null;
+                return scene;
+            }
+        }
+        return null;
     }
 
     function findNearestTerrainSample(point, terrainSamples, maxDistance = Infinity) {

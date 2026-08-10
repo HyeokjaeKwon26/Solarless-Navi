@@ -17,26 +17,57 @@ const require = createRequire(import.meta.url);
 const parseOSM = require('osm-pbf-parser');
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const SOURCE_DIR = path.join(ROOT, 'data', 'source');
-const WORK_DIR = path.join(ROOT, 'data', 'work', 'scene-ma');
-const OUTPUT_DIR = path.join(ROOT, 'data', 'generated', 'scene-ma');
+const REGION_ID = String(process.env.SCENE_REGION || 'ma').toLowerCase();
+const REGION_LABEL = String(process.env.SCENE_REGION_LABEL || (REGION_ID === 'ma' ? 'MA' : REGION_ID.toUpperCase()));
+const SOURCE_DIR = path.resolve(process.env.SCENE_SOURCE_DIR || path.join(ROOT, 'data', 'source'));
+const WORK_DIR = path.resolve(process.env.SCENE_WORK_DIR || path.join(ROOT, 'data', 'work', `scene-${REGION_ID}`));
+const OUTPUT_DIR = path.resolve(process.env.SCENE_OUTPUT_DIR || path.join(ROOT, 'data', 'generated', `scene-${REGION_ID}`));
 
 const EARTH_RADIUS = 6371000;
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;
 const TILE_SIZE_M = 5000;
-const GRID_LAT_ORIGIN = 41;
-const GRID_LNG_ORIGIN = -74;
-const GRID_COS_LAT = Math.cos(42 * RAD);
+const MAX_SHADOW_RAY_DISTANCE_METERS = 4500;
+const GRID_LAT_ORIGIN = Number(process.env.SCENE_GRID_LAT_ORIGIN || (REGION_ID === 'ma' ? 41 : 38));
+const GRID_LNG_ORIGIN = Number(process.env.SCENE_GRID_LNG_ORIGIN || (REGION_ID === 'ma' ? -74 : -81));
+const GRID_COS_LAT = Number(process.env.SCENE_GRID_COS_LAT || Math.cos((REGION_ID === 'ma' ? 42 : 43) * RAD));
 const TERRAIN_SPACING_M = 100;
 const NODE_RECORD_SIZE = 16; // uint64 id + int32 latitude/lng at 1e-7 degree
-const PBF_PATH = path.join(SOURCE_DIR, 'massachusetts-latest.osm.pbf');
+const PBF_PATH = path.resolve(process.env.SCENE_PBF_PATH || path.join(SOURCE_DIR, REGION_ID === 'ma' ? 'massachusetts-latest.osm.pbf' : `${REGION_ID}-latest.osm.pbf`));
 const NODE_INDEX_PATH = path.join(WORK_DIR, 'nodes.bin');
-const HGT_DIR = path.join(SOURCE_DIR, 'hgt');
+const HGT_DIR = path.resolve(process.env.SCENE_HGT_DIR || path.join(SOURCE_DIR, 'hgt'));
+const POLY_PATH = path.resolve(process.env.SCENE_POLY_PATH || path.join(SOURCE_DIR, `${REGION_ID}.poly`));
+const PROFILE_AZIMUTH_DEG = Math.max(1, Number(process.env.SCENE_PROFILE_AZIMUTH_DEG || 10));
+const PROFILE_SAMPLE_SPACING_M = Math.max(25, Number(process.env.SCENE_PROFILE_SAMPLE_SPACING_M || 100));
+const DATA_VERSION = String(process.env.SCENE_DATA_VERSION || 'hybrid-scene-v1');
+// Road geometry is useful for Massachusetts' small extract, but restoring
+// every road node in a large regional PBF is needlessly expensive. For larger
+// regions the app already computes route tile keys at runtime, so precompute
+// only scene geometry unless explicitly requested.
+const INCLUDE_ROAD_COVERAGE = String(process.env.SCENE_INCLUDE_ROADS || (REGION_ID === 'ma' ? 'true' : 'false')).toLowerCase() === 'true';
 
 function ensureDir(dir) {
     fs.mkdirSync(dir, { recursive: true });
 }
+
+function readBoundsFromPoly(file) {
+    if (!fs.existsSync(file)) return null;
+    const bounds = { south: Infinity, west: Infinity, north: -Infinity, east: -Infinity };
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+        const match = line.trim().match(/^(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s+(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)/);
+        if (!match) continue;
+        const lng = Number(match[1]);
+        const lat = Number(match[2]);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+        bounds.south = Math.min(bounds.south, lat);
+        bounds.west = Math.min(bounds.west, lng);
+        bounds.north = Math.max(bounds.north, lat);
+        bounds.east = Math.max(bounds.east, lng);
+    }
+    return Number.isFinite(bounds.south) ? bounds : null;
+}
+
+const REGION_BOUNDS = readBoundsFromPoly(POLY_PATH);
 
 function finite(value) {
     return Number.isFinite(Number(value));
@@ -92,11 +123,17 @@ class HgtStore {
     constructor(dir) {
         this.dir = dir;
         this.cache = new Map();
+        this.maxEntries = Math.max(1, Number(process.env.SCENE_HGT_CACHE_ENTRIES || 8));
     }
 
     load(lat, lng) {
         const name = hgtName(lat, lng);
-        if (this.cache.has(name)) return this.cache.get(name);
+        if (this.cache.has(name)) {
+            const cached = this.cache.get(name);
+            this.cache.delete(name);
+            this.cache.set(name, cached);
+            return cached;
+        }
         const gzipPath = path.join(this.dir, `${name}.gz`);
         const rawPath = path.join(this.dir, name);
         let buffer = null;
@@ -104,6 +141,7 @@ class HgtStore {
         else if (fs.existsSync(gzipPath)) buffer = zlib.gunzipSync(fs.readFileSync(gzipPath));
         if (!buffer || buffer.length < 3601 * 3601 * 2) return null;
         this.cache.set(name, buffer);
+        while (this.cache.size > this.maxEntries) this.cache.delete(this.cache.keys().next().value);
         return buffer;
     }
 
@@ -184,29 +222,80 @@ async function buildNodeIndex() {
 
 class NodeLookup {
     constructor(file) {
-        this.buffer = fs.readFileSync(file);
-        if (this.buffer.length % NODE_RECORD_SIZE) throw new Error('invalid node index');
-        this.count = this.buffer.length / NODE_RECORD_SIZE;
+        this.file = file;
+        this.fd = fs.openSync(file, 'r');
+        const size = fs.fstatSync(this.fd).size;
+        if (size % NODE_RECORD_SIZE) throw new Error('invalid node index');
+        this.count = size / NODE_RECORD_SIZE;
+        // A large regional extract can have an index larger than Node's 2 GiB
+        // Buffer limit. Keep a sparse boundary index in memory and load only
+        // the small chunk containing a requested node. A short LRU avoids
+        // repeatedly reading nearby way nodes from disk.
+        this.chunkRecords = 4_000_000; // 64 MB per chunk
+        this.chunkCount = Math.ceil(this.count / this.chunkRecords);
+        this.chunkStarts = new Array(this.chunkCount);
+        const record = Buffer.allocUnsafe(NODE_RECORD_SIZE);
+        for (let chunk = 0; chunk < this.chunkCount; chunk++) {
+            const offset = chunk * this.chunkRecords * NODE_RECORD_SIZE;
+            const read = fs.readSync(this.fd, record, 0, NODE_RECORD_SIZE, offset);
+            if (read !== NODE_RECORD_SIZE) throw new Error('truncated node index');
+            this.chunkStarts[chunk] = record.readBigUInt64LE(0);
+        }
+        this.chunkCache = new Map();
+    }
+
+    loadChunk(chunk) {
+        const cached = this.chunkCache.get(chunk);
+        if (cached) {
+            this.chunkCache.delete(chunk);
+            this.chunkCache.set(chunk, cached);
+            return cached;
+        }
+        const first = chunk * this.chunkRecords;
+        const records = Math.min(this.chunkRecords, this.count - first);
+        const buffer = Buffer.allocUnsafe(records * NODE_RECORD_SIZE);
+        const read = fs.readSync(this.fd, buffer, 0, buffer.length, first * NODE_RECORD_SIZE);
+        if (read !== buffer.length) throw new Error('truncated node index chunk');
+        const value = { first, records, buffer };
+        this.chunkCache.set(chunk, value);
+        while (this.chunkCache.size > 6) this.chunkCache.delete(this.chunkCache.keys().next().value);
+        return value;
     }
 
     find(idValue) {
         const target = BigInt(Math.trunc(Number(idValue)));
         let low = 0;
-        let high = this.count - 1;
+        let high = this.chunkCount - 1;
+        while (low <= high) {
+            const middle = (low + high) >> 1;
+            if (this.chunkStarts[middle] <= target) low = middle + 1;
+            else high = middle - 1;
+        }
+        const chunk = Math.max(0, low - 1);
+        const loaded = this.loadChunk(chunk);
+        low = 0;
+        high = loaded.records - 1;
         while (low <= high) {
             const middle = (low + high) >> 1;
             const offset = middle * NODE_RECORD_SIZE;
-            const id = this.buffer.readBigUInt64LE(offset);
+            const id = loaded.buffer.readBigUInt64LE(offset);
             if (id === target) {
                 return {
-                    lat: this.buffer.readInt32LE(offset + 8) / 1e7,
-                    lng: this.buffer.readInt32LE(offset + 12) / 1e7
+                    lat: loaded.buffer.readInt32LE(offset + 8) / 1e7,
+                    lng: loaded.buffer.readInt32LE(offset + 12) / 1e7
                 };
             }
             if (id < target) low = middle + 1;
             else high = middle - 1;
         }
         return null;
+    }
+
+    close() {
+        if (this.fd !== undefined) {
+            fs.closeSync(this.fd);
+            this.fd = undefined;
+        }
     }
 }
 
@@ -280,7 +369,7 @@ async function collectWays(lookup) {
             const isBuilding = !!(tags.building || tags['building:part']);
             const isTunnel = tags.tunnel === 'yes' || tags.covered === 'yes' || tags.covered === 'true';
             const isRoad = !!tags.highway;
-            if (!isBuilding && !isTunnel && !isRoad) return;
+            if (!isBuilding && !isTunnel && (!isRoad || !INCLUDE_ROAD_COVERAGE)) return;
             const points = wayGeometry(item, lookup);
             if (points.length < (isBuilding ? 3 : 2)) return;
             for (const [lat, lng] of points) roadTiles.add(tileKeyForCoordinate(lat, lng));
@@ -327,7 +416,12 @@ function terrainGridForTile(key, hgt) {
 
 async function writeTiles() {
     const linesDir = path.join(WORK_DIR, 'lines');
-    const roadTiles = JSON.parse(fs.readFileSync(path.join(WORK_DIR, 'road-tiles.json'), 'utf8'));
+    // Scene-only regional builds intentionally omit the full road coverage
+    // pass. In that mode the line files themselves are the tile index.
+    const roadTilesPath = path.join(WORK_DIR, 'road-tiles.json');
+    const roadTiles = fs.existsSync(roadTilesPath)
+        ? JSON.parse(fs.readFileSync(roadTilesPath, 'utf8'))
+        : [];
     const tileKeys = new Set(roadTiles);
     for (const file of fs.readdirSync(linesDir)) tileKeys.add(file.replace('.jsonl', '').replace('_', ':'));
     fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
@@ -352,7 +446,8 @@ async function writeTiles() {
         }
         const tile = {
             schema: 1,
-            region: 'MA',
+            region: REGION_LABEL,
+            dataVersion: DATA_VERSION,
             key,
             tileSizeM: TILE_SIZE_M,
             grid: { latOrigin: GRID_LAT_ORIGIN, lngOrigin: GRID_LNG_ORIGIN, cosLat: GRID_COS_LAT },
@@ -360,8 +455,19 @@ async function writeTiles() {
             buildings,
             tunnels,
             terrain: terrainGridForTile(key, hgt),
+            profileResolution: {
+                azimuthDeg: PROFILE_AZIMUTH_DEG,
+                sampleSpacingM: PROFILE_SAMPLE_SPACING_M,
+                maxDistanceM: MAX_SHADOW_RAY_DISTANCE_METERS
+            },
+            sceneCoverage: {
+                buildings: true,
+                tunnels: true,
+                terrain: true,
+                buildingGround: buildings.every(building => finite(building.ground))
+            },
             source: {
-                osm: 'Geofabrik Massachusetts OSM extract',
+                osm: `Geofabrik ${REGION_LABEL} OSM extract`,
                 terrain: 'SRTM 1 arc-second public elevation tiles',
                 generatedAt: new Date().toISOString()
             }
@@ -374,13 +480,21 @@ async function writeTiles() {
     }
     const manifest = {
         schema: 1,
-        region: 'MA',
+        region: REGION_LABEL,
         tileSizeM: TILE_SIZE_M,
         grid: { latOrigin: GRID_LAT_ORIGIN, lngOrigin: GRID_LNG_ORIGIN, cosLat: GRID_COS_LAT },
         tilePaddingMeters: 4500,
         terrainSpacingM: TERRAIN_SPACING_M,
+        profileResolution: {
+            azimuthDeg: PROFILE_AZIMUTH_DEG,
+            sampleSpacingM: PROFILE_SAMPLE_SPACING_M,
+            maxDistanceM: MAX_SHADOW_RAY_DISTANCE_METERS
+        },
+        dataVersion: DATA_VERSION,
+        bounds: REGION_BOUNDS,
+        includeRoadCoverage: INCLUDE_ROAD_COVERAGE,
         generatedAt: new Date().toISOString(),
-        source: 'Geofabrik Massachusetts OSM + public SRTM elevation',
+        source: `Geofabrik ${REGION_LABEL} OSM + public SRTM elevation`,
         tiles: tileList
     };
     fs.writeFileSync(path.join(OUTPUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));
@@ -393,8 +507,16 @@ async function main() {
     ensureDir(HGT_DIR);
     await buildNodeIndex();
     const lookup = new NodeLookup(NODE_INDEX_PATH);
-    await collectWays(lookup);
-    await writeTiles();
+    try {
+        if (String(process.env.SCENE_SKIP_COLLECT || '').toLowerCase() === 'true') {
+            console.log('skip pass 2/2: reusing existing scene line files');
+        } else {
+            await collectWays(lookup);
+        }
+        await writeTiles();
+    } finally {
+        lookup.close();
+    }
 }
 
 main().catch(error => {
