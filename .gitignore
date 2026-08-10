@@ -30,6 +30,7 @@ data/source/
 data/work/
 data/generated/
 data/release/
+logs/
 
 # OS / Editor Files
 .DS_Store
