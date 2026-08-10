@@ -80,6 +80,7 @@ function main() {
         terrainSpacingM: sourceManifest.terrainSpacingM,
         grid: sourceManifest.grid,
         source: sourceManifest.source,
+        sourceMetadata: sourceManifest.sourceMetadata || null,
         generatedAt: sourceManifest.generatedAt,
         packWidth: PACK_WIDTH,
         maxPackBytes: MAX_PACK_BYTES,

@@ -69,6 +69,18 @@ function readBoundsFromPoly(file) {
 
 const REGION_BOUNDS = readBoundsFromPoly(POLY_PATH);
 
+function sourceMetadata() {
+    const pbf = fs.existsSync(PBF_PATH) ? fs.statSync(PBF_PATH) : null;
+    const hgtCount = fs.existsSync(HGT_DIR)
+        ? fs.readdirSync(HGT_DIR).filter(name => /\.hgt(?:\.gz)?$/i.test(name)).length
+        : 0;
+    return {
+        osm: { extract: path.basename(PBF_PATH), bytes: pbf ? pbf.size : null, license: 'ODbL / OpenStreetMap contributors' },
+        boundary: fs.existsSync(POLY_PATH) ? path.basename(POLY_PATH) : null,
+        terrain: { dataset: 'SRTM 1 arc-second public elevation tiles', tileCount: hgtCount }
+    };
+}
+
 function finite(value) {
     return Number.isFinite(Number(value));
 }
@@ -495,6 +507,7 @@ async function writeTiles() {
         includeRoadCoverage: INCLUDE_ROAD_COVERAGE,
         generatedAt: new Date().toISOString(),
         source: `Geofabrik ${REGION_LABEL} OSM + public SRTM elevation`,
+        sourceMetadata: sourceMetadata(),
         tiles: tileList
     };
     fs.writeFileSync(path.join(OUTPUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));

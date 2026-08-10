@@ -30918,5 +30918,17 @@
       "pack": "11_19",
       "file": "94_153.json"
     }
+  },
+  "sourceMetadata": {
+    "osm": {
+      "extract": "us-northeast-latest.osm.pbf",
+      "bytes": 1789553876,
+      "license": "ODbL / OpenStreetMap contributors"
+    },
+    "boundary": "us-northeast.poly",
+    "terrain": {
+      "dataset": "SRTM 1 arc-second public elevation tiles",
+      "tileCount": 160
+    }
   }
 }
