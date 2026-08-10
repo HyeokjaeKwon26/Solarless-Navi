@@ -243,7 +243,7 @@ class NodeLookup {
         // Buffer limit. Keep a sparse boundary index in memory and load only
         // the small chunk containing a requested node. A short LRU avoids
         // repeatedly reading nearby way nodes from disk.
-        this.chunkRecords = 4_000_000; // 64 MB per chunk
+        this.chunkRecords = Math.max(16_384, Number(process.env.SCENE_NODE_CHUNK_RECORDS || 65_536)); // 1 MB default
         this.chunkCount = Math.ceil(this.count / this.chunkRecords);
         this.chunkStarts = new Array(this.chunkCount);
         const record = Buffer.allocUnsafe(NODE_RECORD_SIZE);
@@ -270,7 +270,8 @@ class NodeLookup {
         if (read !== buffer.length) throw new Error('truncated node index chunk');
         const value = { first, records, buffer };
         this.chunkCache.set(chunk, value);
-        while (this.chunkCache.size > 6) this.chunkCache.delete(this.chunkCache.keys().next().value);
+        const maxChunks = Math.max(2, Number(process.env.SCENE_NODE_CACHE_CHUNKS || 512));
+        while (this.chunkCache.size > maxChunks) this.chunkCache.delete(this.chunkCache.keys().next().value);
         return value;
     }
 
