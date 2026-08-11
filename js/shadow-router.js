@@ -772,10 +772,12 @@ window.ShadowRouter = (function () {
 
     function sceneFallbackReason(error) {
         const message = String(error && (error.code || error.message) || '').toLowerCase();
-        if (message.includes('abort') || message.includes('cancel')) return 'cancelled';
-        if (message.includes('timeout')) return message.includes('dem') ? 'DEM timeout' : 'Overpass timeout';
-        if (message.includes('range') || message.includes('bbox') || message.includes('250')) return 'scene range exceeded';
-        return 'scene data unavailable';
+        if (message.includes('abort') || message.includes('cancel')) return 'ABORTED';
+        if (message.includes('timeout')) return message.includes('dem') ? 'DEM_FAILURE' : 'MANIFEST_TIMEOUT';
+        if (message.includes('range') || message.includes('bbox') || message.includes('250')) return 'ROUTE_TOO_LONG';
+        if (message.includes('checksum')) return 'CHECKSUM_FAILURE';
+        if (message.includes('decompress') || message.includes('worker')) return 'DECOMPRESS_FAILURE';
+        return 'SCENE_DATA_UNAVAILABLE';
     }
 
     function getCachedScene(routeId) {
@@ -930,13 +932,14 @@ window.ShadowRouter = (function () {
             if (isTollFreeOnly) directUrl += `&exclude=toll`;
 
             const directStartedAt = Date.now();
+            if (window.DebugLogger) window.DebugLogger.log('osrm-direct-start', { tollFree: isTollFreeOnly });
             const directResponse = await fetchJsonWithTimeout(directUrl, {
                 signal: options.signal,
                 timeoutMs: options.directTimeoutMs || 10000
             });
             rawCandidates = directResponse && Array.isArray(directResponse.routes) ? directResponse.routes.slice() : [];
             if (window.DebugLogger && typeof window.DebugLogger.log === 'function') {
-                window.DebugLogger.log('osrm-direct', { elapsedMs: Date.now() - directStartedAt, routeCount: rawCandidates.length, http: 'ok' });
+                window.DebugLogger.log('osrm-direct-success', { elapsedMs: Date.now() - directStartedAt, routeCount: rawCandidates.length, http: 'ok' });
             }
             if (rawCandidates.length && typeof options.onProgress === 'function') {
                 const directAnalyzed = await Promise.all(rawCandidates.map((route, index) =>
@@ -964,15 +967,22 @@ window.ShadowRouter = (function () {
                 { lat: midLat + (perpLat / norm) * offsetScale * 1.8, lng: midLng + (perpLng / norm) * offsetScale * 1.8 },
                 { lat: midLat - (perpLat / norm) * offsetScale * 1.8, lng: midLng - (perpLng / norm) * offsetScale * 1.8 }
             ];
+            const directDistinct = rawCandidates.filter((route, index) => rawCandidates.slice(0, index).every(previous => !areRoutesGeometricallySimilar(previous, route))).length;
+            const viaBudget = directDistinct >= 3 ? 0 : Math.min(2, Math.max(0, Number(options.viaRequestBudget || 2)));
+            if (viaBudget === 0) {
+                if (window.DebugLogger) window.DebugLogger.log('osrm-via-skipped', { reason: 'DIRECT_ALTERNATIVES_SUFFICIENT', directDistinct });
+            }
             const tollQuery = isTollFreeOnly ? '&exclude=toll' : '';
             const urls = [
                 directUrl,
                 ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true${tollQuery}`)
             ];
-            const responses = await Promise.allSettled(urls.slice(1).map(u => fetchJsonWithTimeout(u, {
+            const viaUrls = urls.slice(1);
+            const responses = await Promise.allSettled(viaUrls.slice(0, viaBudget).map(u => fetchJsonWithTimeout(u, {
                 signal: options.signal,
                 timeoutMs: options.viaTimeoutMs || 10000
             })));
+            if (window.DebugLogger) window.DebugLogger.log('osrm-via-end', { requested: viaUrls.slice(0, viaBudget).length, fulfilled: responses.filter(result => result.status === 'fulfilled').length });
             responses.forEach(res => {
                 if (res.status === 'fulfilled' && res.value && res.value.routes) rawCandidates.push(...res.value.routes);
             });
@@ -1058,7 +1068,7 @@ window.ShadowRouter = (function () {
                 if (isPrecisionScene(scene)) {
                     refinedAnalyzed = await analyzeRouteSegmentsAsync(route.raw.geometry.coordinates, dateObj, route.durationSec, route.routeSteps, scene, options.signal);
                 } else {
-                    fallbackReason = 'scene data unavailable';
+                    fallbackReason = 'SCENE_DATA_UNAVAILABLE';
                 }
             } catch (sceneError) {
                 if (options.signal && options.signal.aborted) throw sceneError;

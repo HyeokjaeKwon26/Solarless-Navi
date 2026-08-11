@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in app.js app-version.js debug-logger.js geocoder.js i18n.js offline-map.js route-state.js scene-shadow.js shadow-router.js solar-worker.js pip-controller.js; do
+          for name in app.js app-version.js debug-logger.js geocoder.js i18n.js offline-map.js route-state.js scene-pack-worker.js scene-shadow.js shadow-router.js solar-worker.js pip-controller.js; do
             root_hash=$(sha256sum "js/$name" | cut -d' ' -f1)
             www_hash=$(sha256sum "www/js/$name" | cut -d' ' -f1)
             test "$root_hash" = "$www_hash"

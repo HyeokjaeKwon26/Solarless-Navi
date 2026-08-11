@@ -936,7 +936,7 @@ test('toll-free routing adds exclusion to direct and via-point OSRM requests', a
         sandbox.fetch = originalFetch;
         sandbox.window.SceneShadow = SceneShadow;
     }
-    assert.equal(requestedUrls.length, 5);
+    assert.equal(requestedUrls.length, 3);
     assert.ok(requestedUrls.every(url => url.includes('exclude=toll')));
 });
 
@@ -1215,4 +1215,50 @@ test('routing exposes direct OSRM progress before via-point enrichment', () => {
     assert.ok(routerSource.includes('urls.slice(1)'));
     assert.ok(appSource.includes("onProgress: async progress =>"));
     assert.ok(appSource.includes("route-first-result"));
+});
+
+test('native and web location sources share the navigation pipeline and resume fix seam', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('function processNavigationPosition(position, source = \'web-watch\')'));
+    assert.ok(appSource.includes("processNavigationPosition(pos, 'web-watch')"));
+    assert.ok(appSource.includes('window.__solarlessProcessNavigationPosition'));
+    assert.ok(appSource.includes('getLastNavigationLocation'));
+    assert.ok(appSource.includes('gps-stale-ignored'));
+    assert.ok(appSource.includes('gps-duplicate-ignored'));
+});
+
+test('navigation freezes the direct route and permits replacement only through explicit reroute', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('route-frozen-for-navigation'));
+    assert.ok(appSource.includes('if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId)'));
+    assert.ok(appSource.includes('A mid-drive request is an explicit reroute'));
+    assert.ok(appSource.includes("navigationSessionRouteId = null;"));
+});
+
+test('debug diagnostics are debug-only, collapsed, and bounded', () => {
+    const source = fs.readFileSync(path.join(root, 'js/debug-logger.js'), 'utf8');
+    assert.ok(source.includes('MAX_PENDING = 50'));
+    assert.ok(source.includes('debug-diagnostic-card collapsed'));
+    assert.ok(source.includes('data-debug-action'));
+    assert.ok(source.includes('MAX_ENTRIES'));
+    assert.ok(source.includes('password') && source.includes('token'));
+});
+
+test('scene pack worker and regional merge hooks are present', () => {
+    assert.ok(fs.existsSync(path.join(root, 'js/scene-pack-worker.js')));
+    const worker = fs.readFileSync(path.join(root, 'js/scene-pack-worker.js'), 'utf8');
+    const scene = fs.readFileSync(path.join(root, 'js/scene-shadow.js'), 'utf8');
+    assert.ok(worker.includes('unzipSync'));
+    assert.ok(worker.includes('postMessage'));
+    assert.ok(scene.includes('mergePrecomputedScenes'));
+    assert.ok(scene.includes('mapWithConcurrency(tileKeys'));
+    assert.ok(scene.includes("indexedDB.open('solarless-scene-cache', 2)"));
+    assert.ok(scene.includes('PRECOMPUTED_CACHE_MAX_BYTES'));
+});
+
+test('release metadata never treats local PBF mtime as extract timestamp', () => {
+    const source = fs.readFileSync(path.join(root, 'tools/build-scene-tiles.mjs'), 'utf8');
+    assert.ok(source.includes('SCENE_OSM_EXTRACT_TIMESTAMP'));
+    assert.ok(source.includes('localFileModifiedAt'));
+    assert.ok(source.includes('extractTimestamp: verifiedExtractTimestamp'));
 });

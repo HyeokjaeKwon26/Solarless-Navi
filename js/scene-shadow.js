@@ -50,7 +50,9 @@
     ];
     const PRECOMPUTED_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
     const PRECOMPUTED_MANIFEST_REVALIDATE_MS = 24 * 60 * 60 * 1000;
-    const PRECOMPUTED_CACHE_MAX_ENTRIES = 64;
+    // Byte budget is the primary bound. This large cap is only a failsafe for
+    // malformed manifests; ordinary routes may retain more than 64 tiles.
+    const PRECOMPUTED_CACHE_MAX_ENTRIES = 4096;
     const PRECOMPUTED_CACHE_MAX_BYTES = 64 * 1024 * 1024;
     const overpassCache = new Map();
     const terrainCache = new Map();
@@ -59,10 +61,17 @@
     const precomputedTileInflight = new Map();
     const precomputedManifestCache = new Map();
     const precomputedManifestInflight = new Map();
+    const manifestIdentityCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+    const scenePackWorkerUrl = 'js/scene-pack-worker.js';
+    const persistentTouchAt = new Map();
     let precomputedTileCacheBytes = 0;
 
     function finite(value) {
         return value !== null && value !== '' && Number.isFinite(Number(value));
+    }
+
+    function debugScene(event, details = {}) {
+        if (root.DebugLogger && typeof root.DebugLogger.log === 'function') root.DebugLogger.log(event, details);
     }
 
     function precomputedSourceLabel(manifest) {
@@ -379,9 +388,15 @@
         if (!openPrecomputedDb.promise) {
             openPrecomputedDb.promise = new Promise(resolve => {
                 try {
-                    const request = indexedDB.open('solarless-scene-cache', 1);
+                    const request = indexedDB.open('solarless-scene-cache', 2);
                     request.onupgradeneeded = () => {
-                        if (!request.result.objectStoreNames.contains('tiles')) request.result.createObjectStore('tiles');
+                        const db = request.result;
+                        const transaction = request.transaction;
+                        let tiles;
+                        if (!db.objectStoreNames.contains('tiles')) tiles = db.createObjectStore('tiles');
+                        else tiles = transaction.objectStore('tiles');
+                        if (!tiles.indexNames.contains('lastAccess')) tiles.createIndex('lastAccess', 'lastAccess', { unique: false });
+                        if (!tiles.indexNames.contains('bytes')) tiles.createIndex('bytes', 'bytes', { unique: false });
                         if (!request.result.objectStoreNames.contains('manifests')) request.result.createObjectStore('manifests');
                     };
                     request.onsuccess = () => resolve(request.result);
@@ -432,25 +447,57 @@
         }
     }
 
+    async function touchStoredSceneTile(key, record) {
+        const now = Date.now();
+        if (!key || now - Number(persistentTouchAt.get(key) || 0) < 5 * 60 * 1000) return;
+        persistentTouchAt.set(key, now);
+        if (!record) return;
+        await writeStoredSceneValue('tiles', key, { ...record, key, lastAccess: now });
+    }
+
     async function pruneStoredSceneTiles() {
         const db = await openPrecomputedDb();
         if (!db) return;
-        const keys = await new Promise(resolve => {
+        const records = await new Promise(resolve => {
             try {
-                const request = db.transaction('tiles', 'readonly').objectStore('tiles').getAllKeys();
-                request.onsuccess = () => resolve(request.result || []);
-                request.onerror = () => resolve([]);
+                const store = db.transaction('tiles', 'readonly').objectStore('tiles');
+                const valuesRequest = store.getAll();
+                const keysRequest = store.getAllKeys();
+                let values = null;
+                let keys = null;
+                const finish = () => {
+                    if (!values || !keys) return;
+                    resolve(values.map((value, index) => ({ ...(value || {}), key: value && value.key !== undefined ? value.key : keys[index] })));
+                };
+                valuesRequest.onsuccess = () => { values = valuesRequest.result || []; finish(); };
+                keysRequest.onsuccess = () => { keys = keysRequest.result || []; finish(); };
+                valuesRequest.onerror = () => resolve([]);
+                keysRequest.onerror = () => resolve([]);
             } catch (error) {
                 resolve([]);
             }
         });
-        if (keys.length <= PRECOMPUTED_CACHE_MAX_ENTRIES) return;
+        const now = Date.now();
+        const live = records.filter(record => record && (!record.expiresAt || record.expiresAt > now));
+        const expired = records.filter(record => record && record.expiresAt && record.expiresAt <= now);
+        let totalBytes = live.reduce((sum, record) => sum + (Number(record.bytes) || estimateCacheBytes(record.value)), 0);
+        const remove = expired.concat(live.sort((a, b) => Number(a.lastAccess || 0) - Number(b.lastAccess || 0)));
+        const toDelete = [];
+        for (const record of remove) {
+            if (!expired.includes(record) && live.length - toDelete.length <= PRECOMPUTED_CACHE_MAX_ENTRIES && totalBytes <= PRECOMPUTED_CACHE_MAX_BYTES) break;
+            const bytes = Number(record.bytes) || estimateCacheBytes(record.value);
+            totalBytes = Math.max(0, totalBytes - bytes);
+            toDelete.push(record);
+        }
+        if (!toDelete.length) return;
         try {
             const transaction = db.transaction('tiles', 'readwrite');
             const store = transaction.objectStore('tiles');
-            for (const key of keys.slice(0, keys.length - PRECOMPUTED_CACHE_MAX_ENTRIES)) store.delete(key);
+            for (const record of toDelete) {
+                if (record && record.key !== undefined) store.delete(record.key);
+            }
         } catch (error) {
-            // Best-effort bound; a later successful write will retry pruning.
+            // Best-effort byte bound; memory cache remains authoritative.
         }
     }
 
@@ -458,13 +505,14 @@
         const manifestUrl = options.precomputedManifestUrl;
         if (!manifestUrl) return null;
         const memory = precomputedManifestCache.get(manifestUrl);
-        if (memory && memory.expiresAt > Date.now() && memory.revalidateAt > Date.now()) return memory.value;
+        if (memory && memory.expiresAt > Date.now() && memory.revalidateAt > Date.now()) { debugScene('manifest-memory-hit', { manifestUrl }); return memory.value; }
         if (precomputedManifestInflight.has(manifestUrl)) return precomputedManifestInflight.get(manifestUrl);
         const promise = (async () => {
             const stored = await readStoredSceneValue('manifests', manifestUrl) || memory;
             const now = Date.now();
             if (stored && stored.value && stored.revalidateAt > now) {
                 precomputedManifestCache.set(manifestUrl, { value: stored.value, etag: stored.etag || null, expiresAt: now + PRECOMPUTED_CACHE_TTL_MS, revalidateAt: stored.revalidateAt });
+                debugScene('manifest-idb-hit', { manifestUrl });
                 return stored.value;
             }
             try {
@@ -489,6 +537,7 @@
                         const refreshed = { ...stored, revalidateAt: now + PRECOMPUTED_MANIFEST_REVALIDATE_MS, expiresAt: now + PRECOMPUTED_CACHE_TTL_MS };
                         await writeStoredSceneValue('manifests', manifestUrl, refreshed);
                         precomputedManifestCache.set(manifestUrl, refreshed);
+                        debugScene('manifest-revalidate-304', { manifestUrl });
                         return stored.value;
                     }
                     if (!response || !response.ok) throw new Error(`HTTP ${response && response.status || 0}`);
@@ -497,6 +546,7 @@
                     const record = { value, etag, revalidateAt: now + PRECOMPUTED_MANIFEST_REVALIDATE_MS, expiresAt: now + PRECOMPUTED_CACHE_TTL_MS };
                     precomputedManifestCache.set(manifestUrl, record);
                     await writeStoredSceneValue('manifests', manifestUrl, record);
+                    debugScene('manifest-revalidate-refresh', { manifestUrl });
                     return value;
                 } finally {
                     if (timer) clearTimeout(timer);
@@ -504,6 +554,7 @@
                 }
             } catch (error) {
                 if (options.signal && options.signal.aborted) throw error;
+                debugScene('manifest-revalidate-failure', { manifestUrl, message: String(error && error.message || error) });
                 return stored && stored.value || null;
             }
         })().finally(() => precomputedManifestInflight.delete(manifestUrl));
@@ -518,18 +569,107 @@
         return `${base}/${relative}`;
     }
 
-    function manifestCacheIdentity(manifest) {
-        const packHashes = Object.entries(manifest && manifest.packs || {})
-            .map(([key, value]) => `${key}:${value && value.sha256 || ''}`)
-            .sort().join('|');
-        return `${manifest && (manifest.releaseTag || manifest.dataVersion || 'scene') || 'scene'}:${manifest && manifest.schemaVersion || manifest && manifest.schema || 'unknown'}:${packHashes}`;
+    async function mapWithConcurrency(items, concurrency, worker, signal) {
+        const values = new Array(items.length);
+        let cursor = 0;
+        const limit = Math.max(1, Math.min(Number(concurrency) || 6, 8));
+        const consume = async () => {
+            while (true) {
+                if (signal && signal.aborted) throw new Error('scene request aborted');
+                const index = cursor++;
+                if (index >= items.length) return;
+                values[index] = await worker(items[index], index);
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
+        return values;
+    }
+
+    function shortManifestDigest(value) {
+        let a = 2166136261;
+        let b = 16777619;
+        for (let i = 0; i < value.length; i++) {
+            const code = value.charCodeAt(i);
+            a = Math.imul(a ^ code, 16777619) >>> 0;
+            b = Math.imul(b ^ (code + i), 2246822519) >>> 0;
+        }
+        return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`;
+    }
+    async function manifestCacheIdentity(manifest) {
+        if (!manifest || typeof manifest !== 'object') return 'scene:unknown';
+        if (manifestIdentityCache && manifestIdentityCache.has(manifest)) return manifestIdentityCache.get(manifest);
+        const directHash = manifest.manifestHash || manifest.contentHash;
+        const source = directHash
+            ? String(directHash)
+            : [manifest.releaseTag || 'scene', manifest.dataVersion || '', manifest.schemaVersion || manifest.schema || 'unknown',
+                ...Object.entries(manifest.packs || {}).map(([key, value]) => `${key}:${value && value.sha256 || ''}`).sort()].join('|');
+        const promise = (async () => {
+            if (directHash) return `manifest:${source}`;
+            if (root.crypto && root.crypto.subtle && typeof root.crypto.subtle.digest === 'function' && typeof TextEncoder !== 'undefined') {
+                const bytes = new TextEncoder().encode(source);
+                const digest = new Uint8Array(await root.crypto.subtle.digest('SHA-256', bytes));
+                return `manifest:${[...digest].map(value => value.toString(16).padStart(2, '0')).join('')}`;
+            }
+            return `manifest:${shortManifestDigest(source)}`;
+        })();
+        if (manifestIdentityCache) manifestIdentityCache.set(manifest, promise);
+        return promise;
+    }
+
+    function unzipPackPayload(bytes, options = {}) {
+        const canUseWorker = options.disableScenePackWorker !== true && typeof root.Worker === 'function';
+        if (!canUseWorker) {
+            if (!root.fflate || typeof root.fflate.unzipSync !== 'function') throw new Error('scene tile decompressor unavailable');
+            return Promise.resolve(root.fflate.unzipSync(bytes));
+        }
+        return new Promise((resolve, reject) => {
+            let worker;
+            let timer;
+            let abortHandler;
+            let settled = false;
+            const finish = (error, value) => {
+                if (settled) return;
+                settled = true;
+                if (timer) clearTimeout(timer);
+                if (options.signal && abortHandler) options.signal.removeEventListener('abort', abortHandler);
+                try { if (worker) worker.terminate(); } catch (e) {}
+                if (error) reject(error); else resolve(value);
+            };
+            try {
+                worker = new root.Worker(options.scenePackWorkerUrl || scenePackWorkerUrl);
+                worker.onmessage = event => {
+                    const payload = event && event.data;
+                    if (!payload || payload.error) { finish(new Error(payload && payload.error || 'scene pack worker failed')); return; }
+                    const files = {};
+                    Object.entries(payload.files || {}).forEach(([name, buffer]) => { files[name] = new Uint8Array(buffer); });
+                    finish(null, files);
+                };
+                worker.onerror = () => finish(new Error('scene pack worker failed'));
+                timer = setTimeout(() => finish(new Error('scene pack worker timeout')), options.workerTimeoutMs || 8000);
+                if (options.signal) {
+                    abortHandler = () => finish(new Error('scene request aborted'));
+                    if (options.signal.aborted) { abortHandler(); return; }
+                    options.signal.addEventListener('abort', abortHandler, { once: true });
+                }
+                const transferable = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+                worker.postMessage(transferable, [transferable]);
+                debugScene('scene-pack-unzip-start', { bytes: bytes.byteLength, worker: true });
+            } catch (error) {
+                finish(error);
+            }
+        }).catch(error => {
+            if (options.signal && options.signal.aborted) throw error;
+            debugScene('scene-pack-unzip-failure', { message: String(error && error.message || error), fallback: true });
+            if (!root.fflate || typeof root.fflate.unzipSync !== 'function') throw error;
+            return root.fflate.unzipSync(bytes);
+        });
     }
 
     async function loadPrecomputedPack(manifest, pack, options = {}) {
-        const identity = manifestCacheIdentity(manifest);
+        const identity = await manifestCacheIdentity(manifest);
         const cacheKey = `${identity}:pack:${pack}`;
         const cached = getPrecomputedCacheValue(cacheKey);
-        if (cached) return cached;
+        if (cached) { debugScene('scene-pack-memory-hit', { pack }); return cached; }
         if (precomputedTileInflight.has(cacheKey)) return precomputedTileInflight.get(cacheKey);
         const url = sceneTileUrl(manifest, pack);
         if (!url) return null;
@@ -551,14 +691,14 @@
                 const response = await fetchFn(url, controller ? { signal: controller.signal } : {});
                 if (!response || !response.ok) throw new Error(`HTTP ${response && response.status || 0}`);
                 const bytes = new Uint8Array(await response.arrayBuffer());
+                debugScene('scene-pack-download-end', { pack, bytes: bytes.byteLength });
                 const expectedHash = manifest.packs && manifest.packs[pack] && manifest.packs[pack].sha256;
                 if (expectedHash && root.crypto && root.crypto.subtle && typeof root.crypto.subtle.digest === 'function') {
                     const digest = new Uint8Array(await root.crypto.subtle.digest('SHA-256', bytes));
                     const actualHash = [...digest].map(value => value.toString(16).padStart(2, '0')).join('');
-                    if (actualHash.toLowerCase() !== String(expectedHash).toLowerCase()) throw new Error('scene tile checksum mismatch');
+                    if (actualHash.toLowerCase() !== String(expectedHash).toLowerCase()) { debugScene('scene-pack-checksum-failure', { pack }); throw new Error('scene tile checksum mismatch'); }
                 }
-                if (!root.fflate || typeof root.fflate.unzipSync !== 'function') throw new Error('scene tile decompressor unavailable');
-                const files = root.fflate.unzipSync(bytes);
+                const files = await unzipPackPayload(bytes, options);
                 const parsed = {};
                 const storedEntries = [];
                 for (const [name, content] of Object.entries(files)) {
@@ -567,7 +707,7 @@
                     parsed[name] = JSON.parse(text);
                     const tileKey = `${identity}:tile:${name}`;
                     setPrecomputedCacheValue(tileKey, parsed[name], content.byteLength);
-                    storedEntries.push({ key: tileKey, value: { value: parsed[name], bytes: content.byteLength, lastAccess: Date.now(), expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS } });
+                    storedEntries.push({ key: tileKey, value: { key: tileKey, value: parsed[name], bytes: content.byteLength, lastAccess: Date.now(), expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS, manifestIdentity: identity } });
                 }
                 await writeStoredSceneValues('tiles', storedEntries);
                 await pruneStoredSceneTiles();
@@ -585,14 +725,17 @@
     async function loadPrecomputedTile(manifest, tileKey, options = {}) {
         const tileMeta = manifest.tiles && manifest.tiles[tileKey];
         if (!tileMeta) return null;
-        const cacheKey = `${manifestCacheIdentity(manifest)}:tile:${tileMeta.file}`;
+        const cacheKey = `${await manifestCacheIdentity(manifest)}:tile:${tileMeta.file}`;
         const cached = getPrecomputedCacheValue(cacheKey);
-        if (cached) return cached;
+        if (cached) { debugScene('scene-tile-memory-hit', { tileKey }); return cached; }
         const stored = await readStoredSceneValue('tiles', cacheKey);
         if (stored && stored.value && (!stored.expiresAt || stored.expiresAt > Date.now())) {
             setPrecomputedCacheValue(cacheKey, stored.value);
+            touchStoredSceneTile(cacheKey, stored).catch(() => {});
+            debugScene('scene-tile-idb-hit', { tileKey });
             return stored.value;
         }
+        debugScene('scene-tile-miss', { tileKey });
         const pack = await loadPrecomputedPack(manifest, tileMeta.pack, options);
         return pack && pack[tileMeta.file] ? pack[tileMeta.file] : null;
     }
@@ -822,7 +965,7 @@
         // Large corridors make Overpass bboxes and DEM probes disproportionately
         // expensive. OSRM remains available; only the optional scene layer is
         // skipped for such routes.
-        if (routeLengthMeters > maxRouteMeters) return null;
+        if (routeLengthMeters > maxRouteMeters) { debugScene('precision-heuristic', { reason: 'ROUTE_TOO_LONG', routeLengthMeters }); return null; }
         const originCoordinate = coordinates[Math.floor(coordinates.length / 2)];
         const origin = { lat: Number(originCoordinate[1]), lng: Number(originCoordinate[0]) };
         const bbox = routeBbox(coordinates, options.paddingMeters || 250);
@@ -841,9 +984,11 @@
             // The optional scene layer must never turn a large route into an
             // unbounded Overpass workload. OSRM remains available and the
             // router will keep the common heuristic comparison tier.
+            debugScene('precision-heuristic', { reason: 'TOO_MANY_TILES', tileCount: tiles.length, totalTileAreaKm2 });
             return null;
         }
         const plan = makeTerrainPlan(coordinates, options);
+        debugScene('overpass-start', { tileCount: tiles.length });
         const overpassPromise = (async () => {
             const results = [];
             for (const tile of tiles) {
@@ -852,13 +997,16 @@
                     results.push(await loadOverpassData(tile.bbox, origin, options));
                 } catch (error) {
                     if (options.signal && options.signal.aborted) throw error;
+                    debugScene('overpass-failure', { reason: 'OVERPASS_FAILURE', message: String(error && error.message || error) });
                     results.push({ buildings: [], tunnels: [], available: false, error: String(error && error.message || error) });
                 }
             }
             return mergeOverpassData(results);
-        })();
+        })().then(result => { debugScene('overpass-end', { buildings: result.buildings.length, tunnels: result.tunnels.length }); return result; });
+        debugScene('dem-start', { points: plan.pointRecords.length });
         const terrainPromise = loadTerrainSamples(plan.pointRecords, options).catch(error => {
             if (options.signal && options.signal.aborted) throw error;
+            debugScene('dem-failure', { reason: 'DEM_FAILURE', message: String(error && error.message || error) });
             return new Map();
         });
         const [overpass, terrain] = await Promise.all([overpassPromise, terrainPromise]);
@@ -898,7 +1046,7 @@
                 buildingGround: !!overpass.available && segmentBuildingGround
             };
         });
-        return {
+        const sceneResult = {
             origin,
             baseElevation: finite(baseElevation) ? baseElevation : null,
             // Only buildings that can intersect a sampled sun ray are used by
@@ -928,6 +1076,10 @@
             source: 'OpenStreetMap Overpass + OpenTopoData ASTER30m',
             sampleCount: terrainSamples.length
         };
+        debugScene(sceneResult.precisionReady ? 'precision-ready' : 'precision-partial', {
+            reason: sceneResult.precisionReady ? null : 'SEGMENT_COVERAGE_INCOMPLETE', coverage: sceneResult.coverage
+        });
+        return sceneResult;
     }
 
     async function fetchPrecomputedSceneForRouteSingle(coordinates, options = {}) {
@@ -952,7 +1104,8 @@
         if (tileKeys.some(key => !manifest.tiles[key])) return null;
         let tileValues;
         try {
-            tileValues = await Promise.all(tileKeys.map(key => loadPrecomputedTile(manifest, key, options)));
+            tileValues = await mapWithConcurrency(tileKeys, options.sceneTileConcurrency || 6,
+                key => loadPrecomputedTile(manifest, key, options), options.signal);
         } catch (error) {
             if (options.signal && options.signal.aborted) throw error;
             return null;
@@ -1084,12 +1237,63 @@
         };
     }
 
+    function reprojectScenePoint(point, fromOrigin, toOrigin) {
+        if (!point || !finite(point.x) || !finite(point.y) || !fromOrigin || !toOrigin) return point;
+        const geo = unprojectPoint(Number(point.x), Number(point.y), fromOrigin);
+        return projectPoint(geo.lat, geo.lng, toOrigin);
+    }
+
+    function mergePrecomputedScenes(parts, coordinates) {
+        if (!parts.length) return null;
+        if (parts.length === 1) return parts[0];
+        const center = coordinates[Math.floor(coordinates.length / 2)] || coordinates[0];
+        const origin = { lat: Number(center[1]), lng: Number(center[0]) };
+        const buildings = new Map();
+        const tunnels = new Map();
+        const terrain = new Map();
+        const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, () => ({ buildings: false, tunnels: false, terrain: false, buildingGround: false }));
+        const regions = [];
+        for (const scene of parts) {
+            regions.push({ region: scene.region || null, source: scene.source || null, dataVersion: scene.dataVersion || null, sceneCoverage: scene.sceneCoverage || null });
+            for (const building of scene.buildings || []) {
+                const id = String(building.id || `building:${JSON.stringify(building.polygon)}`);
+                if (!buildings.has(id)) buildings.set(id, {
+                    ...building,
+                    polygon: (building.polygon || []).map(point => reprojectScenePoint(point, scene.origin, origin)),
+                    bounds: null
+                });
+            }
+            for (const tunnel of scene.tunnels || []) {
+                const id = String(tunnel.id || `tunnel:${JSON.stringify(tunnel.line)}`);
+                if (!tunnels.has(id)) tunnels.set(id, { ...tunnel, line: (tunnel.line || []).map(point => reprojectScenePoint(point, scene.origin, origin)) });
+            }
+            for (const sample of scene.terrainSamples || []) {
+                const key = sample.key || `${Number(sample.lat).toFixed(5)},${Number(sample.lng).toFixed(5)}`;
+                if (!terrain.has(key)) terrain.set(key, { ...sample, ...reprojectScenePoint(sample, scene.origin, origin) });
+            }
+            const segmentOffset = Number(scene.segmentOffset) || 0;
+            (scene.segmentCoverage || []).forEach((coverage, index) => {
+                const targetIndex = segmentOffset + index;
+                if (!segmentCoverage[targetIndex]) return;
+                Object.keys(segmentCoverage[targetIndex]).forEach(key => { segmentCoverage[targetIndex][key] = segmentCoverage[targetIndex][key] || coverage[key] === true; });
+            });
+        }
+        const complete = parts.every(scene => scene.precisionReady) && segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround);
+        return {
+            ...parts[0], origin, buildings: [...buildings.values()], allBuildings: [...buildings.values()], tunnels: [...tunnels.values()], terrainSamples: [...terrain.values()],
+            segmentCoverage, coverage: { ...(parts[0].coverage || {}), regions: regions.length, relevantBuildings: buildings.size, totalBuildings: buildings.size },
+            sceneRegions: regions, precisionReady: complete, partial: !complete, source: regions.map(region => region.source).filter(Boolean).join(' + ') || 'GitHub precomputed scene tiles',
+            sceneCoverage: { regions: regions.map(region => region.region).filter(Boolean), partial: !complete }
+        };
+    }
+
     async function fetchPrecomputedSceneForRoute(coordinates, options = {}) {
         const candidates = options.precomputedManifestUrl
             ? [{ id: options.precomputedRegion || 'custom', url: options.precomputedManifestUrl, bounds: options.precomputedRegionBounds }]
             : (Array.isArray(options.precomputedRegions) && options.precomputedRegions.length
             ? options.precomputedRegions
             : PRECOMPUTED_REGION_MANIFESTS);
+        const parts = [];
         for (const candidate of candidates) {
             if (!candidate || !candidate.url) continue;
             const scene = await fetchPrecomputedSceneForRouteSingle(coordinates, {
@@ -1099,10 +1303,24 @@
             });
             if (scene) {
                 scene.region = candidate.id || scene.region || null;
-                return scene;
+                parts.push(scene);
+                continue;
             }
+            const bounds = candidate.bounds || options.precomputedRegionBounds;
+            if (!bounds) continue;
+            const inside = coordinates.map((coordinate, index) => ({ coordinate, index })).filter(item => {
+                const lat = Number(item.coordinate[1]);
+                const lng = Number(item.coordinate[0]);
+                return lat >= Number(bounds.south) && lat <= Number(bounds.north) && lng >= Number(bounds.west) && lng <= Number(bounds.east);
+            });
+            if (inside.length < 2) continue;
+            const start = Math.max(0, inside[0].index - 1);
+            const end = Math.min(coordinates.length - 1, inside[inside.length - 1].index + 1);
+            const subset = coordinates.slice(start, end + 1);
+            const subsetScene = await fetchPrecomputedSceneForRouteSingle(subset, { ...options, precomputedManifestUrl: candidate.url, precomputedRegionBounds: bounds });
+            if (subsetScene) { subsetScene.region = candidate.id || subsetScene.region || null; subsetScene.segmentOffset = start; parts.push(subsetScene); }
         }
-        return null;
+        return mergePrecomputedScenes(parts, coordinates);
     }
 
     function findNearestTerrainSample(point, terrainSamples, maxDistance = Infinity) {

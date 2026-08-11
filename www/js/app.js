@@ -72,6 +72,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastGpsPosition = null;
     let lastGpsTimestamp = null;
     let lastRerouteTime = 0;
+    let navigationSessionRouteId = null;
+    let navigationSessionRouteGeometry = null;
+    let navigationSessionStartedAt = 0;
+    let navigationSessionStartDistanceMeters = 0;
+    let navigationSessionArrived = false;
+    let navigationConsecutiveOffRouteCount = 0;
+    let lastProcessedNavigationTimestamp = 0;
+    let lastProcessedNavigationPosition = null;
+    let lastProcessedNavigationAccuracy = Infinity;
+    const NAVIGATION_LOCATION_DEDUPE_WINDOW_MS = 1500;
     let routeAbortController = null;
     let pendingRouteRequestKey = null;
     let verifiedRouteRequestKey = null;
@@ -1477,6 +1487,28 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function applyNativeLastLocationOnResume() {
+        if (!isLiveNavActive || !window.PipController || typeof window.PipController.getLastNavigationLocation !== 'function') return;
+        try {
+            const last = await window.PipController.getLastNavigationLocation();
+            if (!last || !last.available || !Number.isFinite(Number(last.lat)) || !Number.isFinite(Number(last.lng))) return;
+            const process = window.__solarlessProcessNavigationPosition;
+            if (typeof process === 'function') {
+                process({
+                    coords: {
+                        latitude: Number(last.lat), longitude: Number(last.lng),
+                        accuracy: Number(last.accuracy), speed: Number.isFinite(Number(last.speed)) ? Number(last.speed) : null,
+                        heading: Number.isFinite(Number(last.heading)) ? Number(last.heading) : null
+                    },
+                    timestamp: Number(last.timestamp)
+                }, `native-resume-${last.provider || 'location'}`);
+                if (window.DebugLogger) window.DebugLogger.log('native-last-location-applied', { ageMs: Number(last.ageMs) || 0 });
+            }
+        } catch (error) {
+            if (window.DebugLogger) window.DebugLogger.log('native-last-location-error', { message: String(error && error.message || error) });
+        }
+    }
+
     function setupAppResumeListener() {
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
             window.Capacitor.Plugins.App.addListener('appStateChange', (state) => {
@@ -1489,6 +1521,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (isLiveNavActive) enableKeepAwake();
                 if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
+                applyNativeLastLocationOnResume();
                 if (currentEnd) {
                     console.log("App resumed to foreground. Refreshing GPS position...");
                     requestUserGpsLocation(false).catch(() => {});
@@ -1504,6 +1537,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else {
                 if (isLiveNavActive) enableKeepAwake();
                 if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
+                applyNativeLastLocationOnResume();
                 updateSunInfo();
             }
         });
@@ -1595,7 +1629,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     },
                     timestamp: Number(event.timestamp) || Date.now()
                 };
-                applyGpsFix(nativePosition, `native-${event.source || 'location'}`);
+                const process = window.__solarlessProcessNavigationPosition;
+                if (typeof process === 'function') process(nativePosition, `native-${event.source || 'location'}`);
+                else applyGpsFix(nativePosition, `native-${event.source || 'location'}`);
             });
         }
     }
@@ -1754,9 +1790,10 @@ document.addEventListener('DOMContentLoaded', () => {
             currentHeading = Number(coords.heading);
             hasValidGpsHeading = true;
         }
-        currentStart = { lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null };
+        const timestamp = Number(pos && pos.timestamp) > 0 ? Number(pos.timestamp) : Date.now();
+        currentStart = { lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null, timestamp };
         gpsLastFixSource = source || 'web';
-        gpsLastFixAt = Date.now();
+        gpsLastFixAt = timestamp;
         gpsPermissionState = gpsPermissionState === 'fine-granted' ? 'fine-granted' : 'coarse-granted';
         gpsFixState = 'ready';
         gpsLastError = null;
@@ -1787,10 +1824,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         gpsFixPromise = new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
             async (pos) => {
-                const previousAccuracy = currentStart && Number(currentStart.accuracy);
+                const previousTimestamp = gpsLastFixAt;
+                const initialTimestamp = Number(pos && pos.timestamp) > 0 ? Number(pos.timestamp) : Date.now();
                 const source = pos && pos.coords && Number.isFinite(Number(pos.coords.accuracy)) && Number(pos.coords.accuracy) < 100
                     ? 'high-accuracy' : 'last-known/network';
                 applyGpsFix(pos, source);
+                const lat = currentStart.lat;
+                const lng = currentStart.lng;
                 // If a destination was already selected by a resume/GPS
                 // refresh flow, preserve the previous behavior of starting a
                 // route as soon as the first valid fix arrives. A normal
@@ -1822,7 +1862,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (source !== 'high-accuracy' && navigator.geolocation) {
                     navigator.geolocation.getCurrentPosition(refined => {
                         const refinedAccuracy = Number(refined && refined.coords && refined.coords.accuracy);
-                        if (!Number.isFinite(previousAccuracy) || !Number.isFinite(refinedAccuracy) || refinedAccuracy <= previousAccuracy) {
+                        const refinedTimestamp = Number(refined && refined.timestamp) || 0;
+                        const currentAccuracy = currentStart && Number(currentStart.accuracy);
+                        const baselineTimestamp = Math.max(previousTimestamp || 0, initialTimestamp || 0);
+                        const isNewer = !refinedTimestamp || refinedTimestamp >= baselineTimestamp;
+                        if (isNewer && (!Number.isFinite(currentAccuracy) || !Number.isFinite(refinedAccuracy) || refinedAccuracy <= currentAccuracy)) {
                             applyGpsFix(refined, 'high-accuracy');
                             if (currentEnd && !isLiveNavActive && !pendingRouteRequestKey) updateRoute();
                         }
@@ -2335,6 +2379,14 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // A mid-drive request is an explicit reroute. It is the only path
+        // allowed to replace the route frozen at navigation start.
+        if (isMidDrive && isLiveNavActive) {
+            navigationSessionRouteId = null;
+            navigationSessionRouteGeometry = null;
+            if (window.DebugLogger) window.DebugLogger.log('route-reroute-start', {});
+        }
+
         const requestGeneration = ++routeAnalysisGeneration;
         const candidateCacheKey = getRouteCandidateCacheKey();
         const reusableCandidates = routeOptions.reuseCachedCandidates && routeData &&
@@ -2379,12 +2431,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         pendingRouteRequestKey = null;
                         verifiedRouteRequestKey = requestKey;
                         updateRouteOptionButtons(routeData);
-                        selectedRouteObj = routeData.routes[currentMode] || routeData.routes.fastest;
+                        const enrichedSelection = routeData.routes[currentMode] || routeData.routes.fastest;
+                        if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId) {
+                            selectedRouteObj = enrichedSelection;
+                        }
                         setNavigationButtonsEnabled(isCurrentRouteReady());
                         renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
                         updateSummaryBox(selectedRouteObj);
                         updateHUDWithRoute(selectedRouteObj, sunPos);
                         if (window.DebugLogger) window.DebugLogger.log('route-first-result', { elapsedMs: Date.now() - routeStartedAt, routeCount: routeData.routes.all.length });
+                        if (window.DebugLogger) window.DebugLogger.log('route-progress-rendered', { elapsedMs: Date.now() - routeStartedAt });
                     }
                 }
             );
@@ -2402,6 +2458,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             verifiedRouteRequestKey = requestKey;
             pendingRouteRequestKey = null;
+            if (window.DebugLogger) window.DebugLogger.log('route-enrichment-complete', { elapsedMs: Date.now() - routeStartedAt, routeCount: routeData.routes && routeData.routes.all ? routeData.routes.all.length : 0 });
         } catch (e) {
             if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
             const hadPreviousRoute = !!(routeData && selectedRouteObj);
@@ -2418,6 +2475,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setNavigationButtonsEnabled(false);
             }
             showRouteFailureMessage(e, hadPreviousRoute);
+            if (window.DebugLogger) window.DebugLogger.log('route-enrichment-failure', { message: String(e && e.message || e), keptPreviousRoute: hadPreviousRoute });
             return;
         } finally {
             if (routeAbortController === requestController) {
@@ -2428,7 +2486,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         updateRouteOptionButtons(routeData);
 
-        selectedRouteObj = routeData.routes[currentMode] || routeData.routes.glareFree;
+        const enrichedSelection = routeData.routes[currentMode] || routeData.routes.glareFree;
+        if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId) {
+            selectedRouteObj = enrichedSelection;
+        }
+        if (isLiveNavActive && selectedRouteObj) {
+            navigationSessionRouteId = selectedRouteObj.id || null;
+            navigationSessionRouteGeometry = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
+                ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])]) : navigationSessionRouteGeometry;
+        }
         setNavigationButtonsEnabled(isCurrentRouteReady());
 
         renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
@@ -3167,6 +3233,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
+        navigationSessionArrived = true;
         stopGpsWatch();
         isLiveNavActive = false;
         setLiveNavigationMapMode(false);
@@ -3211,6 +3278,9 @@ document.addEventListener('DOMContentLoaded', () => {
         disableKeepAwake();
         compassModeUserOverride = false;
         setCompassMode('north-up');
+        navigationSessionRouteId = null;
+        navigationSessionRouteGeometry = null;
+        window.__solarlessProcessNavigationPosition = null;
         clearRouteFromMap();
         recenterMapToVehicle();
     }
@@ -3239,6 +3309,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 directMapBtn.classList.remove('active', 'reroute-mode');
             }
             disableKeepAwake();
+            navigationSessionArrived = true;
+            navigationSessionRouteId = null;
+            navigationSessionRouteGeometry = null;
+            window.__solarlessProcessNavigationPosition = null;
             compassModeUserOverride = false;
             setCompassMode('north-up');
             TTSVoice.speak(isKo ? "안내를 종료합니다." : "Ending navigation guidance.");
@@ -3286,6 +3360,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const navStartTime = Date.now();
         const navStartDistanceMeters = selectedRouteObj ? (selectedRouteObj.distanceMeters || 0) : 0;
+        navigationSessionStartedAt = navStartTime;
+        navigationSessionStartDistanceMeters = navStartDistanceMeters;
+        navigationSessionArrived = false;
+        navigationConsecutiveOffRouteCount = 0;
+        lastProcessedNavigationTimestamp = 0;
+        lastProcessedNavigationPosition = null;
+        lastProcessedNavigationAccuracy = Infinity;
+        navigationSessionRouteId = selectedRouteObj && selectedRouteObj.id || null;
+        navigationSessionRouteGeometry = selectedRouteObj && selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
+            ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])]) : null;
+        if (window.DebugLogger) window.DebugLogger.log('route-frozen-for-navigation', { routeId: navigationSessionRouteId || 'geometry-session' });
         let isArrived = false;
         let consecutiveOffRouteCount = 0;
 
@@ -3310,8 +3395,107 @@ document.addEventListener('DOMContentLoaded', () => {
         // Dynamically announce exact selected route mode ("최단 시간 경로", "눈부심 방지 역광 회피 경로", "그늘 우선 경로")
         TTSVoice.speak(getRouteAnnouncementText(currentMode, false));
 
+        // WebView geolocation and the Android foreground service feed the same
+        // navigation pipeline. The active callback below returns immediately
+        // after this function so arrival, reroute, turn, speed, and hazard
+        // logic cannot diverge between providers.
+        function processNavigationPosition(position, source = 'web-watch') {
+            if (!isLiveNavActive || navigationSessionArrived || !position || !position.coords) return true;
+            const coords = position.coords;
+            const lat = Number(coords.latitude);
+            const lng = Number(coords.longitude);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return true;
+            const timestamp = Number(position.timestamp) > 0 ? Number(position.timestamp) : Date.now();
+            const accuracy = Number(coords.accuracy);
+            const ageMs = Math.max(0, Date.now() - timestamp);
+            if (ageMs > 2 * 60 * 1000 || timestamp + 1000 < lastProcessedNavigationTimestamp) {
+                if (window.DebugLogger) window.DebugLogger.log('gps-stale-ignored', { source, ageMs });
+                return true;
+            }
+            const distanceFromLast = lastProcessedNavigationPosition
+                ? ShadowRouter.calculateDistanceMeters(lastProcessedNavigationPosition.lat, lastProcessedNavigationPosition.lng, lat, lng)
+                : Infinity;
+            const incomingAccuracy = Number.isFinite(accuracy) && accuracy > 0 ? accuracy : Infinity;
+            const sameFix = distanceFromLast <= 3 && Math.abs(timestamp - lastProcessedNavigationTimestamp) <= NAVIGATION_LOCATION_DEDUPE_WINDOW_MS;
+            if (sameFix) {
+                const improvesAccuracy = incomingAccuracy + 0.5 < lastProcessedNavigationAccuracy;
+                const sourcePriority = String(source).startsWith('native') ? 2 : 1;
+                const priorSourcePriority = String(gpsLastFixSource).startsWith('native') ? 2 : 1;
+                if (!improvesAccuracy && (timestamp <= lastProcessedNavigationTimestamp || sourcePriority <= priorSourcePriority)) {
+                    if (window.DebugLogger) window.DebugLogger.log('gps-duplicate-ignored', { source, distanceMeters: Math.round(distanceFromLast) });
+                    return true;
+                }
+            }
+            const normalized = { coords: { ...coords, latitude: lat, longitude: lng }, timestamp };
+            const rawSpeedKmh = getPositionSpeedKmh(normalized);
+            const hasHwHeading = Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0;
+            if (hasHwHeading) hasValidGpsHeading = true;
+            if (hasHwHeading && !compassModeUserOverride && compassMode === 'north-up') setCompassMode('heading-up');
+            applyGpsFix(normalized, source);
+            updateGpsSpeedometer(normalized);
+
+            let heading = currentHeading;
+            if (!lastStableMovingGps) {
+                lastStableMovingGps = { lat, lng };
+                if (hasHwHeading) { heading = Number(coords.heading); stableGpsHeading = heading; }
+            } else {
+                const distMoved = ShadowRouter.calculateDistanceMeters(lastStableMovingGps.lat, lastStableMovingGps.lng, lat, lng);
+                if (rawSpeedKmh < 3.5 && distMoved < 4.5) heading = stableGpsHeading || currentHeading;
+                else {
+                    if (hasHwHeading && rawSpeedKmh > 2.0) heading = Number(coords.heading);
+                    else if (distMoved >= 3.0) heading = ShadowRouter.calculateBearing(lastStableMovingGps.lat, lastStableMovingGps.lng, lat, lng);
+                    stableGpsHeading = heading;
+                    lastStableMovingGps = { lat, lng };
+                }
+            }
+            currentHeading = heading;
+            lastGpsPosition = { lat, lng };
+            lastGpsTimestamp = timestamp;
+            lastProcessedNavigationTimestamp = timestamp;
+            lastProcessedNavigationPosition = { lat, lng };
+            lastProcessedNavigationAccuracy = incomingAccuracy;
+
+            if (currentEnd) {
+                const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, currentEnd.lat, currentEnd.lng);
+                const routeCoords = selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates
+                    ? selectedRouteObj.analyzed.coordinates : navigationSessionRouteGeometry;
+                let nearEnd = false;
+                if (routeCoords && routeCoords.length > 1) {
+                    const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, routeCoords);
+                    nearEnd = snap.segmentIndex >= Math.max(0, routeCoords.length - 3);
+                }
+                if (distToDest <= 55 || (nearEnd && distToDest <= 80 && rawSpeedKmh < 30)) {
+                    handleDestinationArrival(navigationSessionStartedAt, navigationSessionStartDistanceMeters);
+                    return true;
+                }
+            }
+            if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
+                const offRouteDist = ShadowRouter.distanceToRoute(lat, lng, selectedRouteObj.analyzed.coordinates);
+                const now = Date.now();
+                navigationConsecutiveOffRouteCount = offRouteDist > 45 ? navigationConsecutiveOffRouteCount + 1 : 0;
+                if ((navigationConsecutiveOffRouteCount >= 2 || offRouteDist > 65) && now - lastRerouteTime > 8000) {
+                    lastRerouteTime = now;
+                    navigationConsecutiveOffRouteCount = 0;
+                    TTSVoice.speak('Off route. Recalculating from current position.', true);
+                    updateRoute(true);
+                    return true;
+                }
+            }
+            updateVehicleMarkerPosition(lat, lng, heading);
+            const sunPos = SunCalc.getPosition(new Date(), lat, lng);
+            const glareRisk = ShadowRouter.calculateSegmentGlare(currentHeading, sunPos);
+            const nextManeuver = findNextManeuver(lat, lng);
+            updateTurnBannerText(nextManeuver, glareRisk);
+            if (nextManeuver) TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar);
+            if (glareRisk > 0.45) TTSVoice.announceProactiveGlareWarning(currentHeading, glareRisk);
+            TTSVoice.announceNavHazard(nextManeuver ? nextManeuver.distanceFromCar : 200, currentHeading, glareRisk);
+            return true;
+        }
+        window.__solarlessProcessNavigationPosition = processNavigationPosition;
+
         gpsWatchId = navigator.geolocation.watchPosition(
             (pos) => {
+                if (processNavigationPosition(pos, 'web-watch')) return;
                 if (isArrived) return;
 
                 const lat = pos.coords.latitude;

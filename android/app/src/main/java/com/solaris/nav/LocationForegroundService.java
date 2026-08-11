@@ -13,6 +13,7 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.IBinder;
+import android.content.SharedPreferences;
 
 /**
  * Keeps the navigation process visible while the activity is in PiP or the
@@ -21,9 +22,14 @@ import android.os.IBinder;
  */
 public final class LocationForegroundService extends Service implements LocationListener {
     public static final String ACTION_LOCATION_UPDATE = "com.solaris.nav.LOCATION_UPDATE";
+    public static final String ACTION_SERVICE_STATUS = "com.solaris.nav.LOCATION_SERVICE_STATUS";
+    public static final String EXTRA_REASON = "reason";
+    public static final String PREFS = "solarless_navigation_location";
+    public static final long LAST_LOCATION_TTL_MS = 2 * 60 * 1000L;
     private static final String CHANNEL_ID = "navigation_location";
     private static final int NOTIFICATION_ID = 1206;
     private LocationManager locationManager;
+    private boolean providerRegistered;
 
     @Override
     public void onCreate() {
@@ -43,7 +49,17 @@ public final class LocationForegroundService extends Service implements Location
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .build();
-        startForeground(NOTIFICATION_ID, notification);
+        try {
+            startForeground(NOTIFICATION_ID, notification);
+        } catch (SecurityException error) {
+            sendStatus("LOCATION_SERVICE_START_FAILED");
+            stopSelf();
+            return START_NOT_STICKY;
+        } catch (RuntimeException error) {
+            sendStatus("LOCATION_SERVICE_START_FAILED");
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         requestLocationUpdates();
         return START_NOT_STICKY;
     }
@@ -63,36 +79,83 @@ public final class LocationForegroundService extends Service implements Location
     private void requestLocationUpdates() {
         if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
             checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            sendStatus("LOCATION_PERMISSION_MISSING");
             stopSelf();
             return;
         }
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        if (locationManager == null) {
+            sendStatus("LOCATION_SERVICE_START_FAILED");
+            stopSelf();
+            return;
+        }
+        providerRegistered = false;
+        registerProvider(LocationManager.GPS_PROVIDER, 1000L, 3f);
+        registerProvider(LocationManager.NETWORK_PROVIDER, 2000L, 10f);
+        if (!providerRegistered) {
+            sendStatus("LOCATION_SERVICE_NO_PROVIDER");
+            stopSelf();
+        }
+    }
+
+    private void registerProvider(String provider, long intervalMs, float minDistanceM) {
         if (locationManager == null) return;
         try {
-            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 3f, this);
+            if (!locationManager.isProviderEnabled(provider)) {
+                sendStatus("LOCATION_PROVIDER_UNAVAILABLE");
+                return;
             }
-            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 10f, this);
-            }
-        } catch (SecurityException ignored) {
-            stopSelf();
+            locationManager.requestLocationUpdates(provider, intervalMs, minDistanceM, this);
+            providerRegistered = true;
+        } catch (SecurityException error) {
+            sendStatus("LOCATION_PERMISSION_MISSING");
+        } catch (IllegalArgumentException error) {
+            sendStatus("LOCATION_PROVIDER_REGISTER_FAILED");
+        } catch (RuntimeException error) {
+            sendStatus("LOCATION_PROVIDER_REGISTER_FAILED");
         }
     }
 
     @Override
     public void onLocationChanged(Location location) {
         if (location == null) return;
+        long timestamp = location.getTime() > 0 ? location.getTime() : System.currentTimeMillis();
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        long previousTimestamp = prefs.getLong("timestamp", 0L);
+        if (previousTimestamp > 0 && timestamp < previousTimestamp) return;
+        SharedPreferences.Editor editor = prefs.edit()
+            .putLong("timestamp", timestamp)
+            .putString("provider", location.getProvider() == null ? "native" : location.getProvider())
+            .putString("lat", Double.toString(location.getLatitude()))
+            .putString("lng", Double.toString(location.getLongitude()))
+            .putFloat("accuracy", location.hasAccuracy() ? location.getAccuracy() : -1f)
+            .remove("speed")
+            .remove("bearing");
+        if (location.hasSpeed()) editor.putFloat("speed", location.getSpeed());
+        if (location.hasBearing()) editor.putFloat("bearing", location.getBearing());
+        editor.apply();
         Intent event = new Intent(ACTION_LOCATION_UPDATE)
             .setPackage(getPackageName())
             .putExtra("lat", location.getLatitude())
             .putExtra("lng", location.getLongitude())
             .putExtra("accuracy", location.hasAccuracy() ? location.getAccuracy() : -1f)
-            .putExtra("timestamp", location.getTime())
+            .putExtra("timestamp", timestamp)
             .putExtra("source", location.getProvider() == null ? "native" : location.getProvider());
         if (location.hasSpeed()) event.putExtra("speed", location.getSpeed());
         if (location.hasBearing()) event.putExtra("heading", location.getBearing());
         sendBroadcast(event);
+    }
+
+    private void sendStatus(String reason) {
+        Intent event = new Intent(ACTION_SERVICE_STATUS)
+            .setPackage(getPackageName())
+            .putExtra(EXTRA_REASON, reason);
+        sendBroadcast(event);
+    }
+
+    public static void clearLastLocation(Context context) {
+        if (context == null) return;
+        context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().clear().apply();
     }
 
     @Override public void onProviderEnabled(String provider) { }
@@ -103,6 +166,7 @@ public final class LocationForegroundService extends Service implements Location
         if (locationManager != null) {
             try { locationManager.removeUpdates(this); } catch (SecurityException ignored) { }
         }
+        sendStatus("LOCATION_SERVICE_STOPPED");
         super.onDestroy();
     }
 

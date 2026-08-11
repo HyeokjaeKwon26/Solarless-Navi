@@ -309,6 +309,9 @@ Release builds require JDK 17, Android SDK/Gradle, and a signing keystore. Keep 
 * Public OSRM, Overpass, OpenTopoData, Nominatim/Photon, and Esri/CARTO tile services can be rate-limited or unavailable. Attribution links are required by the providers' licenses and cannot be removed.
 * On Android, navigation starts a visible location foreground service and may enter Picture-in-Picture when enabled. PiP and location behavior still require validation on physical Android API 26/30/31/34 devices. Debug builds expose a bounded diagnostic panel; release builds do not create it and do not include full GPS coordinates in logs.
 * The precomputed tiles store fixed OSM building/tunnel geometry and DEM samples. The app performs the time-dependent solar ray check at runtime; they are not a complete precomputed 3D horizon model.
+* Browser GPS and the native foreground service use one timestamp/accuracy-aware navigation pipeline. A recent native fix is restored on app resume, and explicit rerouting is the only operation allowed to replace the route frozen when guidance starts.
+* Scene ZIP inflation and JSON parsing use a bounded Worker fallback when available. Regional manifests can be combined for a boundary-crossing route; incomplete coverage is reported as partial and is never labelled precision.
+* To record a trustworthy source date during scene generation, set `SCENE_OSM_EXTRACT_TIMESTAMP` (or provide `SCENE_OSM_SOURCE_METADATA`). The local PBF file mtime is stored only as `localFileModifiedAt`, never as the extract date.
 
 ---
 

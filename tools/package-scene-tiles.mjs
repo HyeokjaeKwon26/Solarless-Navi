@@ -81,6 +81,8 @@ function main() {
         grid: sourceManifest.grid,
         source: sourceManifest.source,
         sourceMetadata: sourceManifest.sourceMetadata || null,
+        localFileModifiedAt: sourceManifest.sourceMetadata && sourceManifest.sourceMetadata.osm
+            ? sourceManifest.sourceMetadata.osm.localFileModifiedAt || null : null,
         osmExtractTimestamp: sourceManifest.osmExtractTimestamp || null,
         osmSourceUrl: sourceManifest.osmSourceUrl || null,
         osmPbfSha256: sourceManifest.osmPbfSha256 || null,

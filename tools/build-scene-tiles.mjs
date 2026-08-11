@@ -42,6 +42,8 @@ const PROFILE_AZIMUTH_DEG = Math.max(1, Number(process.env.SCENE_PROFILE_AZIMUTH
 const PROFILE_SAMPLE_SPACING_M = Math.max(25, Number(process.env.SCENE_PROFILE_SAMPLE_SPACING_M || 100));
 const DATA_VERSION = String(process.env.SCENE_DATA_VERSION || 'hybrid-scene-v1');
 const OSM_SOURCE_URL = process.env.SCENE_OSM_SOURCE_URL || null;
+const OSM_EXTRACT_TIMESTAMP = process.env.SCENE_OSM_EXTRACT_TIMESTAMP || null;
+const OSM_SOURCE_METADATA_PATH = process.env.SCENE_OSM_SOURCE_METADATA || null;
 const DEM_DATASET = String(process.env.SCENE_DEM_DATASET || 'SRTM 1 arc-second public elevation tiles');
 const DEM_DATASET_VERSION = process.env.SCENE_DEM_DATASET_VERSION || null;
 // Restoring every road node in a large regional PBF is needlessly expensive. For larger
@@ -91,11 +93,21 @@ function sourceMetadata() {
             pbfSha256 = hash.digest('hex');
         } finally { fs.closeSync(fd); }
     }
+    let verifiedExtractTimestamp = OSM_EXTRACT_TIMESTAMP;
+    if (!verifiedExtractTimestamp && OSM_SOURCE_METADATA_PATH && fs.existsSync(OSM_SOURCE_METADATA_PATH)) {
+        try {
+            const source = JSON.parse(fs.readFileSync(OSM_SOURCE_METADATA_PATH, 'utf8'));
+            verifiedExtractTimestamp = source.extractTimestamp || source.osmExtractTimestamp || null;
+        } catch (error) {
+            verifiedExtractTimestamp = null;
+        }
+    }
     return {
         osm: {
             extract: path.basename(PBF_PATH),
             bytes: pbf ? pbf.size : null,
-            extractTimestamp: pbf ? pbf.mtime.toISOString() : null,
+            extractTimestamp: verifiedExtractTimestamp,
+            localFileModifiedAt: pbf ? pbf.mtime.toISOString() : null,
             sourceUrl: OSM_SOURCE_URL,
             pbfSha256,
             license: 'ODbL / OpenStreetMap contributors'

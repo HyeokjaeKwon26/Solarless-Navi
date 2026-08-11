@@ -54,6 +54,11 @@
         if (!p || !p.getLocationPermissionState) return null;
         try { return await p.getLocationPermissionState(); } catch (error) { return { state: 'unknown', error }; }
     }
+    async function getLastNavigationLocation() {
+        const p = plugin();
+        if (!p || !p.getLastNavigationLocation) return null;
+        try { return await p.getLastNavigationLocation(); } catch (error) { return { available: false, reason: 'PLUGIN_ERROR' }; }
+    }
     function addListener(name, listener) {
         const p = plugin();
         if (p && p.addListener) return p.addListener(name, listener);
@@ -69,7 +74,7 @@
         }
         return refresh();
     }
-    const api = { init, refresh, setNavigationActive, getAutoEnter, setAutoEnter, enter, openSettings, update, getLocationPermissionState, addListener };
+    const api = { init, refresh, setNavigationActive, getAutoEnter, setAutoEnter, enter, openSettings, update, getLocationPermissionState, getLastNavigationLocation, addListener };
     root.PipController = api;
     if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

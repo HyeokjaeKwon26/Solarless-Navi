@@ -11,6 +11,7 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.content.SharedPreferences;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -31,6 +32,10 @@ public class PipPlugin extends Plugin {
         instance = this;
         locationReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
+                if (LocationForegroundService.ACTION_SERVICE_STATUS.equals(intent.getAction())) {
+                    dispatchReason(intent.getStringExtra(LocationForegroundService.EXTRA_REASON));
+                    return;
+                }
                 if (!LocationForegroundService.ACTION_LOCATION_UPDATE.equals(intent.getAction())) return;
                 JSObject data = new JSObject();
                 data.put("lat", intent.getDoubleExtra("lat", Double.NaN));
@@ -45,6 +50,7 @@ public class PipPlugin extends Plugin {
         };
         try {
             IntentFilter filter = new IntentFilter(LocationForegroundService.ACTION_LOCATION_UPDATE);
+            filter.addAction(LocationForegroundService.ACTION_SERVICE_STATUS);
             if (Build.VERSION.SDK_INT >= 33) getContext().registerReceiver(locationReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
             else getContext().registerReceiver(locationReceiver, filter);
         } catch (Exception ignored) { }
@@ -101,6 +107,30 @@ public class PipPlugin extends Plugin {
         result.put("fine", fine);
         result.put("granted", coarse || fine);
         result.put("state", fine ? "fine-granted" : (coarse ? "coarse-granted" : "prompt-or-denied"));
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void getLastNavigationLocation(PluginCall call) {
+        SharedPreferences prefs = getContext().getSharedPreferences(LocationForegroundService.PREFS, Context.MODE_PRIVATE);
+        long timestamp = prefs.getLong("timestamp", 0L);
+        long ageMs = timestamp > 0 ? Math.max(0L, System.currentTimeMillis() - timestamp) : Long.MAX_VALUE;
+        JSObject result = new JSObject();
+        result.put("available", timestamp > 0 && ageMs <= LocationForegroundService.LAST_LOCATION_TTL_MS);
+        result.put("timestamp", timestamp);
+        result.put("ageMs", ageMs == Long.MAX_VALUE ? -1L : ageMs);
+        if (timestamp > 0 && ageMs <= LocationForegroundService.LAST_LOCATION_TTL_MS) {
+            try {
+                result.put("lat", Double.parseDouble(prefs.getString("lat", "NaN")));
+                result.put("lng", Double.parseDouble(prefs.getString("lng", "NaN")));
+            } catch (Exception error) {
+                result.put("available", false);
+            }
+            result.put("accuracy", prefs.getFloat("accuracy", -1f));
+            result.put("provider", prefs.getString("provider", "native"));
+            if (prefs.contains("speed")) result.put("speed", prefs.getFloat("speed", -1f));
+            if (prefs.contains("bearing")) result.put("heading", prefs.getFloat("bearing", -1f));
+        }
         call.resolve(result);
     }
 
@@ -231,18 +261,37 @@ public class PipPlugin extends Plugin {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) activity.startForegroundService(intent);
             else activity.startService(intent);
-        } catch (Exception ignored) { }
+        } catch (SecurityException error) {
+            dispatchReason("LOCATION_PERMISSION_MISSING");
+        } catch (IllegalStateException error) {
+            dispatchReason("LOCATION_SERVICE_START_FAILED");
+        } catch (RuntimeException error) {
+            dispatchReason("LOCATION_SERVICE_START_FAILED");
+        }
     }
 
     private static void stopLocationService(Activity activity) {
         if (activity == null) return;
-        try { activity.stopService(new Intent(activity, LocationForegroundService.class)); } catch (Exception ignored) { }
+        try {
+            activity.stopService(new Intent(activity, LocationForegroundService.class));
+            LocationForegroundService.clearLastLocation(activity);
+            dispatchReason("LOCATION_SERVICE_STOPPED");
+        } catch (Exception error) {
+            dispatchReason("LOCATION_SERVICE_STOPPED");
+        }
     }
 
     static void handleUserLeaveHint(Activity activity) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !navigationActive || !autoEnter) return;
         if (!supported(activity)) { dispatchReason("UNSUPPORTED"); return; }
         if (!isAllowed(activity)) { dispatchReason("OS_PIP_BLOCKED"); return; }
+        // Android 12+ owns the automatic transition after auto-enter params
+        // are set. Calling enterPictureInPictureMode here as well can race the
+        // system transition and produce duplicate ENTER_FAILED callbacks.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            updateActivityParams(activity);
+            return;
+        }
         try {
             if (!activity.enterPictureInPictureMode(buildParams())) dispatchReason("ENTER_FAILED");
         } catch (Exception error) {
