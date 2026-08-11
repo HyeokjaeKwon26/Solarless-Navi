@@ -49,14 +49,17 @@
         }
     ];
     const PRECOMPUTED_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+    const PRECOMPUTED_MANIFEST_REVALIDATE_MS = 24 * 60 * 60 * 1000;
     const PRECOMPUTED_CACHE_MAX_ENTRIES = 64;
+    const PRECOMPUTED_CACHE_MAX_BYTES = 64 * 1024 * 1024;
     const overpassCache = new Map();
     const terrainCache = new Map();
     const terrainInflight = new Map();
     const precomputedTileCache = new Map();
     const precomputedTileInflight = new Map();
-    let precomputedManifestCache = null;
-    let precomputedManifestInflight = null;
+    const precomputedManifestCache = new Map();
+    const precomputedManifestInflight = new Map();
+    let precomputedTileCacheBytes = 0;
 
     function finite(value) {
         return value !== null && value !== '' && Number.isFinite(Number(value));
@@ -340,19 +343,34 @@
         const record = precomputedTileCache.get(key);
         if (!record) return undefined;
         if (record.expiresAt <= Date.now()) {
+            precomputedTileCacheBytes = Math.max(0, precomputedTileCacheBytes - Number(record.bytes || 0));
             precomputedTileCache.delete(key);
             return undefined;
         }
         precomputedTileCache.delete(key);
+        record.lastAccess = Date.now();
         precomputedTileCache.set(key, record);
         return record.value;
     }
 
-    function setPrecomputedCacheValue(key, value) {
+    function estimateCacheBytes(value, explicitBytes = 0) {
+        if (Number.isFinite(Number(explicitBytes)) && Number(explicitBytes) > 0) return Number(explicitBytes);
+        try { return Math.max(1, JSON.stringify(value).length * 2); } catch (error) { return 1; }
+    }
+
+    function setPrecomputedCacheValue(key, value, explicitBytes = 0) {
+        const bytes = estimateCacheBytes(value, explicitBytes);
+        const previous = precomputedTileCache.get(key);
+        if (previous) precomputedTileCacheBytes = Math.max(0, precomputedTileCacheBytes - Number(previous.bytes || 0));
         precomputedTileCache.delete(key);
-        precomputedTileCache.set(key, { value, expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS });
-        while (precomputedTileCache.size > PRECOMPUTED_CACHE_MAX_ENTRIES) {
-            precomputedTileCache.delete(precomputedTileCache.keys().next().value);
+        precomputedTileCache.set(key, { value, bytes, lastAccess: Date.now(), expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS });
+        precomputedTileCacheBytes += bytes;
+        while (precomputedTileCache.size > PRECOMPUTED_CACHE_MAX_ENTRIES || precomputedTileCacheBytes > PRECOMPUTED_CACHE_MAX_BYTES) {
+            const oldestKey = precomputedTileCache.keys().next().value;
+            if (oldestKey === undefined) break;
+            const oldest = precomputedTileCache.get(oldestKey);
+            precomputedTileCacheBytes = Math.max(0, precomputedTileCacheBytes - Number(oldest && oldest.bytes || 0));
+            precomputedTileCache.delete(oldestKey);
         }
     }
 
@@ -396,11 +414,21 @@
         try {
             const transaction = db.transaction(storeName, 'readwrite');
             transaction.objectStore(storeName).put(value, key);
-            if (storeName === 'tiles') {
-                transaction.oncomplete = () => { pruneStoredSceneTiles().catch(() => {}); };
-            }
         } catch (error) {
             // IndexedDB is an optional persistence layer; memory cache remains valid.
+        }
+    }
+
+    async function writeStoredSceneValues(storeName, values) {
+        const db = await openPrecomputedDb();
+        if (!db || !Array.isArray(values) || !values.length) return;
+        try {
+            const transaction = db.transaction(storeName, 'readwrite');
+            const store = transaction.objectStore(storeName);
+            values.forEach(entry => store.put(entry.value, entry.key));
+            await new Promise(resolve => { transaction.oncomplete = resolve; transaction.onerror = resolve; transaction.onabort = resolve; });
+        } catch (error) {
+            // IndexedDB is optional; the in-memory LRU remains authoritative.
         }
     }
 
@@ -427,28 +455,60 @@
     }
 
     async function loadPrecomputedManifest(options = {}) {
-        const manifestUrl = options.precomputedManifestUrl || PRECOMPUTED_MANIFEST_URL;
-        if (precomputedManifestCache && precomputedManifestCache.url === manifestUrl) return precomputedManifestCache.value;
-        if (precomputedManifestInflight) return precomputedManifestInflight;
-        precomputedManifestInflight = (async () => {
-            const stored = await readStoredSceneValue('manifests', manifestUrl);
-            if (stored && stored.value && (!stored.expiresAt || stored.expiresAt > Date.now())) {
-                precomputedManifestCache = { url: manifestUrl, value: stored.value };
+        const manifestUrl = options.precomputedManifestUrl;
+        if (!manifestUrl) return null;
+        const memory = precomputedManifestCache.get(manifestUrl);
+        if (memory && memory.expiresAt > Date.now() && memory.revalidateAt > Date.now()) return memory.value;
+        if (precomputedManifestInflight.has(manifestUrl)) return precomputedManifestInflight.get(manifestUrl);
+        const promise = (async () => {
+            const stored = await readStoredSceneValue('manifests', manifestUrl) || memory;
+            const now = Date.now();
+            if (stored && stored.value && stored.revalidateAt > now) {
+                precomputedManifestCache.set(manifestUrl, { value: stored.value, etag: stored.etag || null, expiresAt: now + PRECOMPUTED_CACHE_TTL_MS, revalidateAt: stored.revalidateAt });
                 return stored.value;
             }
             try {
-                const value = await fetchJsonWithTimeout(manifestUrl, {
-                    signal: options.signal,
-                    timeoutMs: options.precomputedTimeoutMs || 5000
-                });
-                precomputedManifestCache = { url: manifestUrl, value };
-                await writeStoredSceneValue('manifests', manifestUrl, { value, expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS });
-                return value;
+                const fetchFn = root.fetch || (typeof fetch === 'function' ? fetch : null);
+                if (!fetchFn) return stored && stored.value || null;
+                const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                const timeoutMs = options.precomputedTimeoutMs || 5000;
+                let timer = null;
+                let abortHandler = null;
+                try {
+                    if (controller) {
+                        timer = setTimeout(() => controller.abort(), timeoutMs);
+                        if (options.signal) {
+                            abortHandler = () => controller.abort();
+                            if (options.signal.aborted) controller.abort();
+                            else options.signal.addEventListener('abort', abortHandler, { once: true });
+                        }
+                    }
+                    const headers = stored && stored.etag ? { 'If-None-Match': stored.etag } : undefined;
+                    const response = await fetchFn(manifestUrl, controller ? { signal: controller.signal, headers } : { headers });
+                    if (response && response.status === 304 && stored && stored.value) {
+                        const refreshed = { ...stored, revalidateAt: now + PRECOMPUTED_MANIFEST_REVALIDATE_MS, expiresAt: now + PRECOMPUTED_CACHE_TTL_MS };
+                        await writeStoredSceneValue('manifests', manifestUrl, refreshed);
+                        precomputedManifestCache.set(manifestUrl, refreshed);
+                        return stored.value;
+                    }
+                    if (!response || !response.ok) throw new Error(`HTTP ${response && response.status || 0}`);
+                    const value = await response.json();
+                    const etag = response.headers && typeof response.headers.get === 'function' ? response.headers.get('etag') : null;
+                    const record = { value, etag, revalidateAt: now + PRECOMPUTED_MANIFEST_REVALIDATE_MS, expiresAt: now + PRECOMPUTED_CACHE_TTL_MS };
+                    precomputedManifestCache.set(manifestUrl, record);
+                    await writeStoredSceneValue('manifests', manifestUrl, record);
+                    return value;
+                } finally {
+                    if (timer) clearTimeout(timer);
+                    if (options.signal && abortHandler) options.signal.removeEventListener('abort', abortHandler);
+                }
             } catch (error) {
-                return null;
+                if (options.signal && options.signal.aborted) throw error;
+                return stored && stored.value || null;
             }
-        })().finally(() => { precomputedManifestInflight = null; });
-        return precomputedManifestInflight;
+        })().finally(() => precomputedManifestInflight.delete(manifestUrl));
+        precomputedManifestInflight.set(manifestUrl, promise);
+        return promise;
     }
 
     function sceneTileUrl(manifest, pack) {
@@ -458,8 +518,16 @@
         return `${base}/${relative}`;
     }
 
+    function manifestCacheIdentity(manifest) {
+        const packHashes = Object.entries(manifest && manifest.packs || {})
+            .map(([key, value]) => `${key}:${value && value.sha256 || ''}`)
+            .sort().join('|');
+        return `${manifest && (manifest.releaseTag || manifest.dataVersion || 'scene') || 'scene'}:${manifest && manifest.schemaVersion || manifest && manifest.schema || 'unknown'}:${packHashes}`;
+    }
+
     async function loadPrecomputedPack(manifest, pack, options = {}) {
-        const cacheKey = `${manifest.releaseTag || 'scene'}:${pack}`;
+        const identity = manifestCacheIdentity(manifest);
+        const cacheKey = `${identity}:pack:${pack}`;
         const cached = getPrecomputedCacheValue(cacheKey);
         if (cached) return cached;
         if (precomputedTileInflight.has(cacheKey)) return precomputedTileInflight.get(cacheKey);
@@ -492,14 +560,18 @@
                 if (!root.fflate || typeof root.fflate.unzipSync !== 'function') throw new Error('scene tile decompressor unavailable');
                 const files = root.fflate.unzipSync(bytes);
                 const parsed = {};
+                const storedEntries = [];
                 for (const [name, content] of Object.entries(files)) {
                     if (!name.endsWith('.json')) continue;
                     const text = root.fflate.strFromU8(content);
                     parsed[name] = JSON.parse(text);
-                    setPrecomputedCacheValue(`${manifest.releaseTag || 'scene'}:tile:${name}`, parsed[name]);
-                    await writeStoredSceneValue('tiles', `${manifest.releaseTag || 'scene'}:tile:${name}`, { value: parsed[name], expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS });
+                    const tileKey = `${identity}:tile:${name}`;
+                    setPrecomputedCacheValue(tileKey, parsed[name], content.byteLength);
+                    storedEntries.push({ key: tileKey, value: { value: parsed[name], bytes: content.byteLength, lastAccess: Date.now(), expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS } });
                 }
-                setPrecomputedCacheValue(cacheKey, parsed);
+                await writeStoredSceneValues('tiles', storedEntries);
+                await pruneStoredSceneTiles();
+                setPrecomputedCacheValue(cacheKey, parsed, bytes.byteLength);
                 return parsed;
             } finally {
                 if (timer) clearTimeout(timer);
@@ -513,7 +585,7 @@
     async function loadPrecomputedTile(manifest, tileKey, options = {}) {
         const tileMeta = manifest.tiles && manifest.tiles[tileKey];
         if (!tileMeta) return null;
-        const cacheKey = `${manifest.releaseTag || 'scene'}:tile:${tileMeta.file}`;
+        const cacheKey = `${manifestCacheIdentity(manifest)}:tile:${tileMeta.file}`;
         const cached = getPrecomputedCacheValue(cacheKey);
         if (cached) return cached;
         const stored = await readStoredSceneValue('tiles', cacheKey);
@@ -862,7 +934,7 @@
         if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
         const routeLengthMeters = calculateRouteLengthMeters(coordinates);
         if (routeLengthMeters > Number(options.maxRouteMeters || 250000)) return null;
-        const regionBounds = options.precomputedRegionBounds || { south: 41.1, west: -73.7, north: 43.0, east: -69.7 };
+        const regionBounds = options.precomputedRegionBounds || { south: -90, west: -180, north: 90, east: 180 };
         const routeLatitudes = coordinates.map(coordinate => Number(coordinate[1])).filter(Number.isFinite);
         const routeLongitudes = coordinates.map(coordinate => Number(coordinate[0])).filter(Number.isFinite);
         if (!routeLatitudes.length || !routeLongitudes.length ||
@@ -871,7 +943,10 @@
         const manifest = await loadPrecomputedManifest(options);
         if (!manifest || manifest.schema !== 2 || !manifest.tiles || !manifest.packs) return null;
         const tileKeys = routeSceneTileKeys(coordinates, manifest, options.precomputedPaddingMeters);
-        const maxTiles = Number(options.maxPrecomputedTiles || 64);
+        // A 64-tile hard stop caused ordinary long routes to silently lose
+        // all scene data. Keep a bounded safety cap, but allow chunked regional
+        // archives to contribute partial/precision data first.
+        const maxTiles = Number(options.maxPrecomputedTiles || 256);
         if (!tileKeys.length || tileKeys.length > maxTiles) return null;
         if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
         if (tileKeys.some(key => !manifest.tiles[key])) return null;
@@ -1195,15 +1270,16 @@
         fetchSceneForRoute,
         getSegmentOcclusion,
         calculateRouteLengthMeters,
-        getCacheStats: () => ({ overpass: overpassCache.size, terrain: terrainCache.size, ttlMs: CACHE_TTL_MS }),
+        getCacheStats: () => ({ overpass: overpassCache.size, terrain: terrainCache.size, precomputedEntries: precomputedTileCache.size, precomputedBytes: precomputedTileCacheBytes, precomputedMaxBytes: PRECOMPUTED_CACHE_MAX_BYTES, ttlMs: CACHE_TTL_MS }),
         clearCaches: () => {
             overpassCache.clear();
             terrainCache.clear();
             terrainInflight.clear();
             precomputedTileCache.clear();
+            precomputedTileCacheBytes = 0;
             precomputedTileInflight.clear();
-            precomputedManifestCache = null;
-            precomputedManifestInflight = null;
+            precomputedManifestCache.clear();
+            precomputedManifestInflight.clear();
         }
     };
 });

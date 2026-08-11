@@ -481,7 +481,7 @@
             </aside>
 
             <!-- 2D Map View Column -->
-            <main class="map-container heading-up-active" id="map-perspective-wrapper">
+            <main class="map-container" id="map-perspective-wrapper">
                 <!-- Top Floating Destination Bar on Map -->
                 <div class="map-top-bar" id="map-top-bar">
                     <div class="bar-route-text" id="bar-route-summary">
@@ -562,7 +562,7 @@
                     </button>
 
                     <!-- Compass Mode Toggle Button (Heading-Up vs North-Up) -->
-                    <button class="map-floating-btn compass-btn heading-up" id="btn-toggle-compass" title="방위 모드 변경 (주행 방향 / 북쪽 정렬)">
+                    <button class="map-floating-btn compass-btn" id="btn-toggle-compass" title="방위 모드 변경 (주행 방향 / 북쪽 정렬)">
                         <i class="fa-solid fa-compass" id="compass-btn-icon"></i>
                         <span class="compass-mode-tag" id="compass-mode-tag">주행방향</span>
                     </button>
@@ -625,6 +625,8 @@
     <script src="js/route-state.js"></script>
     <script src="js/fflate.js"></script>
     <script src="js/scene-shadow.js"></script>
+    <script src="js/debug-logger.js"></script>
+    <script src="js/app-version.js"></script>
     <script src="js/shadow-router.js"></script>
     <script src="js/geocoder.js"></script>
     <script src="js/tts-voice.js"></script>

@@ -23,9 +23,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentStart = null;
     let currentHeading = 0;
-    let gpsPermissionState = 'unknown'; // unknown | prompt | granted | denied
+    let gpsPermissionState = 'unknown'; // prompt | coarse-granted | fine-granted | denied | denied-permanently
     let gpsFixState = 'idle'; // idle | pending | ready | error | unavailable
     let gpsFixPromise = null;
+    let gpsLastFixSource = 'none';
+    let gpsLastFixAt = 0;
+    let gpsLastError = null;
+    let gpsAccuracyCircle = null;
     let navigationStartPending = false;
     let currentEnd = null;
     let destinationName = "";
@@ -44,7 +48,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const nowD = new Date();
     let selectedTimeMinutes = nowD.getHours() * 60 + nowD.getMinutes();
 
-    let compassMode = 'heading-up'; // 'heading-up' (standard default for vehicle navigation) | 'north-up'
+    let compassMode = 'north-up'; // Planning starts north-up; valid movement heading enables heading-up at navigation start.
+    let compassModeUserOverride = false;
     const PREVIEW_MAX_ZOOM = 16;
     const NAVIGATION_ZOOM = 17.5;
     let isAutoDarkModeEnabled = true;
@@ -329,6 +334,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setNavigationButtonsEnabled(false);
         setupPermissionOnboarding();
         setupPipUi();
+        if (window.DebugLogger) window.DebugLogger.init();
 
         setTimeout(checkGitHubLatestVersion, 2500);
     }
@@ -1516,14 +1522,25 @@ document.addEventListener('DOMContentLoaded', () => {
         const hide = () => { overlay.classList.add('hidden'); try { localStorage.setItem('solarless_onboarding_seen', '1'); } catch (e) {} };
         const update = async () => {
             let state = 'prompt';
+            let nativePermission = null;
+            if (window.PipController && typeof window.PipController.getLocationPermissionState === 'function') {
+                nativePermission = await window.PipController.getLocationPermissionState();
+                if (nativePermission && nativePermission.granted) {
+                    state = nativePermission.fine ? 'fine-granted' : 'coarse-granted';
+                }
+            }
             try {
-                if (navigator.permissions && navigator.permissions.query) state = (await navigator.permissions.query({ name: 'geolocation' })).state;
+                if (!nativePermission || !nativePermission.granted) {
+                    if (navigator.permissions && navigator.permissions.query) state = (await navigator.permissions.query({ name: 'geolocation' })).state;
+                }
             } catch (e) { /* WebView may not expose Permissions API. */ }
             gpsPermissionState = state;
-            if (status) status.textContent = state === 'granted' ? I18n.getText('permissionAllowed') : (state === 'denied' ? I18n.getText('permissionDenied') : I18n.getText('permissionPrompt'));
+            if (status) status.textContent = (state === 'granted' || state === 'fine-granted' || state === 'coarse-granted')
+                ? I18n.getText('permissionAllowed')
+                : (state === 'denied' ? I18n.getText('permissionDenied') : I18n.getText('permissionPrompt'));
             let seen = false;
             try { seen = localStorage.getItem('solarless_onboarding_seen') === '1'; } catch (e) {}
-            if (state === 'granted') {
+            if (state === 'granted' || state === 'fine-granted' || state === 'coarse-granted') {
                 hide();
                 if (!currentStart && !gpsFixPromise) requestUserGpsLocation(true).catch(() => {});
             }
@@ -1537,12 +1554,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         skip.addEventListener('click', hide);
         await update();
+        if (window.DebugLogger) window.DebugLogger.log('location-permission-state', { state: gpsPermissionState });
         window.addEventListener('pageshow', update);
         document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') update(); });
     }
 
     function setupPipUi() {
         if (!window.PipController) return;
+        window.addEventListener('solarless:pipdebug', event => {
+            if (window.DebugLogger) window.DebugLogger.log('pip-debug', event && event.detail ? event.detail : {});
+        });
         window.addEventListener('solarless:pipmode', event => {
             if (map) setTimeout(() => map.invalidateSize({ animate: false }), 80);
             if (event && event.detail && event.detail.inPip) stopVehicleMarkerAnimation();
@@ -1557,8 +1578,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (settings) settings.addEventListener('click', () => window.PipController.openSettings());
         window.PipController.init().then(result => {
-            if (status) status.textContent = result && result.supported ? I18n.getText('pipSupported') : I18n.getText('pipUnsupported');
+            if (status) status.textContent = result && result.supported
+                ? (result.allowed === false ? `${I18n.getText('pipSupported')} (${result.reason || 'OS_PIP_BLOCKED'})` : I18n.getText('pipSupported'))
+                : I18n.getText('pipUnsupported');
+            if (window.DebugLogger) window.DebugLogger.log('pip-state', result || { reason: 'WEB_RUNTIME' });
         });
+        if (typeof window.PipController.addListener === 'function') {
+            window.PipController.addListener('locationUpdate', event => {
+                if (!isLiveNavActive || !event || !Number.isFinite(Number(event.lat)) || !Number.isFinite(Number(event.lng))) return;
+                const nativePosition = {
+                    coords: {
+                        latitude: Number(event.lat), longitude: Number(event.lng),
+                        accuracy: Number(event.accuracy),
+                        speed: Number.isFinite(Number(event.speed)) ? Number(event.speed) : null,
+                        heading: Number.isFinite(Number(event.heading)) ? Number(event.heading) : null
+                    },
+                    timestamp: Number(event.timestamp) || Date.now()
+                };
+                applyGpsFix(nativePosition, `native-${event.source || 'location'}`);
+            });
+        }
     }
 
     function updatePipHud(nextText, etaText, distanceText) {
@@ -1679,6 +1718,59 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function updateGpsAccuracyCircle(lat, lng, accuracy) {
+        if (!map || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+        const radius = Number.isFinite(Number(accuracy)) && Number(accuracy) > 0 ? Math.min(5000, Number(accuracy)) : 0;
+        if (!gpsAccuracyCircle) {
+            gpsAccuracyCircle = L.circle([lat, lng], {
+                radius,
+                color: '#38bdf8',
+                weight: 1,
+                fillColor: '#38bdf8',
+                fillOpacity: 0.12,
+                opacity: radius > 0 ? 0.75 : 0
+            }).addTo(map);
+        } else {
+            gpsAccuracyCircle.setLatLng([lat, lng]);
+            gpsAccuracyCircle.setRadius(radius);
+            gpsAccuracyCircle.setStyle({ opacity: radius > 0 ? 0.75 : 0, fillOpacity: radius > 0 ? 0.12 : 0 });
+        }
+        const status = document.getElementById('header-gps-status');
+        if (status) {
+            const ageSec = Math.max(0, Math.round((Date.now() - gpsLastFixAt) / 1000));
+            status.title = radius > 0
+                ? `${gpsLastFixSource} · ±${Math.round(radius)}m · ${ageSec}s`
+                : `${gpsLastFixSource} · ${ageSec}s`;
+        }
+    }
+
+    function applyGpsFix(pos, source = 'web') {
+        const coords = pos && pos.coords;
+        const lat = Number(coords && coords.latitude);
+        const lng = Number(coords && coords.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('Invalid GPS fix');
+        const accuracy = Number(coords.accuracy);
+        if (Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0) {
+            currentHeading = Number(coords.heading);
+            hasValidGpsHeading = true;
+        }
+        currentStart = { lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null };
+        gpsLastFixSource = source || 'web';
+        gpsLastFixAt = Date.now();
+        gpsPermissionState = gpsPermissionState === 'fine-granted' ? 'fine-granted' : 'coarse-granted';
+        gpsFixState = 'ready';
+        gpsLastError = null;
+        setGpsStatusIndicator(false, true);
+        updateGpsAccuracyCircle(lat, lng, accuracy);
+        if (window.DebugLogger) window.DebugLogger.log('gps-fix', {
+            source: gpsLastFixSource,
+            position: { lat, lng },
+            accuracy: Number.isFinite(accuracy) ? accuracy : null,
+            ageMs: 0
+        });
+        return currentStart;
+    }
+
     function requestUserGpsLocation(isInitial = false) {
         if (!navigator.geolocation) {
             gpsFixState = 'unavailable';
@@ -1695,16 +1787,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         gpsFixPromise = new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
             async (pos) => {
-                const lat = pos.coords.latitude;
-                const lng = pos.coords.longitude;
-                if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
-                    currentHeading = pos.coords.heading;
-                }
-
-                currentStart = { lat: lat, lng: lng };
-                gpsPermissionState = 'granted';
-                gpsFixState = 'ready';
-                setGpsStatusIndicator(false, true);
+                const previousAccuracy = currentStart && Number(currentStart.accuracy);
+                const source = pos && pos.coords && Number.isFinite(Number(pos.coords.accuracy)) && Number(pos.coords.accuracy) < 100
+                    ? 'high-accuracy' : 'last-known/network';
+                applyGpsFix(pos, source);
                 // If a destination was already selected by a resume/GPS
                 // refresh flow, preserve the previous behavior of starting a
                 // route as soon as the first valid fix arrives. A normal
@@ -1725,13 +1811,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateSunInfo();
                 checkAndUpdateMapTileTheme();
 
-                if (!currentEnd) {
-                    map.setView([lat, lng], 16);
-                    updateVehicleMarkerPosition(lat, lng, currentHeading);
+                if (!currentEnd && map) {
+                    map.setView([currentStart.lat, currentStart.lng], 16);
+                    updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
+                }
+
+                // A quick network/last-known fix makes the first screen
+                // responsive. Follow it with one high-accuracy fix without
+                // delaying route preparation or opening another permission UI.
+                if (source !== 'high-accuracy' && navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(refined => {
+                        const refinedAccuracy = Number(refined && refined.coords && refined.coords.accuracy);
+                        if (!Number.isFinite(previousAccuracy) || !Number.isFinite(refinedAccuracy) || refinedAccuracy <= previousAccuracy) {
+                            applyGpsFix(refined, 'high-accuracy');
+                            if (currentEnd && !isLiveNavActive && !pendingRouteRequestKey) updateRoute();
+                        }
+                    }, () => {}, { enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 });
                 }
             },
             (err) => {
                 gpsFixState = 'error';
+                gpsLastError = err && err.code;
                 // Do not infer a permanent permission denial from a single
                 // WebView code-1 callback. Android can emit it while the
                 // permission result is settling; the Permissions API state
@@ -1742,11 +1842,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 updateSunInfo();
                 checkAndUpdateMapTileTheme();
+                if (window.DebugLogger) window.DebugLogger.log('gps-error', { code: err && err.code, source: isInitial ? 'initial' : 'request' });
                 const gpsError = new Error(err && err.code === 1 ? 'Location permission was denied.' : 'Current GPS position is not available yet.');
                 gpsError.code = err && err.code;
                 reject(gpsError);
             },
-            { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+            { enableHighAccuracy: false, timeout: 2500, maximumAge: 120000 }
         )).finally(() => { gpsFixPromise = null; });
         return gpsFixPromise;
     }
@@ -1765,6 +1866,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let manualMapRotation = 0;
     let stableGpsHeading = 0;
     let lastStableMovingGps = null;
+    let hasValidGpsHeading = false;
 
     function stopVehicleMarkerAnimation() {
         if (vehicleAnimFrameId !== null && typeof cancelAnimationFrame === 'function') {
@@ -1988,6 +2090,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function setCompassMode(mode) {
+        const next = mode === 'heading-up' ? 'heading-up' : 'north-up';
+        compassMode = next;
+        manualMapRotation = 0;
+        const btn = document.getElementById('btn-toggle-compass');
+        const tag = document.getElementById('compass-mode-tag');
+        if (btn) btn.classList.toggle('heading-up', next === 'heading-up');
+        if (tag) tag.innerText = next === 'heading-up' ? I18n.getText('compassHeading') : I18n.getText('compassNorth');
+        applyMapRotation(next === 'heading-up' ? currentHeading : 0);
+    }
+
     function setLiveNavigationMapMode(active) {
         const wrapper = document.getElementById('map-perspective-wrapper');
         if (!wrapper) return;
@@ -2046,6 +2159,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (navigationStartPending) return;
         navigationStartPending = true;
         const isKo = I18n.getLanguage().startsWith('ko');
+        compassModeUserOverride = true;
         try {
             await requestUserGpsLocation(false);
         } catch (e) {
@@ -2244,13 +2358,35 @@ document.addEventListener('DOMContentLoaded', () => {
         markRouteCalculationPending(true);
         const sunPos = updateSunInfo();
 
+        const routeStartedAt = Date.now();
         try {
             const nextRouteData = await ShadowRouter.fetchAndAnalyzeRoutes(
                 currentStart,
                 currentEnd,
                 dateObj,
                 isTollFreeOnly,
-                { signal: requestController.signal, candidates: reusableCandidates, reuseSceneCache: true }
+                {
+                    signal: requestController.signal,
+                    candidates: reusableCandidates,
+                    reuseOsrmCache: true,
+                    reuseSceneCache: true,
+                    onProgress: async progress => {
+                        if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
+                        routeData = progress;
+                        routeData.calculatedAt = Date.now();
+                        routeData.requestKey = requestKey;
+                        routeData.routeCandidateKey = candidateCacheKey;
+                        pendingRouteRequestKey = null;
+                        verifiedRouteRequestKey = requestKey;
+                        updateRouteOptionButtons(routeData);
+                        selectedRouteObj = routeData.routes[currentMode] || routeData.routes.fastest;
+                        setNavigationButtonsEnabled(isCurrentRouteReady());
+                        renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
+                        updateSummaryBox(selectedRouteObj);
+                        updateHUDWithRoute(selectedRouteObj, sunPos);
+                        if (window.DebugLogger) window.DebugLogger.log('route-first-result', { elapsedMs: Date.now() - routeStartedAt, routeCount: routeData.routes.all.length });
+                    }
+                }
             );
 
             if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
@@ -2501,6 +2637,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Camera auto-framing: only fit bounds when planning/previewing route, NOT when actively navigating
         if (!isLiveDrive && !isLiveNavActive) {
+            if (compassMode !== 'north-up' || Math.abs(manualMapRotation) >= 0.1) setCompassMode('north-up');
             const allCoords = selectedRouteObj.analyzed.coordinates.map(c => [c[1], c[0]]);
             if (allCoords.length >= 2) {
                 // Reserve space occupied by the destination/header and the
@@ -3072,7 +3209,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         disableKeepAwake();
-        applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
+        compassModeUserOverride = false;
+        setCompassMode('north-up');
         clearRouteFromMap();
         recenterMapToVehicle();
     }
@@ -3101,7 +3239,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 directMapBtn.classList.remove('active', 'reroute-mode');
             }
             disableKeepAwake();
-            applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
+            compassModeUserOverride = false;
+            setCompassMode('north-up');
             TTSVoice.speak(isKo ? "안내를 종료합니다." : "Ending navigation guidance.");
             return;
         }
@@ -3135,7 +3274,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         isLiveNavActive = true;
         setLiveNavigationMapMode(true);
+        // Planning/preview stays north-up. Once a valid movement heading is
+        // available, guidance switches to heading-up; manual compass changes
+        // remain respected after this point.
+        if (hasValidGpsHeading) setCompassMode('heading-up');
+        else setCompassMode('north-up');
+        compassModeUserOverride = false;
         if (window.PipController) window.PipController.setNavigationActive(true);
+        if (window.DebugLogger) window.DebugLogger.log('navigation-start', { pipAutoEnter: window.PipController && window.PipController.getAutoEnter ? window.PipController.getAutoEnter() : false });
         recenterMapToVehicle();
 
         const navStartTime = Date.now();
@@ -3172,9 +3318,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 const lng = pos.coords.longitude;
                 const rawSpeedKmh = getPositionSpeedKmh(pos);
                 const hasHwHeading = (pos.coords.heading !== null && !isNaN(pos.coords.heading) && pos.coords.heading >= 0);
+                if (hasHwHeading) hasValidGpsHeading = true;
+                if (hasHwHeading && !compassModeUserOverride && compassMode === 'north-up') setCompassMode('heading-up');
 
                 // CRITICAL FOR DYNAMIC ROUTING: Keep currentStart synced to vehicle's actual coordinates!
-                currentStart = { lat, lng };
+                currentStart = { lat, lng, accuracy: Number.isFinite(Number(pos.coords.accuracy)) ? Number(pos.coords.accuracy) : null };
+                gpsLastFixSource = 'web-watch';
+                gpsLastFixAt = Date.now();
+                gpsLastError = null;
+                updateGpsAccuracyCircle(lat, lng, pos.coords.accuracy);
 
                 setGpsStatusIndicator(false, true);
                 updateGpsSpeedometer(pos);
@@ -3207,6 +3359,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
 
+                currentHeading = heading;
                 lastGpsPosition = { lat, lng };
                 lastGpsTimestamp = pos.timestamp;
 
@@ -3272,8 +3425,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 TTSVoice.announceNavHazard(nextManeuver ? nextManeuver.distanceFromCar : 200, currentHeading, glareRisk);
             },
-            (err) => { setGpsStatusIndicator(false, false); },
-            { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+            (err) => {
+                gpsLastError = err && err.code;
+                setGpsStatusIndicator(false, false);
+                if (window.DebugLogger) window.DebugLogger.log('gps-watch-error', { code: err && err.code });
+            },
+            { enableHighAccuracy: true, timeout: 5000, maximumAge: 15000 }
         );
     }
 
@@ -3469,32 +3626,38 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    /* GITHUB AUTOMATIC LATEST VERSION UPDATE CHECKER (v1.0 vs GitHub Release) */
-    const CURRENT_APP_VERSION = "1.0";
+    /* GITHUB AUTOMATIC APK UPDATE CHECKER. Scene releases are not app updates. */
     let latestDetectedVersionTag = "";
     let latestDetectedReleaseUrl = "";
 
     async function checkGitHubLatestVersion() {
         try {
-            const repoUrl = "https://api.github.com/repos/HyeokjaeKwon26/Solarless-Navi/releases/latest";
+            // `/releases/latest` may point at a scene archive. Inspect a
+            // bounded list and choose the newest release that actually looks
+            // like an APK release instead of treating scene data as app code.
+            const repoUrl = "https://api.github.com/repos/HyeokjaeKwon26/Solarless-Navi/releases?per_page=30";
             const res = await fetch(repoUrl, { cache: 'no-store' });
             if (!res.ok) return;
 
-            const data = await res.json();
-            if (!data || !data.tag_name) return;
+            const payload = await res.json();
+            const versionUtils = window.SolarlessVersionUtils;
+            const data = Array.isArray(payload)
+                ? payload.find(release => versionUtils && versionUtils.isApkRelease(release))
+                : (versionUtils && versionUtils.isApkRelease(payload) ? payload : null);
+            if (!versionUtils || !data || !data.tag_name) return;
 
             latestDetectedVersionTag = data.tag_name;
             latestDetectedReleaseUrl = data.html_url || "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/latest";
-
-            const latestTagNumStr = data.tag_name.replace(/^v/i, '').trim();
-            const currentVerNum = parseFloat(CURRENT_APP_VERSION);
-            const latestVerNum = parseFloat(latestTagNumStr);
-
-            if (!isNaN(latestVerNum) && latestVerNum > currentVerNum) {
-                showUpdateModal(data.tag_name, latestDetectedReleaseUrl);
+            let currentVersion = '0.0.0';
+            const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Pip;
+            if (plugin && plugin.getAppVersion) {
+                const version = await plugin.getAppVersion();
+                currentVersion = version && version.versionName ? version.versionName : currentVersion;
             }
+            if (versionUtils.compareSemver(data.tag_name, currentVersion) > 0) showUpdateModal(data.tag_name, latestDetectedReleaseUrl);
+            if (window.DebugLogger) window.DebugLogger.log('apk-update-check', { latestTag: data.tag_name, currentVersion, apkRelease: true });
         } catch (err) {
-            // Silently ignore if offline or repo release not found yet
+            if (window.DebugLogger) window.DebugLogger.log('apk-update-check-error', { message: String(err && err.message || err) });
         }
     }
 

@@ -1,5 +1,6 @@
 {
   "schema": 2,
+  "schemaVersion": 2,
   "region": "US-NORTHEAST",
   "releaseTag": "scene-us-northeast-hybrid-v1",
   "baseUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/scene-us-northeast-hybrid-v1",
@@ -13,6 +14,11 @@
   },
   "source": "Geofabrik US-NORTHEAST OSM + public SRTM elevation",
   "generatedAt": "2026-08-10T00:54:29.326Z",
+  "osmExtractTimestamp": null,
+  "osmSourceUrl": null,
+  "osmPbfSha256": null,
+  "demDataset": "SRTM 1 arc-second public elevation tiles",
+  "demDatasetVersion": null,
   "packWidth": 8,
   "maxPackBytes": 524288000,
   "profileResolution": {

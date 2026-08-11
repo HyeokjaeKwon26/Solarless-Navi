@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Build static Massachusetts scene tiles from a Geofabrik OSM PBF extract and
+ * Build static regional scene tiles from a Geofabrik OSM PBF extract and
  * SRTM HGT elevation files.  This is an offline preprocessing tool; the app
  * never runs it and never needs the raw source files.
  *
@@ -11,13 +11,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const parseOSM = require('osm-pbf-parser');
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const REGION_ID = String(process.env.SCENE_REGION || 'ma').toLowerCase();
+const REGION_ID = String(process.env.SCENE_REGION || 'us-northeast').toLowerCase();
 const REGION_LABEL = String(process.env.SCENE_REGION_LABEL || (REGION_ID === 'ma' ? 'MA' : REGION_ID.toUpperCase()));
 const SOURCE_DIR = path.resolve(process.env.SCENE_SOURCE_DIR || path.join(ROOT, 'data', 'source'));
 const WORK_DIR = path.resolve(process.env.SCENE_WORK_DIR || path.join(ROOT, 'data', 'work', `scene-${REGION_ID}`));
@@ -40,8 +41,10 @@ const POLY_PATH = path.resolve(process.env.SCENE_POLY_PATH || path.join(SOURCE_D
 const PROFILE_AZIMUTH_DEG = Math.max(1, Number(process.env.SCENE_PROFILE_AZIMUTH_DEG || 10));
 const PROFILE_SAMPLE_SPACING_M = Math.max(25, Number(process.env.SCENE_PROFILE_SAMPLE_SPACING_M || 100));
 const DATA_VERSION = String(process.env.SCENE_DATA_VERSION || 'hybrid-scene-v1');
-// Road geometry is useful for Massachusetts' small extract, but restoring
-// every road node in a large regional PBF is needlessly expensive. For larger
+const OSM_SOURCE_URL = process.env.SCENE_OSM_SOURCE_URL || null;
+const DEM_DATASET = String(process.env.SCENE_DEM_DATASET || 'SRTM 1 arc-second public elevation tiles');
+const DEM_DATASET_VERSION = process.env.SCENE_DEM_DATASET_VERSION || null;
+// Restoring every road node in a large regional PBF is needlessly expensive. For larger
 // regions the app already computes route tile keys at runtime, so precompute
 // only scene geometry unless explicitly requested.
 const INCLUDE_ROAD_COVERAGE = String(process.env.SCENE_INCLUDE_ROADS || (REGION_ID === 'ma' ? 'true' : 'false')).toLowerCase() === 'true';
@@ -74,10 +77,31 @@ function sourceMetadata() {
     const hgtCount = fs.existsSync(HGT_DIR)
         ? fs.readdirSync(HGT_DIR).filter(name => /\.hgt(?:\.gz)?$/i.test(name)).length
         : 0;
+    let pbfSha256 = null;
+    if (pbf) {
+        const hash = crypto.createHash('sha256');
+        const fd = fs.openSync(PBF_PATH, 'r');
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        try {
+            let bytesRead = 0;
+            do {
+                bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+                if (bytesRead) hash.update(buffer.subarray(0, bytesRead));
+            } while (bytesRead);
+            pbfSha256 = hash.digest('hex');
+        } finally { fs.closeSync(fd); }
+    }
     return {
-        osm: { extract: path.basename(PBF_PATH), bytes: pbf ? pbf.size : null, license: 'ODbL / OpenStreetMap contributors' },
+        osm: {
+            extract: path.basename(PBF_PATH),
+            bytes: pbf ? pbf.size : null,
+            extractTimestamp: pbf ? pbf.mtime.toISOString() : null,
+            sourceUrl: OSM_SOURCE_URL,
+            pbfSha256,
+            license: 'ODbL / OpenStreetMap contributors'
+        },
         boundary: fs.existsSync(POLY_PATH) ? path.basename(POLY_PATH) : null,
-        terrain: { dataset: 'SRTM 1 arc-second public elevation tiles', tileCount: hgtCount }
+        terrain: { dataset: DEM_DATASET, datasetVersion: DEM_DATASET_VERSION, tileCount: hgtCount }
     };
 }
 
@@ -439,6 +463,7 @@ async function writeTiles() {
     for (const file of fs.readdirSync(linesDir)) tileKeys.add(file.replace('.jsonl', '').replace('_', ':'));
     fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
     ensureDir(OUTPUT_DIR);
+    const metadata = sourceMetadata();
     const hgt = new HgtStore(HGT_DIR);
     const tileList = [];
     let index = 0;
@@ -459,6 +484,7 @@ async function writeTiles() {
         }
         const tile = {
             schema: 1,
+            schemaVersion: 1,
             region: REGION_LABEL,
             dataVersion: DATA_VERSION,
             key,
@@ -481,8 +507,13 @@ async function writeTiles() {
             },
             source: {
                 osm: `Geofabrik ${REGION_LABEL} OSM extract`,
-                terrain: 'SRTM 1 arc-second public elevation tiles',
-                generatedAt: new Date().toISOString()
+                terrain: metadata.terrain.dataset,
+                generatedAt: new Date().toISOString(),
+                osmExtractTimestamp: metadata.osm.extractTimestamp,
+                osmSourceUrl: metadata.osm.sourceUrl,
+                osmPbfSha256: metadata.osm.pbfSha256,
+                demDataset: metadata.terrain.dataset,
+                demDatasetVersion: metadata.terrain.datasetVersion
             }
         };
         const fileName = `${key.replace(':', '_')}.json`;
@@ -493,6 +524,7 @@ async function writeTiles() {
     }
     const manifest = {
         schema: 1,
+        schemaVersion: 1,
         region: REGION_LABEL,
         tileSizeM: TILE_SIZE_M,
         grid: { latOrigin: GRID_LAT_ORIGIN, lngOrigin: GRID_LNG_ORIGIN, cosLat: GRID_COS_LAT },
@@ -507,8 +539,13 @@ async function writeTiles() {
         bounds: REGION_BOUNDS,
         includeRoadCoverage: INCLUDE_ROAD_COVERAGE,
         generatedAt: new Date().toISOString(),
+        osmExtractTimestamp: metadata.osm.extractTimestamp,
+        osmSourceUrl: metadata.osm.sourceUrl,
+        osmPbfSha256: metadata.osm.pbfSha256,
+        demDataset: metadata.terrain.dataset,
+        demDatasetVersion: metadata.terrain.datasetVersion,
         source: `Geofabrik ${REGION_LABEL} OSM + public SRTM elevation`,
-        sourceMetadata: sourceMetadata(),
+        sourceMetadata: metadata,
         tiles: tileList
     };
     fs.writeFileSync(path.join(OUTPUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));

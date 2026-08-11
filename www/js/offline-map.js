@@ -9,23 +9,12 @@
 
 window.OfflineMap = (function () {
 
-    // Best-effort tile cache for previously loaded tiles. This is not a
-    // complete offline map service and is not used for route computation.
-    const CACHE_NAME = 'solaris-map-tiles-v1';
-
-    /**
-     * Intercepts Leaflet tile requests and caches them for offline standalone use
-     */
-    function registerOfflineTileCache(leafletTileLayer) {
-        if (!('caches' in window)) return;
-
-        leafletTileLayer.on('tileload', (e) => {
-            if (e.tile && e.tile.src) {
-                caches.open(CACHE_NAME).then(cache => {
-                    cache.add(e.tile.src).catch(() => {});
-                });
-            }
-        });
+    // Do not call cache.add() after tileload: that starts a second network
+    // request and the app has no service-worker read-through path. The map
+    // provider/browser HTTP cache remains authoritative until a proper
+    // provider-compatible tile cache is implemented.
+    function registerOfflineTileCache() {
+        return false;
     }
 
     /**

@@ -30,7 +30,7 @@ sandbox.window = sandbox;
 sandbox.self = sandbox;
 vm.createContext(sandbox);
 
-for (const file of ['js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/geocoder.js', 'js/offline-map.js']) {
+for (const file of ['js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/geocoder.js', 'js/offline-map.js', 'js/app-version.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), sandbox, { filename: file });
 }
 
@@ -39,6 +39,7 @@ const OfflineMap = sandbox.OfflineMap;
 const SceneShadow = sandbox.SceneShadow;
 const RouteState = sandbox.RouteState;
 const Geocoder = sandbox.Geocoder;
+const VersionUtils = sandbox.SolarlessVersionUtils;
 
 function runSolarWorkerMessage(data, importAvailable = true) {
     const messages = [];
@@ -108,6 +109,13 @@ test('glare risk respects invalid, night, high-angle, and angular boundaries', (
 test('offline route fallback never returns a synthetic navigation route', () => {
     assert.equal(OfflineMap.canCalculateRouteOffline(), false);
     assert.equal(OfflineMap.generateStandaloneRoute({ lat: 0, lng: 0 }, { lat: 1, lng: 1 }, new Date()), null);
+});
+
+test('APK update checks ignore scene releases and compare SemVer without parseFloat', () => {
+    assert.equal(VersionUtils.compareSemver('v1.10.0', '1.9.9') > 0, true);
+    assert.equal(VersionUtils.compareSemver('app-v1.0', '1.0.0'), 0);
+    assert.equal(VersionUtils.isApkRelease({ tag_name: 'scene-us-west-hybrid-v1', assets: [] }), false);
+    assert.equal(VersionUtils.isApkRelease({ tag_name: 'scene-data', assets: [{ name: 'SolarLessNavi.apk' }] }), true);
 });
 
 test('scene projection and polygon ray intersection are deterministic', () => {
@@ -569,6 +577,14 @@ test('scene lookup prefers precomputed tiles before live Overpass fallback', asy
         sandbox.fetch = originalFetch;
         sandbox.window.SceneShadow = originalScene;
     }
+});
+
+test('precomputed scene cache has a byte budget and no removed single-region default', () => {
+    const sceneSource = fs.readFileSync(path.join(root, 'js/scene-shadow.js'), 'utf8');
+    assert.equal(sceneSource.includes('PRECOMPUTED_MANIFEST_URL'), false);
+    const stats = SceneShadow.getCacheStats();
+    assert.ok(Number.isFinite(stats.precomputedMaxBytes) && stats.precomputedMaxBytes > 0);
+    assert.ok(Number.isFinite(stats.precomputedBytes) && stats.precomputedBytes >= 0);
 });
 
 test('identical route groups invoke scene analysis once and return scene-tier results', async () => {
@@ -1174,4 +1190,29 @@ test('GPS permission and GPS fix are separate, with one in-flight request', () =
     assert.ok(appSource.includes('startNavigationFlow();\n                return;'));
     assert.ok(appSource.includes("e.code === 1 && gpsPermissionState === 'denied'"));
     assert.ok(appSource.includes('The current GPS fix is not ready yet.'));
+});
+
+test('startup is north-up and native permission/PiP state is checked before onboarding', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    assert.ok(appSource.includes("let compassMode = 'north-up'"));
+    assert.ok(appSource.includes('getLocationPermissionState'));
+    assert.ok(appSource.includes('enableHighAccuracy: false, timeout: 2500, maximumAge: 120000'));
+    assert.ok(appSource.includes('updateGpsAccuracyCircle'));
+    assert.equal(html.includes('map-container heading-up-active'), false);
+    assert.equal(html.includes('compass-btn heading-up'), false);
+});
+
+test('offline map does not issue a second cache.add fetch after tileload', () => {
+    const source = fs.readFileSync(path.join(root, 'js/offline-map.js'), 'utf8');
+    assert.equal(/^\s*cache\.add\(/m.test(source), false);
+});
+
+test('routing exposes direct OSRM progress before via-point enrichment', () => {
+    const routerSource = fs.readFileSync(path.join(root, 'js/shadow-router.js'), 'utf8');
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(routerSource.includes('typeof options.onProgress === \'function\''));
+    assert.ok(routerSource.includes('urls.slice(1)'));
+    assert.ok(appSource.includes("onProgress: async progress =>"));
+    assert.ok(appSource.includes("route-first-result"));
 });

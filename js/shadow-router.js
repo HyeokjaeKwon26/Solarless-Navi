@@ -662,6 +662,28 @@ window.ShadowRouter = (function () {
     const SCENE_ROUTE_CACHE_TTL_MS = 10 * 60 * 1000;
     const SCENE_ROUTE_CACHE_MAX = 24;
     const sceneRouteCache = new Map();
+    const OSRM_ROUTE_CACHE_TTL_MS = 5 * 60 * 1000;
+    const OSRM_ROUTE_CACHE_MAX = 12;
+    const osrmRouteCache = new Map();
+
+    function osrmRouteCacheKey(start, end, tollFree) {
+        return [Number(start.lat).toFixed(5), Number(start.lng).toFixed(5), Number(end.lat).toFixed(5), Number(end.lng).toFixed(5), tollFree ? 'toll-free' : 'standard'].join('|');
+    }
+
+    function getCachedOsrmRoutes(key) {
+        const entry = osrmRouteCache.get(key);
+        if (!entry || entry.expiresAt <= Date.now()) { if (entry) osrmRouteCache.delete(key); return null; }
+        osrmRouteCache.delete(key);
+        osrmRouteCache.set(key, entry);
+        return entry.routes.map(route => ({ ...route }));
+    }
+
+    function cacheOsrmRoutes(key, routes) {
+        if (!key || !Array.isArray(routes) || !routes.length) return;
+        osrmRouteCache.delete(key);
+        osrmRouteCache.set(key, { routes: routes.map(route => ({ ...route })), expiresAt: Date.now() + OSRM_ROUTE_CACHE_TTL_MS });
+        while (osrmRouteCache.size > OSRM_ROUTE_CACHE_MAX) osrmRouteCache.delete(osrmRouteCache.keys().next().value);
+    }
 
     function calculateRouteTradeoff(fastest, candidate) {
         const fastestDuration = routeDurationForSelection(fastest);
@@ -838,6 +860,53 @@ window.ShadowRouter = (function () {
         return results;
     }
 
+    async function analyzeRawRoute(rawRoute, idx, dateObj, timeOfDayAdjustment, signal) {
+        const baseDuration = Number(rawRoute.duration) || 0;
+        const liveDuration = Math.round(baseDuration * timeOfDayAdjustment);
+        let routeSteps = null;
+        const maneuvers = [];
+        if (Array.isArray(rawRoute.legs) && rawRoute.legs.length > 0) {
+            routeSteps = [];
+            let cumulativeStepDist = 0;
+            for (const leg of rawRoute.legs) {
+                for (const step of leg.steps || []) {
+                    routeSteps.push(step);
+                    if (step.maneuver && step.maneuver.type !== 'depart') {
+                        maneuvers.push({
+                            type: step.maneuver.type, modifier: step.maneuver.modifier || '',
+                            location: step.maneuver.location, bearingBefore: step.maneuver.bearing_before,
+                            bearingAfter: step.maneuver.bearing_after, name: step.name || '', ref: step.ref || '',
+                            distance: step.distance, duration: step.duration, cumulativeDistance: cumulativeStepDist
+                        });
+                    }
+                    cumulativeStepDist += Number(step.distance) || 0;
+                }
+            }
+        }
+        const analyzed = await analyzeRouteSegmentsAsync(rawRoute.geometry.coordinates, dateObj, liveDuration, routeSteps, null, signal);
+        return {
+            id: createRouteIdentity(rawRoute, idx), candidateIndex: idx, raw: rawRoute,
+            distanceMeters: Number(rawRoute.distance) || 0, durationSec: liveDuration,
+            baseDurationSec: baseDuration, analyzed, maneuvers, routeSteps,
+            analysisMode: 'heuristic', sceneCoverage: analyzed.sceneCoverage, sceneSource: analyzed.sceneSource
+        };
+    }
+
+    function buildHeuristicProgressResult(analyzedRoutes, timeOfDayAdjustment, dateObj, start) {
+        if (!analyzedRoutes.length) return null;
+        const fastest = analyzedRoutes.slice().sort((a, b) => a.durationSec - b.durationSec)[0];
+        const glareFree = analyzedRoutes.slice().sort((a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk || a.durationSec - b.durationSec)[0];
+        const shade = analyzedRoutes.slice().sort((a, b) => a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits || b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage || a.durationSec - b.durationSec)[0];
+        applyExposureReductions(fastest, glareFree, shade, dateObj, start);
+        return {
+            timeOfDayAdjustment,
+            analysisMode: 'heuristic',
+            enrichmentPending: true,
+            routeCandidates: analyzedRoutes.map(route => route.raw),
+            routes: { fastest, glareFree, shade, all: analyzedRoutes }
+        };
+    }
+
     async function fetchAndAnalyzeRoutes(start, end, dateObj, isTollFreeOnly = false, options = {}) {
         // Let OSRM decide whether a long-distance route is connected. A
         // straight-line threshold incorrectly rejected valid continental
@@ -848,15 +917,37 @@ window.ShadowRouter = (function () {
 
         const timeOfDayAdjustment = getTimeOfDayAdjustment(dateObj);
         
+        const routeCacheKey = osrmRouteCacheKey(start, end, isTollFreeOnly);
+        let progressEmitted = false;
         let rawCandidates = Array.isArray(options.candidates) && options.candidates.length
             ? options.candidates.filter(route => route && route.geometry && Array.isArray(route.geometry.coordinates))
-            : null;
+            : (options.reuseOsrmCache === true ? getCachedOsrmRoutes(routeCacheKey) : null);
         if (!rawCandidates) {
-            // 1. Direct OSRM query (with steps=true for turn-by-turn maneuver data)
+            // Direct OSRM is intentionally awaited before exploratory
+            // via-point requests. The caller can render a usable first route
+            // while slower enrichment continues in this same request.
             let directUrl = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson&alternatives=3&steps=true`;
             if (isTollFreeOnly) directUrl += `&exclude=toll`;
 
-            // 2. Parallel Multi-Corridor Exploration: Generate lateral via-points with aspect-ratio normalization
+            const directStartedAt = Date.now();
+            const directResponse = await fetchJsonWithTimeout(directUrl, {
+                signal: options.signal,
+                timeoutMs: options.directTimeoutMs || 10000
+            });
+            rawCandidates = directResponse && Array.isArray(directResponse.routes) ? directResponse.routes.slice() : [];
+            if (window.DebugLogger && typeof window.DebugLogger.log === 'function') {
+                window.DebugLogger.log('osrm-direct', { elapsedMs: Date.now() - directStartedAt, routeCount: rawCandidates.length, http: 'ok' });
+            }
+            if (rawCandidates.length && typeof options.onProgress === 'function') {
+                const directAnalyzed = await Promise.all(rawCandidates.map((route, index) =>
+                    analyzeRawRoute(route, index, dateObj, timeOfDayAdjustment, options.signal)));
+                const progress = buildHeuristicProgressResult(directAnalyzed, timeOfDayAdjustment, dateObj, start);
+                if (progress) { await options.onProgress(progress); progressEmitted = true; }
+            }
+
+            // Generate lateral via-points only after direct results are
+            // available. These are optional enrichment, not a prerequisite
+            // for displaying or starting the verified direct route.
             const midLat = (start.lat + end.lat) / 2;
             const midLng = (start.lng + end.lng) / 2;
             const dLat = end.lat - start.lat;
@@ -878,15 +969,23 @@ window.ShadowRouter = (function () {
                 directUrl,
                 ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true${tollQuery}`)
             ];
-            const responses = await Promise.allSettled(urls.map(u => fetchJsonWithTimeout(u, {
+            const responses = await Promise.allSettled(urls.slice(1).map(u => fetchJsonWithTimeout(u, {
                 signal: options.signal,
-                timeoutMs: 10000
+                timeoutMs: options.viaTimeoutMs || 10000
             })));
-            rawCandidates = [];
             responses.forEach(res => {
                 if (res.status === 'fulfilled' && res.value && res.value.routes) rawCandidates.push(...res.value.routes);
             });
         }
+
+        if (!progressEmitted && rawCandidates && rawCandidates.length && typeof options.onProgress === 'function') {
+            const cachedAnalyzed = await Promise.all(rawCandidates.map((route, index) =>
+                analyzeRawRoute(route, index, dateObj, timeOfDayAdjustment, options.signal)));
+            const progress = buildHeuristicProgressResult(cachedAnalyzed, timeOfDayAdjustment, dateObj, start);
+            if (progress) await options.onProgress(progress);
+        }
+
+        cacheOsrmRoutes(routeCacheKey, rawCandidates);
 
         const filteredCandidates = isTollFreeOnly
             ? rawCandidates.filter(route => !routeContainsToll(route))
@@ -917,57 +1016,8 @@ window.ShadowRouter = (function () {
 
         // First analyse every candidate with the same lightweight model. Scene
         // data is selected only after these common scores are available.
-        const analyzedRoutes = await Promise.all(uniqueRoutes.map(async (r, idx) => {
-            const baseDuration = r.duration;
-            const liveDuration = Math.round(baseDuration * timeOfDayAdjustment);
-
-            // Extract OSRM step maneuver data for turn-by-turn navigation
-            let routeSteps = null;
-            let maneuvers = [];
-            if (r.legs && r.legs.length > 0) {
-                routeSteps = [];
-                let cumulativeStepDist = 0;
-                for (const leg of r.legs) {
-                    if (leg.steps) {
-                        for (const step of leg.steps) {
-                            routeSteps.push(step);
-                            if (step.maneuver && step.maneuver.type !== 'depart') {
-                                maneuvers.push({
-                                    type: step.maneuver.type,
-                                    modifier: step.maneuver.modifier || '',
-                                    location: step.maneuver.location,
-                                    bearingBefore: step.maneuver.bearing_before,
-                                    bearingAfter: step.maneuver.bearing_after,
-                                    name: step.name || '',
-                                    ref: step.ref || '',
-                                    distance: step.distance,
-                                    duration: step.duration,
-                                    cumulativeDistance: cumulativeStepDist
-                                });
-                            }
-                            cumulativeStepDist += (step.distance || 0);
-                        }
-                    }
-                }
-            }
-
-            const analyzed = await analyzeRouteSegmentsAsync(r.geometry.coordinates, dateObj, liveDuration, routeSteps, null, options.signal);
-
-            return {
-                id: createRouteIdentity(r, idx),
-                candidateIndex: idx,
-                raw: r,
-                distanceMeters: r.distance,
-                durationSec: liveDuration,
-                baseDurationSec: baseDuration,
-                analyzed: analyzed,
-                maneuvers: maneuvers,
-                routeSteps: routeSteps,
-                analysisMode: 'heuristic',
-                sceneCoverage: analyzed.sceneCoverage,
-                sceneSource: analyzed.sceneSource
-            };
-        }));
+        const analyzedRoutes = await Promise.all(uniqueRoutes.map((route, idx) =>
+            analyzeRawRoute(route, idx, dateObj, timeOfDayAdjustment, options.signal)));
 
         const selection = selectPrecisionCandidates(analyzedRoutes, 5);
         // Scene APIs are optional and rate-limited.  Analyze at most two

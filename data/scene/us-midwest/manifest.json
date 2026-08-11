@@ -1,5 +1,6 @@
 {
   "schema": 2,
+  "schemaVersion": 2,
   "region": "US-MIDWEST",
   "releaseTag": "scene-us-midwest-hybrid-v1",
   "baseUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/scene-us-midwest-hybrid-v1",
@@ -25,6 +26,11 @@
     }
   },
   "generatedAt": "2026-08-10T03:29:33.749Z",
+  "osmExtractTimestamp": null,
+  "osmSourceUrl": null,
+  "osmPbfSha256": null,
+  "demDataset": "SRTM 1 arc-second public elevation tiles",
+  "demDatasetVersion": null,
   "packWidth": 16,
   "maxPackBytes": 524288000,
   "profileResolution": {

@@ -112,6 +112,7 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | [West hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v1) | 42,575 | ZIP 539개 |
 
 원본 PBF/HGT, 중간 인덱스, Release ZIP, APK 바이너리는 Git에 커밋하지 않습니다.
+장면 manifest에는 `schemaVersion`, `dataVersion`, `generatedAt`, OSM extract 시각/URL/SHA-256, DEM 데이터셋 버전이 기록됩니다. 값을 확인할 수 없는 기존 아카이브는 추측하지 않고 `null`로 둡니다. 장면을 갱신할 때는 새 PBF/HGT를 준비한 뒤 `npm run scene:build`와 `npm run scene:package`를 지역별 환경변수로 실행하고, 새 `scene-us-<region>-hybrid-vN` Release를 발행한 후 manifest의 `releaseTag`와 `baseUrl`을 함께 갱신합니다.
 
 ---
 
@@ -281,6 +282,7 @@ The app checks regional 5 km scene tile releases first, downloads only route-cor
 | [West hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v1) | 42,575 | 539 ZIPs |
 
 Release ZIPs, source PBF/HGT files, intermediate indexes, and APK binaries are not committed to Git.
+Scene manifests record `schemaVersion`, `dataVersion`, `generatedAt`, OSM extract timestamp/URL/SHA-256, and the DEM dataset version. Unknown values remain `null` rather than being guessed. To refresh a region, prepare a new PBF/HGT source, run `npm run scene:build` and `npm run scene:package` with that region's environment variables, publish a new `scene-us-<region>-hybrid-vN` Release, and update `releaseTag`/`baseUrl` together.
 
 ---
 
@@ -305,6 +307,7 @@ Release builds require JDK 17, Android SDK/Gradle, and a signing keystore. Keep 
 * Durations are OSRM geometry/step durations with a fixed time-of-day adjustment, not live traffic information. Moving the time slider reuses the geometry and refreshes solar analysis without another OSRM request.
 * Buildings, tunnels, and terrain can adjust shade scores when optional OSM/DEM requests succeed. Routes expose heuristic, partial-scene, or precision-scene metadata; each role compares only within the same tier and falls back to heuristic when its scene data fails. These estimates do not guarantee shade, direct-sun reduction, temperature, or safety.
 * Public OSRM, Overpass, OpenTopoData, Nominatim/Photon, and Esri/CARTO tile services can be rate-limited or unavailable. Attribution links are required by the providers' licenses and cannot be removed.
+* On Android, navigation starts a visible location foreground service and may enter Picture-in-Picture when enabled. PiP and location behavior still require validation on physical Android API 26/30/31/34 devices. Debug builds expose a bounded diagnostic panel; release builds do not create it and do not include full GPS coordinates in logs.
 * The precomputed tiles store fixed OSM building/tunnel geometry and DEM samples. The app performs the time-dependent solar ray check at runtime; they are not a complete precomputed 3D horizon model.
 
 ---

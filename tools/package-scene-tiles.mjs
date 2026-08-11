@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { zipSync, strToU8 } = require('fflate');
 const ROOT = path.resolve(import.meta.dirname, '..');
-const REGION_ID = String(process.env.SCENE_REGION || 'ma').toLowerCase();
+const REGION_ID = String(process.env.SCENE_REGION || 'us-northeast').toLowerCase();
 const REGION_LABEL = String(process.env.SCENE_REGION_LABEL || (REGION_ID === 'ma' ? 'MA' : REGION_ID.toUpperCase()));
 const INPUT_DIR = path.resolve(process.env.SCENE_INPUT_DIR || path.join(ROOT, 'data', 'generated', `scene-${REGION_ID}`));
 const RELEASE_TAG = String(process.env.SCENE_RELEASE_TAG || `scene-${REGION_ID}-v1`);
@@ -81,7 +81,13 @@ function main() {
         grid: sourceManifest.grid,
         source: sourceManifest.source,
         sourceMetadata: sourceManifest.sourceMetadata || null,
+        osmExtractTimestamp: sourceManifest.osmExtractTimestamp || null,
+        osmSourceUrl: sourceManifest.osmSourceUrl || null,
+        osmPbfSha256: sourceManifest.osmPbfSha256 || null,
+        demDataset: sourceManifest.demDataset || null,
+        demDatasetVersion: sourceManifest.demDatasetVersion || null,
         generatedAt: sourceManifest.generatedAt,
+        schemaVersion: sourceManifest.schemaVersion || sourceManifest.schema || null,
         packWidth: PACK_WIDTH,
         maxPackBytes: MAX_PACK_BYTES,
         profileResolution: sourceManifest.profileResolution || null,
