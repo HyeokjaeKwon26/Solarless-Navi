@@ -486,7 +486,7 @@ window.Geocoder = (function () {
         const cleanQ = query.trim();
         const includeNominatim = options.includeNominatim !== false;
         const hasCoords = !!(userCoords && Number.isFinite(userCoords.lat) && Number.isFinite(userCoords.lng));
-        const cacheKey = `${cleanQ.toLowerCase()}|${hasCoords ? `${userCoords.lat.toFixed(3)},${userCoords.lng.toFixed(3)}` : 'none'}|${includeNominatim ? 'all' : 'photon'}`;
+        const cacheKey = `${cleanQ.toLowerCase()}|${hasCoords ? `${userCoords.lat.toFixed(3)},${userCoords.lng.toFixed(3)}` : 'none'}|${includeNominatim ? 'all' : (options.fallbackNominatim ? 'photon-address' : 'photon')}`;
         const cached = searchCache.get(cacheKey);
         if (cached) return cached.map(item => ({ ...item }));
 
@@ -525,9 +525,12 @@ window.Geocoder = (function () {
                         const itemLng = parseFloat(item.lon);
                         const displayName = String(item.display_name || '').trim();
                         if (!displayName) return;
+                        const addressLabel = item.address
+                            ? [item.address.house_number, item.address.road].filter(Boolean).join(' ')
+                            : '';
                         addResult({
                             displayName,
-                            shortTitle: String(item.name || displayName.split(',')[0]),
+                            shortTitle: String(addressLabel || item.name || displayName.split(',')[0]),
                             lat: itemLat,
                             lng: itemLng,
                             distKm: hasCoords ? getDistanceKm(userCoords.lat, userCoords.lng, itemLat, itemLng) : null,
@@ -577,12 +580,70 @@ window.Geocoder = (function () {
             console.warn("Photon search warning:", e);
         }
 
+        // Photon is deliberately first for autocomplete, but it can return a
+        // nearby road with a similar name instead of an exact house/street
+        // address (for example "94 Gerry Road" may match "94 Alton Tannery
+        // Road").  A submitted address, or an autocomplete query that looks
+        // like a street address, gets one Nominatim fallback when Photon has
+        // no result (or when the caller explicitly requests it).  This keeps
+        // Nominatim out of every keystroke while still making address search
+        // reliable on the mobile WebView.
+        const looksLikeStreetAddress = /^\s*\d+[A-Za-z]?\s+\S+/.test(cleanQ);
+        const shouldFallbackToNominatim = options.fallbackNominatim === true &&
+            (results.length === 0 || looksLikeStreetAddress);
+        if (!includeNominatim && shouldFallbackToNominatim) {
+            attemptedServices++;
+            try {
+                const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cleanQ)}&limit=10&addressdetails=1`;
+                const nomData = await fetchJsonWithTimeout(nomUrl, {
+                    signal: options.signal,
+                    timeoutMs: options.timeoutMs || API_TIMEOUT_MS,
+                    headers: { 'User-Agent': 'SolarisNav-MobileApp/1.0' },
+                    messageKey: 'searchNetworkError'
+                });
+                if (Array.isArray(nomData)) {
+                    // Exact street-address results should win over Photon's
+                    // fuzzy nearby-road result.  Preserve the latter as a
+                    // secondary choice instead of discarding it.
+                    const photonResults = results.splice(0, results.length);
+                    nomData.forEach(item => {
+                        const itemLat = parseFloat(item.lat);
+                        const itemLng = parseFloat(item.lon);
+                        const displayName = String(item.display_name || '').trim();
+                        if (!displayName) return;
+                        const addressLabel = item.address
+                            ? [item.address.house_number, item.address.road].filter(Boolean).join(' ')
+                            : '';
+                        addResult({
+                            displayName,
+                            shortTitle: String(addressLabel || item.name || displayName.split(',')[0]),
+                            lat: itemLat,
+                            lng: itemLng,
+                            distKm: hasCoords ? getDistanceKm(userCoords.lat, userCoords.lng, itemLat, itemLng) : null,
+                            source: 'nominatim'
+                        });
+                    });
+                    photonResults.forEach(addResult);
+                }
+            } catch (e) {
+                failedServices++;
+                console.warn("Nominatim fallback search warning:", e);
+            }
+        }
+
         if (attemptedServices > 0 && failedServices === attemptedServices && results.length === 0) {
             throw createApiError('SEARCH_UNAVAILABLE', 'searchNetworkError', cleanQ);
         }
 
         if (hasCoords) {
             results.sort((a, b) => {
+                // For house-number queries, Nominatim carries the structured
+                // address match while Photon may only have a nearby fuzzy
+                // road.  Preserve provider priority before proximity sorting.
+                if (looksLikeStreetAddress && a.source !== b.source) {
+                    if (a.source === 'nominatim') return -1;
+                    if (b.source === 'nominatim') return 1;
+                }
                 if (a.distKm !== null && b.distKm !== null) return a.distKm - b.distKm;
                 return 0;
             });

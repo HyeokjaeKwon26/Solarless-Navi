@@ -412,6 +412,30 @@ test('off-route distance uses the nearest point on a route segment', () => {
     assert.ok(ShadowRouter.pointToSegmentDistanceMeters(0.0005, 0.005, route[0], route[1]) < 65);
 });
 
+test('guidance snap prefers forward route progress at self-crossings', () => {
+    const route = [
+        [0, 0], [0.001, 0], [0.001, 0.001], [0, 0.001],
+        [0, 0], [0.001, 0]
+    ];
+    const withoutProgress = ShadowRouter.snapPositionAndHeadingToRoad(0, 0.0002, 90, route);
+    const withProgress = ShadowRouter.snapPositionAndHeadingToRoad(0, 0.0002, 90, route, {
+        previousSegmentIndex: 3,
+        maxBacktrackSegments: 0
+    });
+    assert.ok(withoutProgress.segmentIndex < 3, 'nearest-point snap should see the earlier crossing');
+    assert.ok(withProgress.segmentIndex >= 3, 'active guidance must not jump behind the last accepted segment');
+});
+
+test('reroute clears stale remaining layers and anchors OSRM to current heading', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const routerSource = fs.readFileSync(path.join(root, 'js/shadow-router.js'), 'utf8');
+    assert.ok(appSource.includes('dynamicRemainingPolylineGroup.clearLayers();'));
+    assert.ok(appSource.includes('currentStart = {'));
+    assert.ok(appSource.includes('startHeading: isMidDrive'));
+    assert.ok(routerSource.includes('&bearings=${bearing},60;'));
+    assert.ok(routerSource.includes('viaBearing'));
+});
+
 test('route duplicate filtering compares sampled geometry after distance and duration', () => {
     const base = {
         distance: 1000,
@@ -960,6 +984,45 @@ test('country detection does not classify Ireland or continental Europe as Great
     assert.equal(Geocoder.detectCountry(21.3069, -157.8583), 'US'); // Hawaii
 });
 
+test('street-address autocomplete prefers exact Nominatim fallback over Photon fuzzy roads', async () => {
+    const originalFetch = sandbox.fetch;
+    const requested = [];
+    sandbox.fetch = async url => {
+        requested.push(String(url));
+        if (String(url).includes('photon.komoot.io')) {
+            return { ok: true, status: 200, json: async () => ({ features: [{
+                properties: { name: 'Alton Tannery Road', housenumber: '94', city: 'Hudson', state: 'ME', country: 'United States' },
+                geometry: { coordinates: [-68.8194211, 45.007609] }
+            }] }) };
+        }
+        return { ok: true, status: 200, json: async () => ([{
+            name: '94', lat: '44.1012402', lon: '-70.5287212',
+            display_name: '94, Gerry Road, Otisfield, Oxford County, Maine, 04270, United States'
+        }]) };
+    };
+    try {
+        // Put the simulated driver next to Photon's fuzzy result; exact
+        // Nominatim street-address data must still win provider ranking.
+        const results = await Geocoder.searchPlaces('94 Gerry Road', { lat: 45.0076, lng: -68.8194 }, {
+            includeNominatim: false,
+            fallbackNominatim: true
+        });
+        assert.equal(results[0].source, 'nominatim');
+        assert.equal(results[0].displayName.includes('Gerry Road'), true);
+        assert.equal(requested.some(url => url.includes('addressdetails=1')), true);
+    } finally {
+        sandbox.fetch = originalFetch;
+    }
+});
+
+test('turn voice does not append a generic straight prompt when a maneuver is pending', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const guardedHazardCalls = appSource.match(/if \(!nextManeuver\) TTSVoice\.announceNavHazard/g) || [];
+    assert.equal(guardedHazardCalls.length, 2);
+    assert.ok(appSource.includes('fa-arrow-left maneuver-icon maneuver-left'));
+    assert.ok(appSource.includes('fa-arrow-right maneuver-icon maneuver-right'));
+});
+
 test('reverse-geocoded ISO country is cached and controls speed units', async () => {
     const originalFetch = sandbox.fetch;
     let reverseCalls = 0;
@@ -1217,6 +1280,73 @@ test('routing exposes direct OSRM progress before via-point enrichment', () => {
     assert.ok(appSource.includes("route-first-result"));
 });
 
+test('route analysis emits heuristic progress before non-blocking scene refinement', async () => {
+    const originalFetch = sandbox.fetch;
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
+    const phases = [];
+    let sceneStarted = false;
+    let initialBeforeScene = false;
+    sandbox.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ routes: [{
+            distance: 1000,
+            duration: 100,
+            geometry: { coordinates: [[0, 0], [0.01, 0]] },
+            legs: [{ steps: [] }]
+        }] })
+    });
+    SceneShadow.fetchPrecomputedSceneForRoute = async () => null;
+    SceneShadow.fetchSceneForRoute = async () => {
+        sceneStarted = true;
+        await new Promise(resolve => setTimeout(resolve, 12));
+        return {
+            precisionReady: true,
+            origin: { lat: 0, lng: 0 },
+            coverage: { buildings: true, terrain: true, tunnels: true },
+            segmentCoverage: [{ buildings: true, terrain: true, tunnels: true }],
+            buildings: [], tunnels: [], terrainSamples: [], terrainProfiles: [],
+            source: 'mock scene'
+        };
+    };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false,
+            { onProgress: async progress => {
+                const first = phases.length === 0;
+                phases.push({
+                    phase: progress.analysisPhase,
+                    pending: progress.enrichmentPending,
+                    mode: progress.analysisMode
+                });
+                if (first && !sceneStarted) initialBeforeScene = true;
+            } }
+        );
+        assert.ok(phases.length >= 2, `expected initial and refined progress, got ${phases.length}`);
+        assert.equal(phases[0].phase, 'heuristic-initial');
+        assert.equal(phases[0].pending, true);
+        assert.equal(initialBeforeScene, true);
+        assert.equal(phases.at(-1).phase, 'precision-final');
+        assert.equal(phases.at(-1).pending, false);
+        assert.equal(result.backgroundRefinementComplete, true);
+        assert.equal(result.enrichmentPending, false);
+        assert.equal(result.routes.fastest.analysisMode, 'scene');
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
+    }
+});
+
+test('precision progress can replace an active heuristic glare or shade route', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes("progress.analysisPhase === 'precision-final'"));
+    assert.ok(appSource.includes('canSwitchActiveGuidance'));
+    assert.ok(appSource.includes('navigationSessionRouteGeometry = selectedRouteObj.analyzed'));
+    assert.ok(appSource.includes('Guidance updated to the precision'));
+});
+
 test('native and web location sources share the navigation pipeline and resume fix seam', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('function processNavigationPosition(position, source = \'web-watch\')'));
@@ -1261,4 +1391,15 @@ test('release metadata never treats local PBF mtime as extract timestamp', () =>
     assert.ok(source.includes('SCENE_OSM_EXTRACT_TIMESTAMP'));
     assert.ok(source.includes('localFileModifiedAt'));
     assert.ok(source.includes('extractTimestamp: verifiedExtractTimestamp'));
+});
+
+test('PiP uses a map-only navigation HUD instead of regular banners', () => {
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+    const pipController = fs.readFileSync(path.join(root, 'js/pip-controller.js'), 'utf8');
+    assert.ok(html.includes('id="pip-mini-icon"'));
+    assert.ok(html.includes('id="pip-mini-route-distance"'));
+    assert.match(css, /body\.pip-mode[\s\S]*\.app-header[\s\S]*display:\s*none\s*!important/);
+    assert.match(css, /body\.pip-mode[\s\S]*\.map-container[\s\S]*position:\s*absolute/);
+    assert.ok(pipController.includes("classList.toggle('pip-mode'"));
 });

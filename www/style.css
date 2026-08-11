@@ -511,10 +511,79 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18p
 .permission-card { max-width: 440px; }
 .permission-status { color: var(--text-secondary); font-size: 13px; line-height: 1.45; margin: 8px 0; }
 .permission-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
-.pip-mini-hud { display: none; position: absolute; left: 12px; right: 12px; bottom: 86px; z-index: 1200; padding: 8px 10px; border-radius: 10px; background: rgba(2, 6, 23, .9); color: #f8fafc; font: 600 12px/1.3 var(--font-main); gap: 8px; pointer-events: none; }
-.pip-mini-hud span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-body.pip-mode .pip-mini-hud { display: flex; }
-body.pip-mode .sidebar-panel, body.pip-mode .map-top-bar, body.pip-mode .speedometer-bottom-left { opacity: .12; pointer-events: none; }
+.pip-mini-hud {
+    display: none;
+    position: absolute;
+    top: max(8px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    z-index: 1200;
+    padding: 8px 10px 7px;
+    border: 1px solid rgba(125, 211, 252, .75);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, .94);
+    color: #f8fafc;
+    font: 600 12px/1.25 var(--font-main);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, .55);
+    pointer-events: none;
+}
+.pip-mini-primary { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pip-mini-icon {
+    width: 34px; height: 34px; display: inline-flex; align-items: center;
+    justify-content: center; flex: 0 0 34px; border-radius: 8px;
+    background: #22c55e; color: #031b0b; font-size: 19px;
+}
+.pip-mini-hud.hazard .pip-mini-icon { background: #f59e0b; color: #1c1100; }
+.pip-mini-instruction { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.pip-mini-next { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 800; }
+.pip-mini-next-label { color: #cbd5e1; font-size: 9px; font-weight: 600; }
+.pip-mini-turn-distance { flex: 0 0 auto; color: #bae6fd; font-size: 13px; font-weight: 800; white-space: nowrap; }
+.pip-mini-secondary { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; color: #cbd5e1; font-size: 10px; }
+.pip-mini-secondary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.pip-mode .pip-mini-hud { display: block; }
+
+/*
+ * Android PiP renders the complete WebView, unlike a native map fragment.
+ * Keep only the map and compact guidance HUD visible so destination/header
+ * banners cannot cover the route in the small window. The regular controls
+ * are restored automatically when the system leaves PiP.
+ */
+body.pip-mode { background: #000; }
+body.pip-mode #app-container,
+body.pip-mode .main-body,
+body.pip-mode .map-container { width: 100vw; height: 100vh; min-height: 0; }
+body.pip-mode #app-container { display: block; }
+body.pip-mode .app-header,
+body.pip-mode .sidebar-panel,
+body.pip-mode .map-top-bar,
+body.pip-mode .mobile-turn-banner,
+body.pip-mode .speedometer-bottom-left,
+body.pip-mode .map-controls-group,
+body.pip-mode .route-summary-floating,
+body.pip-mode .recenter-toast-banner,
+body.pip-mode .speeding-warning-overlay,
+body.pip-mode #solarless-debug-panel { display: none !important; }
+body.pip-mode .main-body { display: block; }
+body.pip-mode .map-container { position: absolute; inset: 0; overflow: hidden; }
+body.pip-mode #map { width: 100%; height: 100%; }
+body.pip-mode .map-bottom-overlay-stack {
+    display: flex;
+    left: auto;
+    right: 4px;
+    bottom: 3px;
+    transform: none;
+    width: auto;
+    max-height: none;
+    padding: 0;
+    z-index: 1190;
+}
+body.pip-mode .map-attribution {
+    font-size: 7px;
+    line-height: 1.1;
+    padding: 2px 4px;
+    border-radius: 3px;
+    background: rgba(2, 6, 23, .72);
+}
 
 #solarless-debug-panel { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid #38bdf8; border-radius: 12px; background: rgba(2, 6, 23, .96); color: #e2e8f0; font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
 #solarless-debug-panel .debug-panel-header, #solarless-debug-panel .debug-panel-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -721,6 +790,18 @@ body.pip-mode .sidebar-panel, body.pip-mode .map-top-bar, body.pip-mode .speedom
 
 .banner-icon { width: 44px; height: 44px; background: #22c55e; color: #000; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
 .mobile-turn-banner.hazard .banner-icon { background: #f59e0b; color: #000; }
+
+/* Direction-specific maneuver glyphs.  The explicit transforms avoid the
+ * left/right ambiguity that the generic arrow-turn-down icon had in WebView. */
+.maneuver-icon { display: inline-block; transform-origin: 50% 50%; }
+.maneuver-left { transform: none; }
+.maneuver-right { transform: none; }
+.maneuver-slight-left { transform: rotate(-30deg); }
+.maneuver-slight-right { transform: rotate(30deg); }
+.maneuver-sharp-left { transform: none; }
+.maneuver-sharp-right { transform: none; }
+.maneuver-uturn { transform: rotate(180deg); }
+.maneuver-straight { transform: none; }
 .turn-dist { font-family: var(--font-heading); font-size: 18px; font-weight: 800; color: #fff; }
 .turn-desc { font-size: 12px; color: var(--text-secondary); }
 

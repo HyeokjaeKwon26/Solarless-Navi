@@ -504,7 +504,27 @@
                 </div>
 
                 <div id="map"></div>
-                <div id="pip-mini-hud" class="pip-mini-hud" aria-live="polite"><span id="pip-mini-next">--</span><span id="pip-mini-eta">--</span><span id="pip-mini-distance">--</span></div>
+                <!--
+                    Compact, navigation-only PiP surface. Android PiP keeps the
+                    activity's WebView alive, so this HUD is deliberately kept
+                    separate from the normal destination/header overlays. The
+                    map remains the full background while this row carries the
+                    next maneuver, turn distance and remaining ETA/distance.
+                -->
+                <div id="pip-mini-hud" class="pip-mini-hud" aria-live="polite">
+                    <div class="pip-mini-primary">
+                        <span id="pip-mini-icon" class="pip-mini-icon" aria-hidden="true"><i class="fa-solid fa-arrow-up"></i></span>
+                        <div class="pip-mini-instruction">
+                            <span id="pip-mini-next" class="pip-mini-next">--</span>
+                            <span id="pip-mini-next-label" class="pip-mini-next-label">Next maneuver</span>
+                        </div>
+                        <span id="pip-mini-distance" class="pip-mini-turn-distance">--</span>
+                    </div>
+                    <div class="pip-mini-secondary">
+                        <span id="pip-mini-eta">--</span>
+                        <span id="pip-mini-route-distance">--</span>
+                    </div>
+                </div>
                 <div class="map-bottom-overlay-stack" id="map-bottom-overlay-stack" aria-live="polite">
                     <div class="map-attribution" id="map-attribution" aria-label="Map attribution">
                         <span id="map-attribution-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · Tiles © <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a> / <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a></span>

@@ -11,6 +11,7 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.util.Rational;
 import android.content.SharedPreferences;
 
 import com.getcapacitor.JSObject;
@@ -221,6 +222,13 @@ public class PipPlugin extends Plugin {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setAutoEnterEnabled(autoEnter);
             builder.setSeamlessResizeEnabled(true);
+        }
+        // Keep the compact navigation window close to the landscape ratio used
+        // by Android Auto/Google Maps. The WebView switches to its map-only
+        // PiP surface via body.pip-mode, so a stable ratio avoids clipping the
+        // turn HUD when the launcher resizes the activity.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try { builder.setAspectRatio(new Rational(16, 9)); } catch (IllegalArgumentException ignored) { }
         }
         return builder.build();
     }

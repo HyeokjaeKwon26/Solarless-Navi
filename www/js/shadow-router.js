@@ -155,16 +155,22 @@ window.ShadowRouter = (function () {
         return Number.isFinite(minDistance) ? minDistance : 0;
     }
 
-    function snapPositionAndHeadingToRoad(carLat, carLng, rawHeading, coordinates) {
+    function snapPositionAndHeadingToRoad(carLat, carLng, rawHeading, coordinates, options = {}) {
         if (!coordinates || coordinates.length < 2) {
             return { lat: carLat, lng: carLng, heading: rawHeading, isSnapped: false, segmentIndex: 0, t: 0, distMeters: 0 };
         }
 
         let minDistance = Infinity;
+        let bestRawDistance = Infinity;
         let bestSnappedPoint = { lat: carLat, lng: carLng };
         let bestRoadBearing = rawHeading;
         let bestIndex = 0;
         let bestT = 0;
+        const previousSegmentIndex = Number.isFinite(Number(options.previousSegmentIndex))
+            ? Math.max(0, Number(options.previousSegmentIndex)) : null;
+        const maxBacktrackSegments = Number.isFinite(Number(options.maxBacktrackSegments))
+            ? Math.max(0, Number(options.maxBacktrackSegments)) : 1;
+        const hasHeading = Number.isFinite(Number(rawHeading)) && Number(rawHeading) >= 0;
 
         for (let i = 0; i < coordinates.length - 1; i++) {
             const aLat = coordinates[i][1];
@@ -178,17 +184,33 @@ window.ShadowRouter = (function () {
             const projLat = projection.lat;
             const projLng = projection.lng;
             const distMeters = calculateDistanceMeters(carLat, carLng, projLat, projLng);
+            const candidateProgress = i + t;
+            if (previousSegmentIndex !== null && candidateProgress < previousSegmentIndex - maxBacktrackSegments) continue;
+            let candidateScore = distMeters;
+            if (previousSegmentIndex !== null && candidateProgress < previousSegmentIndex) {
+                candidateScore += 25 + (previousSegmentIndex - candidateProgress) * 10;
+            }
+            if (previousSegmentIndex !== null && hasHeading) {
+                const roadBearing = calculateBearing(aLat, aLng, bLat, bLng);
+                let headingDiff = Math.abs(Number(rawHeading) - roadBearing);
+                if (headingDiff > 180) headingDiff = 360 - headingDiff;
+                // Prefer the segment in front of the vehicle. A reverse
+                // segment remains possible only when no forward segment is
+                // close enough (a genuine U-turn case).
+                if (headingDiff > 110) candidateScore += 35;
+            }
 
-            if (distMeters < minDistance) {
-                minDistance = distMeters;
+            if (candidateScore < minDistance) {
+                minDistance = candidateScore;
                 bestSnappedPoint = { lat: projLat, lng: projLng };
+                bestRawDistance = distMeters;
                 bestRoadBearing = calculateBearing(aLat, aLng, bLat, bLng);
                 bestIndex = i;
                 bestT = t;
             }
         }
 
-        if (minDistance <= 40) {
+        if (bestRawDistance <= 40) {
             let angleDiff = Math.abs(rawHeading - bestRoadBearing);
             if (angleDiff > 180) angleDiff = 360 - angleDiff;
             const finalHeading = (angleDiff < 75 || rawHeading === 0) ? bestRoadBearing : rawHeading;
@@ -198,13 +220,13 @@ window.ShadowRouter = (function () {
                 lng: bestSnappedPoint.lng,
                 heading: finalHeading,
                 isSnapped: true,
-                distMeters: minDistance,
+                distMeters: bestRawDistance,
                 segmentIndex: bestIndex,
                 t: bestT
             };
         }
 
-        return { lat: carLat, lng: carLng, heading: rawHeading, isSnapped: false, distMeters: minDistance, segmentIndex: bestIndex, t: bestT };
+        return { lat: carLat, lng: carLng, heading: rawHeading, isSnapped: false, distMeters: bestRawDistance, segmentIndex: bestIndex, t: bestT };
     }
 
     function calculateRemainingRouteDistance(carLat, carLng, coordinates, segmentIndex) {
@@ -903,6 +925,11 @@ window.ShadowRouter = (function () {
         return {
             timeOfDayAdjustment,
             analysisMode: 'heuristic',
+            // The first result is intentionally lightweight and may be
+            // rendered while scene/DEM enrichment continues in the
+            // background.  Consumers can distinguish it from the final
+            // callback without guessing from analysisMode alone.
+            analysisPhase: 'heuristic-initial',
             enrichmentPending: true,
             routeCandidates: analyzedRoutes.map(route => route.raw),
             routes: { fastest, glareFree, shade, all: analyzedRoutes }
@@ -929,6 +956,15 @@ window.ShadowRouter = (function () {
             // via-point requests. The caller can render a usable first route
             // while slower enrichment continues in this same request.
             let directUrl = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson&alternatives=3&steps=true`;
+            // When rerouting during navigation, tell OSRM which direction
+            // the vehicle is currently facing. This keeps a forward route as
+            // the default and leaves a U-turn to OSRM only when no forward
+            // connection exists.
+            const startHeading = Number(options.startHeading);
+            if (Number.isFinite(startHeading) && startHeading >= 0) {
+                const bearing = Math.round(((startHeading % 360) + 360) % 360);
+                directUrl += `&bearings=${bearing},60;`;
+            }
             if (isTollFreeOnly) directUrl += `&exclude=toll`;
 
             const directStartedAt = Date.now();
@@ -973,9 +1009,12 @@ window.ShadowRouter = (function () {
                 if (window.DebugLogger) window.DebugLogger.log('osrm-via-skipped', { reason: 'DIRECT_ALTERNATIVES_SUFFICIENT', directDistinct });
             }
             const tollQuery = isTollFreeOnly ? '&exclude=toll' : '';
+            const viaBearing = Number.isFinite(startHeading) && startHeading >= 0
+                ? `&bearings=${Math.round(((startHeading % 360) + 360) % 360)},60;;`
+                : '';
             const urls = [
                 directUrl,
-                ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true${tollQuery}`)
+                ...offsets.map(v => `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${v.lng.toFixed(6)},${v.lat.toFixed(6)};${end.lng},${end.lat}?overview=full&geometries=geojson&continue_straight=true&steps=true${tollQuery}${viaBearing}`)
             ];
             const viaUrls = urls.slice(1);
             const responses = await Promise.allSettled(viaUrls.slice(0, viaBudget).map(u => fetchJsonWithTimeout(u, {
@@ -1113,9 +1152,13 @@ window.ShadowRouter = (function () {
             : (roleModes.every(mode => mode === 'heuristic') ? 'heuristic' : 'mixed-by-role');
                 // True Astronomical Night (altitude < -6.0°): No solar UV radiation
 
-        return {
+        const finalResult = {
             timeOfDayAdjustment: timeOfDayAdjustment,
             analysisMode: finalAnalysisMode,
+            analysisPhase: 'precision-final',
+            enrichmentPending: false,
+            backgroundRefinementComplete: true,
+            refinedAt: Date.now(),
             precisionCandidateIds: selection.precisionCandidates.map(route => route.id),
             // Raw OSRM candidates are safe to reuse for a time-only change;
             // their geometry, steps and base duration do not depend on the
@@ -1133,6 +1176,18 @@ window.ShadowRouter = (function () {
                 all: analyzedRoutes
             }
         };
+
+        // OSRM/heuristic progress is emitted before the optional scene
+        // requests.  Emit the refined roles as a second progress event so a
+        // caller can update its UI (and, when safe, the active guidance route)
+        // without waiting for another route request.  This callback is
+        // guarded by the caller's AbortSignal/generation in app.js, just like
+        // the initial event.
+        if (options.signal && options.signal.aborted) throw createAbortError();
+        if (typeof options.onProgress === 'function') {
+            await options.onProgress(finalResult);
+        }
+        return finalResult;
     }
 
     /* Web Worker for background solar analysis (UI thread offloading) */

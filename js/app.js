@@ -64,6 +64,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let dynamicRemainingLayers = new Map();
     let dynamicRemainingRouteId = null;
     let dynamicRemainingSegmentIndex = null;
+    // Route progress is monotonic during one guidance session.  GPS can
+    // briefly snap to a previously passed vertex (especially on parallel
+    // roads/loops); retaining the last accepted progress prevents the
+    // already-travelled purple path from being painted again.
+    let navigationRouteProgress = {
+        routeId: null,
+        value: 0,
+        segmentIndex: 0,
+        t: 0,
+        snap: null
+    };
     let startMarker = null;
     let endMarker = null;
 
@@ -74,6 +85,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastRerouteTime = 0;
     let navigationSessionRouteId = null;
     let navigationSessionRouteGeometry = null;
+    // Set when a scene-refined glare/shade route has replaced the initial
+    // heuristic route during an active navigation session.  This prevents a
+    // repeated progress callback from announcing the same switch twice.
+    let lastPrecisionSwitchRouteId = null;
+    let precisionReroutePending = false;
     let navigationSessionStartedAt = 0;
     let navigationSessionStartDistanceMeters = 0;
     let navigationSessionArrived = false;
@@ -93,6 +109,75 @@ document.addEventListener('DOMContentLoaded', () => {
     let apiNoticeTimer = null;
     let solarRefreshTimer = null;
     let lastSolarStaleNotice = 0;
+
+    function getRouteGeometryIdentity(route) {
+        const coords = route && route.analyzed && Array.isArray(route.analyzed.coordinates)
+            ? route.analyzed.coordinates : [];
+        if (!coords.length) return route && route.id ? String(route.id) : null;
+        const first = coords[0] || [];
+        const last = coords[coords.length - 1] || [];
+        return `${route && route.id ? route.id : 'route'}|${coords.length}|${first[0]},${first[1]}|${last[0]},${last[1]}`;
+    }
+
+    function resetNavigationRouteProgress(route = null) {
+        navigationRouteProgress = {
+            routeId: getRouteGeometryIdentity(route), value: 0,
+            segmentIndex: 0, t: 0, snap: null
+        };
+    }
+
+    function snapNavigationPosition(lat, lng, heading, route) {
+        const coords = route && route.analyzed && Array.isArray(route.analyzed.coordinates)
+            ? route.analyzed.coordinates : null;
+        if (!coords || coords.length < 2) return { lat, lng, heading, isSnapped: false, segmentIndex: 0, t: 0, distMeters: 0 };
+        const identity = getRouteGeometryIdentity(route);
+        if (navigationRouteProgress.routeId !== identity) resetNavigationRouteProgress(route);
+        const previous = navigationRouteProgress;
+        const candidate = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, coords, {
+            previousSegmentIndex: previous.snap ? previous.segmentIndex : null,
+            maxBacktrackSegments: 0
+        });
+        if (!candidate.isSnapped) return candidate;
+        const candidateValue = Number(candidate.segmentIndex || 0) + Number(candidate.t || 0);
+        // Do not let a noisy fix move the active route backwards. Keep the
+        // last accepted snapped point until the vehicle reaches it again;
+        // off-route detection still uses the raw GPS point and can trigger a
+        // forward reroute when necessary.
+        if (previous.snap && candidateValue + 0.15 < previous.value) {
+            return { ...previous.snap, progressClamped: true };
+        }
+        navigationRouteProgress = {
+            routeId: identity,
+            value: candidateValue,
+            segmentIndex: Number(candidate.segmentIndex || 0),
+            t: Number(candidate.t || 0),
+            snap: candidate
+        };
+        return candidate;
+    }
+
+    function precisionRouteStartsAtVehicle(route) {
+        if (!isLiveNavActive) return true;
+        if (!route || !currentStart || !route.analyzed || !Array.isArray(route.analyzed.coordinates)) return false;
+        const coords = route.analyzed.coordinates;
+        if (coords.length < 2) return false;
+        // A precision candidate was calculated from the trip origin. Once
+        // the vehicle has moved, swapping to that old geometry can send the
+        // driver backwards. Only adopt it when its corridor still starts at
+        // the current vehicle position; otherwise a later explicit reroute
+        // must calculate a fresh forward route first.
+        const distance = ShadowRouter.distanceToRoute(currentStart.lat, currentStart.lng, coords);
+        if (!Number.isFinite(distance) || distance > 120) return false;
+        const snap = ShadowRouter.snapPositionAndHeadingToRoad(currentStart.lat, currentStart.lng, currentHeading, coords);
+        const segmentIndex = Math.max(0, Math.min(coords.length - 2, Number(snap && snap.segmentIndex) || 0));
+        const localBearing = ShadowRouter.calculateBearing(
+            coords[segmentIndex][1], coords[segmentIndex][0],
+            coords[segmentIndex + 1][1], coords[segmentIndex + 1][0]
+        );
+        let headingDiff = Math.abs(Number(currentHeading) - localBearing);
+        if (headingDiff > 180) headingDiff = 360 - headingDiff;
+        return !Number.isFinite(Number(currentHeading)) || headingDiff <= 120;
+    }
 
     /* Free Map Panning & 8-Second Auto Recenter Toast Variables */
     let isUserMapPanning = false;
@@ -917,31 +1002,70 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const maneuvers = selectedRouteObj.maneuvers;
-        let bestManeuver = null;
-        let bestDist = Infinity;
+        const routeCoords = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
+            ? selectedRouteObj.analyzed.coordinates : null;
+        let currentRouteIndex = -1;
+        if (routeCoords && routeCoords.length > 1 && ShadowRouter.snapPositionAndHeadingToRoad) {
+            const snap = isLiveNavActive
+                ? snapNavigationPosition(carLat, carLng, currentHeading, selectedRouteObj)
+                : ShadowRouter.snapPositionAndHeadingToRoad(carLat, carLng, currentHeading, routeCoords);
+            currentRouteIndex = Number.isFinite(Number(snap && snap.segmentIndex)) ? Number(snap.segmentIndex) : -1;
+        }
+
+        // OSRM returns maneuvers in route order.  Use that order (rather than
+        // only the closest geographic point) so a turn that has just been
+        // passed can never be selected again when the road doubles back.
+        const routeIndexForManeuver = (maneuver) => {
+            if (!routeCoords || routeCoords.length === 0 || !maneuver.location) return Infinity;
+            let best = Infinity;
+            let bestIndex = Infinity;
+            for (let i = 0; i < routeCoords.length; i++) {
+                const point = routeCoords[i];
+                const dLat = Number(point[1]) - Number(maneuver.location[1]);
+                const dLng = Number(point[0]) - Number(maneuver.location[0]);
+                const score = dLat * dLat + dLng * dLng;
+                if (score < best) {
+                    best = score;
+                    bestIndex = i;
+                }
+            }
+            return bestIndex;
+        };
+
+        const candidates = [];
 
         for (let i = 0; i < maneuvers.length; i++) {
             const m = maneuvers[i];
             if (!m.location || m.location.length < 2) continue;
 
+            const routeIndex = routeIndexForManeuver(m);
+            if (currentRouteIndex >= 0 && Number.isFinite(routeIndex) && routeIndex < currentRouteIndex - 2) continue;
+
             // Distance from car to maneuver point
             const dist = ShadowRouter.calculateDistanceMeters(carLat, carLng, m.location[1], m.location[0]);
 
             // Only consider maneuvers AHEAD of us (within 2km, but skip ones behind us)
-            if (dist < bestDist && dist < 2000) {
+            if (dist < 2000) {
                 // Check if maneuver is ahead by comparing bearing from car to maneuver vs current heading
                 const bearingToManeuver = ShadowRouter.calculateBearing(carLat, carLng, m.location[1], m.location[0]);
                 const headingDiff = Math.abs(((bearingToManeuver - currentHeading) % 360 + 540) % 360 - 180);
 
                 // Accept if maneuver is roughly ahead (within 120° arc) OR very close (< 60m)
                 if (headingDiff < 120 || dist < 60) {
-                    bestDist = dist;
-                    bestManeuver = { ...m, distanceFromCar: dist };
+                    candidates.push({ maneuver: m, distanceFromCar: dist, routeIndex });
                 }
             }
         }
 
-        return bestManeuver;
+        candidates.sort((a, b) => {
+            if (Number.isFinite(a.routeIndex) && Number.isFinite(b.routeIndex) && a.routeIndex !== b.routeIndex) {
+                return a.routeIndex - b.routeIndex;
+            }
+            return a.distanceFromCar - b.distanceFromCar;
+        });
+        if (!candidates.length) return null;
+        const selected = candidates[0];
+        return { ...selected.maneuver, distanceFromCar: selected.distanceFromCar };
     }
 
     /* MANEUVER TYPE+MODIFIER → FONTAWESOME ICON MAPPING */
@@ -951,16 +1075,21 @@ document.addEventListener('DOMContentLoaded', () => {
         if (type === 'merge') return '<i class="fa-solid fa-code-merge"></i>';
         if (type === 'fork') return '<i class="fa-solid fa-code-fork"></i>';
 
-        switch (modifier) {
-            case 'left': return '<i class="fa-solid fa-arrow-turn-down" style="transform:scaleX(-1) rotate(90deg)"></i>';
-            case 'right': return '<i class="fa-solid fa-arrow-turn-down" style="transform:rotate(-90deg)"></i>';
-            case 'slight left': return '<i class="fa-solid fa-arrow-up" style="transform:rotate(-30deg)"></i>';
-            case 'slight right': return '<i class="fa-solid fa-arrow-up" style="transform:rotate(30deg)"></i>';
-            case 'sharp left': return '<i class="fa-solid fa-arrow-turn-down" style="transform:scaleX(-1) rotate(45deg)"></i>';
-            case 'sharp right': return '<i class="fa-solid fa-arrow-turn-down" style="transform:rotate(-45deg)"></i>';
-            case 'uturn': return '<i class="fa-solid fa-arrow-turn-up" style="transform:scaleX(-1)"></i>';
-            case 'straight': return '<i class="fa-solid fa-arrow-up"></i>';
-            default: return '<i class="fa-solid fa-arrow-up"></i>';
+        const normalizedModifier = String(modifier || '').trim().toLowerCase();
+        // Keep direction in a named class instead of relying on the
+        // ambiguous orientation of arrow-turn-down plus inline transforms.
+        // The CSS classes are mirrored in www/style.css and make left/right
+        // deterministic in both the banner and PiP HUD.
+        switch (normalizedModifier) {
+            case 'left': return '<i class="fa-solid fa-arrow-left maneuver-icon maneuver-left" aria-label="left turn"></i>';
+            case 'right': return '<i class="fa-solid fa-arrow-right maneuver-icon maneuver-right" aria-label="right turn"></i>';
+            case 'slight left': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-slight-left" aria-label="slight left"></i>';
+            case 'slight right': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-slight-right" aria-label="slight right"></i>';
+            case 'sharp left': return '<i class="fa-solid fa-arrow-left maneuver-icon maneuver-sharp-left" aria-label="sharp left"></i>';
+            case 'sharp right': return '<i class="fa-solid fa-arrow-right maneuver-icon maneuver-sharp-right" aria-label="sharp right"></i>';
+            case 'uturn': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-uturn" aria-label="U-turn"></i>';
+            case 'straight': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-straight" aria-label="straight"></i>';
+            default: return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-straight" aria-label="straight"></i>';
         }
     }
 
@@ -1008,7 +1137,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (bannerDesc) bannerDesc.innerText = descText;
             if (bannerIcon) bannerIcon.innerHTML = getManeuverIcon(nextManeuver.type, nextManeuver.modifier);
-            updatePipHud(descText, document.getElementById('sum-time')?.innerText || '--', formattedDist);
+            updatePipHud(
+                descText,
+                document.getElementById('sum-time')?.innerText || '--',
+                formattedDist,
+                getManeuverIcon(nextManeuver.type, nextManeuver.modifier),
+                glareRisk > 0.45,
+                document.getElementById('sum-dist')?.innerText || '--'
+            );
         } else {
             // No upcoming maneuver or arrived — show glare/safe status
             const formattedDist = '—';
@@ -1023,7 +1159,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 banner.classList.remove('hazard');
                 if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
             }
-            updatePipHud(bannerDesc ? bannerDesc.innerText : '--', document.getElementById('sum-time')?.innerText || '--', formattedDist);
+            updatePipHud(
+                bannerDesc ? bannerDesc.innerText : '--',
+                document.getElementById('sum-time')?.innerText || '--',
+                formattedDist,
+                bannerIcon ? bannerIcon.innerHTML : '<i class="fa-solid fa-arrow-up"></i>',
+                glareRisk > 0.45,
+                document.getElementById('sum-dist')?.innerText || '--'
+            );
         }
     }
 
@@ -1636,13 +1779,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function updatePipHud(nextText, etaText, distanceText) {
+    function updatePipHud(nextText, etaText, distanceText, iconHtml, hazard = false, routeDistanceText) {
         const next = document.getElementById('pip-mini-next');
         const eta = document.getElementById('pip-mini-eta');
         const distance = document.getElementById('pip-mini-distance');
+        const icon = document.getElementById('pip-mini-icon');
+        const routeDistance = document.getElementById('pip-mini-route-distance');
+        const nextLabel = document.getElementById('pip-mini-next-label');
+        const hud = document.getElementById('pip-mini-hud');
+        const isKo = I18n.getLanguage().startsWith('ko');
         if (next && nextText !== undefined) next.textContent = nextText;
-        if (eta && etaText !== undefined) eta.textContent = etaText;
+        if (eta && etaText !== undefined) eta.textContent = `${isKo ? '도착' : 'ETA'} ${etaText}`;
         if (distance && distanceText !== undefined) distance.textContent = distanceText;
+        if (routeDistance && routeDistanceText !== undefined) routeDistance.textContent = `${isKo ? '남은' : 'Remain'} ${routeDistanceText}`;
+        if (nextLabel) nextLabel.textContent = isKo ? '다음 안내' : 'Next maneuver';
+        // getManeuverIcon() only returns static FontAwesome markup; external
+        // road/place names are always assigned through textContent above.
+        if (icon && iconHtml !== undefined) icon.innerHTML = iconHtml;
+        if (hud) hud.classList.toggle('hazard', !!hazard);
     }
 
     function setupSolarRefreshTimer() {
@@ -2007,10 +2161,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const coords = selectedRouteObj.analyzed.coordinates;
-        const routeIdentity = selectedRouteObj.id || `geometry:${coords.length}:${JSON.stringify(coords[0])}:${JSON.stringify(coords[coords.length - 1])}`;
+        const routeIdentity = getRouteGeometryIdentity(selectedRouteObj);
         const snap = knownSnap || ShadowRouter.snapPositionAndHeadingToRoad(carLat, carLng, carHeading, coords);
         if (selectedRouteObj.analyzed.segments.length === 0) return;
-        const segIdx = Math.max(0, Math.min(selectedRouteObj.analyzed.segments.length - 1, snap.segmentIndex || 0));
+        const progressFloor = navigationRouteProgress.routeId === routeIdentity
+            ? navigationRouteProgress.segmentIndex : 0;
+        const segIdx = Math.max(progressFloor, Math.max(0, Math.min(selectedRouteObj.analyzed.segments.length - 1, snap.segmentIndex || 0)));
         const segments = selectedRouteObj.analyzed.segments;
         if (dynamicRemainingRouteId !== routeIdentity) {
             dynamicRemainingPolylineGroup.clearLayers();
@@ -2068,7 +2224,9 @@ document.addEventListener('DOMContentLoaded', () => {
         let snapResult = { lat, lng, heading, isSnapped: false, segmentIndex: 0 };
 
         if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
-            snapResult = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, selectedRouteObj.analyzed.coordinates);
+            snapResult = isLiveNavActive
+                ? snapNavigationPosition(lat, lng, heading, selectedRouteObj)
+                : ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, selectedRouteObj.analyzed.coordinates);
         }
 
         targetSnapLat = snapResult.lat;
@@ -2382,8 +2540,30 @@ document.addEventListener('DOMContentLoaded', () => {
         // A mid-drive request is an explicit reroute. It is the only path
         // allowed to replace the route frozen at navigation start.
         if (isMidDrive && isLiveNavActive) {
+            // A GPS fix may arrive through the native provider between route
+            // ticks. Always anchor a reroute to the latest accepted vehicle
+            // position, never the original trip origin.
+            if (lastGpsPosition && Number.isFinite(Number(lastGpsPosition.lat)) && Number.isFinite(Number(lastGpsPosition.lng))) {
+                currentStart = {
+                    lat: Number(lastGpsPosition.lat),
+                    lng: Number(lastGpsPosition.lng),
+                    accuracy: currentStart && currentStart.accuracy,
+                    timestamp: lastGpsTimestamp || Date.now()
+                };
+            }
             navigationSessionRouteId = null;
             navigationSessionRouteGeometry = null;
+            precisionReroutePending = false;
+            // Do not leave coloured "remaining" segments from the old
+            // route visible while the new forward route is being fetched.
+            // The verified route itself may stay on the map as context, but
+            // passed purple segments must be removed immediately.
+            if (activeRoutePolylineGroup) activeRoutePolylineGroup.clearLayers();
+            if (dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup.clearLayers();
+            dynamicRemainingLayers = new Map();
+            dynamicRemainingRouteId = null;
+            dynamicRemainingSegmentIndex = null;
+            resetNavigationRouteProgress(null);
             if (window.DebugLogger) window.DebugLogger.log('route-reroute-start', {});
         }
 
@@ -2419,6 +2599,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 isTollFreeOnly,
                 {
                     signal: requestController.signal,
+                    // During a live reroute OSRM should start in the vehicle's
+                    // current travel direction. It may still return a U-turn
+                    // when that is the only connected option.
+                    startHeading: isMidDrive && (hasValidGpsHeading || !!lastStableMovingGps) &&
+                        Number.isFinite(Number(currentHeading)) ? currentHeading : null,
                     candidates: reusableCandidates,
                     reuseOsrmCache: true,
                     reuseSceneCache: true,
@@ -2432,7 +2617,39 @@ document.addEventListener('DOMContentLoaded', () => {
                         verifiedRouteRequestKey = requestKey;
                         updateRouteOptionButtons(routeData);
                         const enrichedSelection = routeData.routes[currentMode] || routeData.routes.fastest;
-                        if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId) {
+                        const roleKey = currentMode === 'shade' ? 'shade' : (currentMode === 'glareFree' ? 'glareFree' : 'fastest');
+                        const roleMeta = routeData.roleAnalysis && routeData.roleAnalysis[roleKey];
+                        const precisionReadyForRole = progress.analysisPhase === 'precision-final' &&
+                            roleKey !== 'fastest' && roleMeta && roleMeta.analysisMode === 'scene' &&
+                            enrichedSelection && enrichedSelection.analysisMode === 'scene';
+                        const precisionStartsAtVehicle = precisionRouteStartsAtVehicle(enrichedSelection);
+                        if (isLiveNavActive && precisionReadyForRole && !precisionStartsAtVehicle && !precisionReroutePending) {
+                            // Scene refinement can finish after the vehicle has
+                            // moved far from the original route origin. Do
+                            // not swap to that stale geometry; request a fresh
+                            // forward route from the current GPS position.
+                            precisionReroutePending = true;
+                            updateRoute(true).catch(() => { precisionReroutePending = false; });
+                            return;
+                        }
+                        const canSwitchActiveGuidance = isLiveNavActive && precisionReadyForRole &&
+                            precisionStartsAtVehicle &&
+                            (!selectedRouteObj || selectedRouteObj.analysisMode !== 'scene' || selectedRouteObj.id !== enrichedSelection.id);
+                        if (canSwitchActiveGuidance) {
+                            precisionReroutePending = false;
+                            selectedRouteObj = enrichedSelection;
+                            navigationSessionRouteId = selectedRouteObj.id || null;
+                            navigationSessionRouteGeometry = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
+                                ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])])
+                                : navigationSessionRouteGeometry;
+                            if (lastPrecisionSwitchRouteId !== selectedRouteObj.id) {
+                                lastPrecisionSwitchRouteId = selectedRouteObj.id || null;
+                                const isKo = I18n.getLanguage().startsWith('ko');
+                                TTSVoice.speak(isKo
+                                    ? (roleKey === 'shade' ? '건물·지형 그늘 우선 경로로 안내를 갱신합니다.' : '정밀 역광 회피 경로로 안내를 갱신합니다.')
+                                    : (roleKey === 'shade' ? 'Guidance updated to the precision shade route.' : 'Guidance updated to the precision glare-free route.'), true, 'precision-route-update');
+                            }
+                        } else if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId || progress.analysisPhase !== 'precision-final') {
                             selectedRouteObj = enrichedSelection;
                         }
                         setNavigationButtonsEnabled(isCurrentRouteReady());
@@ -2609,6 +2826,9 @@ document.addEventListener('DOMContentLoaded', () => {
         function sceneLabel(route) {
             const coverage = route && route.analyzed && route.analyzed.sceneCoverage;
             const mode = route && (route.analysisMode || (route.analyzed && route.analyzed.analysisMode));
+            if (routeData && routeData.enrichmentPending && mode !== 'scene') {
+                return isKo ? '휴리스틱 초기값 · 건물·지형 정밀 계산 중' : 'Heuristic first pass · scene refinement running';
+            }
             if (mode === 'scene') {
                 if (coverage && coverage.buildings && coverage.terrain) return isKo ? '건물·지형 정밀 분석' : 'Building/terrain precision analysis';
                 if (coverage && coverage.buildings) return isKo ? '건물 데이터 반영 · 지형 데이터 미확보' : 'Building data applied · terrain unavailable';
@@ -2654,8 +2874,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup = L.featureGroup().addTo(map);
         dynamicRemainingPolylineGroup.clearLayers();
         dynamicRemainingLayers = new Map();
-        dynamicRemainingRouteId = selectedRouteObj.id || null;
+        dynamicRemainingRouteId = getRouteGeometryIdentity(selectedRouteObj);
         dynamicRemainingSegmentIndex = null;
+        resetNavigationRouteProgress(selectedRouteObj);
 
         const endIcon = L.divIcon({
             className: 'custom-map-marker end',
@@ -2731,6 +2952,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dynamicRemainingLayers = new Map();
         dynamicRemainingRouteId = null;
         dynamicRemainingSegmentIndex = null;
+        resetNavigationRouteProgress(null);
         if (endMarker) {
             map.removeLayer(endMarker);
             endMarker = null;
@@ -2800,6 +3022,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let requestGeneration = 0;
         let requestController = null;
         let activeIndex = -1;
+        let lastAddressFallbackAt = 0;
         if (!input || !dropdown) return;
         input.setAttribute('role', 'combobox');
         input.setAttribute('aria-controls', dropdownId);
@@ -2829,9 +3052,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 // searches, avoiding one request per partial keystroke.
                 let results = [];
                 requestController = new AbortController();
+                const addressQuery = val.trim();
+                const canUseAddressFallback = inputId === 'destination-input' &&
+                    /^\s*\d+[A-Za-z]?\s+\S+/.test(addressQuery) &&
+                    addressQuery.length >= 8 && Date.now() - lastAddressFallbackAt >= 4000;
+                if (canUseAddressFallback) lastAddressFallbackAt = Date.now();
                 try {
                     results = await Geocoder.searchPlaces(val, currentStart, {
                         includeNominatim: false,
+                        // Photon remains the fast provider.  For a complete
+                        // street-address query, Geocoder performs a single
+                        // Nominatim fallback so exact house numbers are not
+                        // silently replaced by a similarly named road.
+                        fallbackNominatim: canUseAddressFallback,
                         signal: requestController.signal
                     });
                 } catch (e) {
@@ -3363,13 +3596,16 @@ document.addEventListener('DOMContentLoaded', () => {
         navigationSessionStartedAt = navStartTime;
         navigationSessionStartDistanceMeters = navStartDistanceMeters;
         navigationSessionArrived = false;
+        precisionReroutePending = false;
         navigationConsecutiveOffRouteCount = 0;
+        lastPrecisionSwitchRouteId = null;
         lastProcessedNavigationTimestamp = 0;
         lastProcessedNavigationPosition = null;
         lastProcessedNavigationAccuracy = Infinity;
         navigationSessionRouteId = selectedRouteObj && selectedRouteObj.id || null;
         navigationSessionRouteGeometry = selectedRouteObj && selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
             ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])]) : null;
+        resetNavigationRouteProgress(selectedRouteObj);
         if (window.DebugLogger) window.DebugLogger.log('route-frozen-for-navigation', { routeId: navigationSessionRouteId || 'geometry-session' });
         let isArrived = false;
         let consecutiveOffRouteCount = 0;
@@ -3488,7 +3724,9 @@ document.addEventListener('DOMContentLoaded', () => {
             updateTurnBannerText(nextManeuver, glareRisk);
             if (nextManeuver) TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar);
             if (glareRisk > 0.45) TTSVoice.announceProactiveGlareWarning(currentHeading, glareRisk);
-            TTSVoice.announceNavHazard(nextManeuver ? nextManeuver.distanceFromCar : 200, currentHeading, glareRisk);
+            // Do not let the generic "continue straight" hazard message
+            // overwrite a real upcoming left/right turn announcement.
+            if (!nextManeuver) TTSVoice.announceNavHazard(200, currentHeading, glareRisk);
             return true;
         }
         window.__solarlessProcessNavigationPosition = processNavigationPosition;
@@ -3607,7 +3845,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     TTSVoice.announceProactiveGlareWarning(currentHeading, glareRisk);
                 }
 
-                TTSVoice.announceNavHazard(nextManeuver ? nextManeuver.distanceFromCar : 200, currentHeading, glareRisk);
+                // The turn engine owns voice prompts whenever a maneuver is
+                // ahead; the generic hazard engine is only a no-maneuver
+                // fallback and must not announce "straight" after "turn
+                // left/right" on the same GPS fix.
+                if (!nextManeuver) TTSVoice.announceNavHazard(200, currentHeading, glareRisk);
             },
             (err) => {
                 gpsLastError = err && err.code;
