@@ -172,7 +172,7 @@ test('scene coverage falls back to heuristics for uncovered route segments', () 
 
 test('precomputed scene packs are loaded once, cached, and produce a precision scene', async () => {
     const originalFetch = sandbox.fetch;
-    const manifestUrl = 'https://example.test/scene-ma/manifest.json';
+    const manifestUrl = 'https://example.test/scene-us-northeast/manifest.json';
     const tileNames = [];
     const tileMap = {};
     for (let x = -1; x <= 1; x++) {
@@ -193,9 +193,9 @@ test('precomputed scene packs are loaded once, cached, and produce a precision s
     const zipBytes = require('fflate').zipSync(files, { level: 6 });
     const manifest = {
         schema: 2,
-        region: 'MA',
+        region: 'US-NORTHEAST',
         releaseTag: 'pilot',
-        baseUrl: 'https://example.test/scene-ma',
+        baseUrl: 'https://example.test/scene-us-northeast',
         tileSizeM: 5000,
         tilePaddingMeters: 4500,
         terrainSpacingM: 100,
@@ -219,7 +219,7 @@ test('precomputed scene packs are loaded once, cached, and produce a precision s
             durationSec: 600
         };
         const first = await SceneShadow.fetchPrecomputedSceneForRoute(coordinates, options);
-        assert.equal(first.source, 'GitHub precomputed Massachusetts scene tiles');
+        assert.equal(first.source, 'GitHub precomputed US-NORTHEAST scene tiles');
         assert.equal(first.precisionReady, true);
         assert.equal(first.tileKeys.length, 9);
         const countAfterFirst = fetchCount;

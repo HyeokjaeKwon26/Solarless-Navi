@@ -26,17 +26,11 @@
     const DEFAULT_MAX_SCENE_TILES = 8;
     const DEFAULT_SCENE_TILE_ROUTE_METERS = 5000;
     const MAX_SHADOW_RAY_DISTANCE_METERS = 4500;
-    const PRECOMPUTED_MANIFEST_URL = 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/ma/manifest.json';
     const PRECOMPUTED_REGION_MANIFESTS = [
         {
             id: 'us-northeast',
             url: 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/us-northeast/manifest.json',
             bounds: { south: 38.74287, west: -80.52275, north: 47.46222, east: -66.87164 }
-        },
-        {
-            id: 'ma',
-            url: PRECOMPUTED_MANIFEST_URL,
-            bounds: { south: 41.1, west: -73.7, north: 43.0, east: -69.7 }
         },
         {
             id: 'us-midwest',
@@ -70,9 +64,6 @@
 
     function precomputedSourceLabel(manifest) {
         const region = String(manifest && (manifest.region || manifest.releaseTag) || '').trim();
-        if (region.toLowerCase() === 'ma' || region.toLowerCase().includes('massachusetts')) {
-            return 'GitHub precomputed Massachusetts scene tiles';
-        }
         return region ? `GitHub precomputed ${region} scene tiles` : 'GitHub precomputed scene tiles';
     }
 
