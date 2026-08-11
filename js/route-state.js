@@ -96,6 +96,43 @@
             headingDelta >= Number(config.headingDelta || 25);
     }
 
+    function requestGeolocationPosition(geolocation, options) {
+        return new Promise((resolve, reject) => {
+            if (!geolocation || typeof geolocation.getCurrentPosition !== 'function') {
+                const error = new Error('Geolocation is unavailable.');
+                error.code = 'UNAVAILABLE';
+                reject(error);
+                return;
+            }
+            geolocation.getCurrentPosition(resolve, reject, options);
+        });
+    }
+
+    async function acquireInitialPosition(geolocation, config = {}) {
+        const quickOptions = {
+            enableHighAccuracy: false,
+            timeout: Number(config.quickTimeoutMs || 8000),
+            maximumAge: Number(config.quickMaximumAgeMs || 120000)
+        };
+        const preciseOptions = {
+            enableHighAccuracy: true,
+            timeout: Number(config.preciseTimeoutMs || 12000),
+            maximumAge: Number(config.preciseMaximumAgeMs || 15000)
+        };
+        try {
+            return await requestGeolocationPosition(geolocation, quickOptions);
+        } catch (error) {
+            // Permission denial must be surfaced immediately. A timeout or an
+            // unavailable cached/network fix gets one bounded GPS attempt.
+            if (Number(error && error.code) === 1 || error && error.code === 'UNAVAILABLE') throw error;
+            return requestGeolocationPosition(geolocation, preciseOptions);
+        }
+    }
+
+    function shouldRestartRouteForGpsFix(pendingKey, currentKey, hasDestination, liveNavigationActive) {
+        return !!hasDestination && !liveNavigationActive && !!pendingKey && !!currentKey && pendingKey !== currentKey;
+    }
+
     return {
         createRouteRequestKey,
         isRouteRequestKeyCurrent,
@@ -103,6 +140,8 @@
         rectsOverlap,
         findRectIntersections,
         createDebouncedScheduler,
-        shouldRefreshRoadRules
+        shouldRefreshRoadRules,
+        acquireInitialPosition,
+        shouldRestartRouteForGpsFix
     };
 });

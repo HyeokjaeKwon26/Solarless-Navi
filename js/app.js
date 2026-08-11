@@ -79,6 +79,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let endMarker = null;
 
     let isLiveNavActive = false;
+    let isPipMode = false;
     let gpsWatchId = null;
     let lastGpsPosition = null;
     let lastGpsTimestamp = null;
@@ -90,6 +91,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // repeated progress callback from announcing the same switch twice.
     let lastPrecisionSwitchRouteId = null;
     let precisionReroutePending = false;
+    let precisionRerouteCooldownUntil = 0;
+    const PRECISION_REROUTE_COOLDOWN_MS = 60000;
     let navigationSessionStartedAt = 0;
     let navigationSessionStartDistanceMeters = 0;
     let navigationSessionArrived = false;
@@ -1739,12 +1742,19 @@ document.addEventListener('DOMContentLoaded', () => {
     function setupPipUi() {
         if (!window.PipController) return;
         window.addEventListener('solarless:pipdebug', event => {
-            if (window.DebugLogger) window.DebugLogger.log('pip-debug', event && event.detail ? event.detail : {});
+            const detail = event && event.detail ? event.detail : {};
+            if (window.DebugLogger) window.DebugLogger.log('pip-debug', detail);
+            const reason = String(detail.reason || '');
+            if (isLiveNavActive && ['LOCATION_PERMISSION_MISSING', 'LOCATION_SERVICE_START_FAILED', 'LOCATION_SERVICE_NO_PROVIDER'].includes(reason)) {
+                showApiNotice(I18n.getLanguage().startsWith('ko')
+                    ? 'Android 백그라운드 위치 서비스를 사용할 수 없습니다. 앱을 열어 둔 상태에서 GPS 안내를 계속합니다.'
+                    : 'Android background location is unavailable. GPS guidance will continue while the app remains open.');
+            }
         });
         window.addEventListener('solarless:pipmode', event => {
+            isPipMode = !!(event && event.detail && event.detail.inPip);
             if (map) setTimeout(() => map.invalidateSize({ animate: false }), 80);
-            if (event && event.detail && event.detail.inPip) stopVehicleMarkerAnimation();
-            else if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
+            if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
         });
         const toggle = document.getElementById('toggle-pip-auto');
         const status = document.getElementById('pip-support-status');
@@ -1976,8 +1986,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         setGpsStatusIndicator(true, false);
 
-        gpsFixPromise = new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
-            async (pos) => {
+        const acquirePosition = window.RouteState && typeof window.RouteState.acquireInitialPosition === 'function'
+            ? window.RouteState.acquireInitialPosition(navigator.geolocation)
+            : new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
+                resolve, reject, { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 }
+            ));
+
+        gpsFixPromise = acquirePosition.then((pos) => {
                 const previousTimestamp = gpsLastFixAt;
                 const initialTimestamp = Number(pos && pos.timestamp) > 0 ? Number(pos.timestamp) : Date.now();
                 const source = pos && pos.coords && Number.isFinite(Number(pos.coords.accuracy)) && Number(pos.coords.accuracy) < 100
@@ -1992,23 +2007,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 // owns that first request, so this guard cannot duplicate it.
                 const shouldRefreshExistingRoute = !!currentEnd && !navigationStartPending;
                 if (shouldRefreshExistingRoute) updateRoute();
-                // Resolve as soon as coordinates exist. Reverse geocoding is
-                // UI enrichment and must not block route-start readiness.
-                resolve(currentStart);
 
-                let addr = '';
-                try { addr = await Geocoder.reverseGeocode(lat, lng); } catch (e) { /* GPS fix remains valid if address lookup fails. */ }
-                const input = document.getElementById('origin-input');
-                const myLocLabel = I18n.getLanguage().startsWith('ko') ? "🎯 내 위치" : "🎯 My Location";
-                if (input) input.value = `${myLocLabel}: ${addr}`;
+                // Reverse geocoding is UI enrichment and must not block route
+                // readiness or the caller waiting for the first valid fix.
+                Promise.resolve().then(async () => {
+                    let addr = '';
+                    try { addr = await Geocoder.reverseGeocode(lat, lng); } catch (e) { /* GPS fix remains valid if address lookup fails. */ }
+                    const input = document.getElementById('origin-input');
+                    const myLocLabel = I18n.getLanguage().startsWith('ko') ? "🎯 내 위치" : "🎯 My Location";
+                    if (input) input.value = `${myLocLabel}: ${addr}`;
 
-                updateSunInfo();
-                checkAndUpdateMapTileTheme();
+                    updateSunInfo();
+                    checkAndUpdateMapTileTheme();
 
-                if (!currentEnd && map) {
-                    map.setView([currentStart.lat, currentStart.lng], 16);
-                    updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
-                }
+                    if (!currentEnd && map) {
+                        map.setView([currentStart.lat, currentStart.lng], 16);
+                        updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
+                    }
+                });
 
                 // A quick network/last-known fix makes the first screen
                 // responsive. Follow it with one high-accuracy fix without
@@ -2022,12 +2038,24 @@ document.addEventListener('DOMContentLoaded', () => {
                         const isNewer = !refinedTimestamp || refinedTimestamp >= baselineTimestamp;
                         if (isNewer && (!Number.isFinite(currentAccuracy) || !Number.isFinite(refinedAccuracy) || refinedAccuracy <= currentAccuracy)) {
                             applyGpsFix(refined, 'high-accuracy');
-                            if (currentEnd && !isLiveNavActive && !pendingRouteRequestKey) updateRoute();
+                            const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
+                            const refinedKey = getCurrentRouteRequestKey(dateObj);
+                            const restartPendingRoute = window.RouteState &&
+                                typeof window.RouteState.shouldRestartRouteForGpsFix === 'function' &&
+                                window.RouteState.shouldRestartRouteForGpsFix(
+                                    pendingRouteRequestKey, refinedKey, !!currentEnd, isLiveNavActive
+                                );
+                            // A refined fix changes the request identity. Do
+                            // not let the old-origin result render while the
+                            // start button compares against the new origin.
+                            // updateRoute() aborts that request and replaces it
+                            // exactly once with the refined position.
+                            if (restartPendingRoute || (currentEnd && !isLiveNavActive && !pendingRouteRequestKey)) updateRoute();
                         }
                     }, () => {}, { enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 });
                 }
-            },
-            (err) => {
+                return currentStart;
+            }).catch((err) => {
                 gpsFixState = 'error';
                 gpsLastError = err && err.code;
                 // Do not infer a permanent permission denial from a single
@@ -2043,10 +2071,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (window.DebugLogger) window.DebugLogger.log('gps-error', { code: err && err.code, source: isInitial ? 'initial' : 'request' });
                 const gpsError = new Error(err && err.code === 1 ? 'Location permission was denied.' : 'Current GPS position is not available yet.');
                 gpsError.code = err && err.code;
-                reject(gpsError);
-            },
-            { enableHighAccuracy: false, timeout: 2500, maximumAge: 120000 }
-        )).finally(() => { gpsFixPromise = null; });
+                throw gpsError;
+            }).finally(() => { gpsFixPromise = null; });
         return gpsFixPromise;
     }
 
@@ -2111,7 +2137,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function startVehicleMarkerAnimationLoop() {
         if (targetSnapLat === null || targetSnapLng === null) return;
-        if (!isLiveNavActive || prefersReducedMotion()) {
+        if (!isLiveNavActive || prefersReducedMotion() || isPipMode) {
             currentSmoothLat = targetSnapLat;
             currentSmoothLng = targetSnapLng;
             currentSmoothHeading = targetSnapHeading;
@@ -2128,7 +2154,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         vehicleAnimationStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         const animateFrame = (timestamp) => {
-            if (!isLiveNavActive || document.visibilityState === 'hidden' || targetSnapLat === null || targetSnapLng === null) {
+            if (!isLiveNavActive || (document.visibilityState === 'hidden' && !isPipMode) || targetSnapLat === null || targetSnapLng === null) {
                 stopVehicleMarkerAnimation();
                 return;
             }
@@ -2537,6 +2563,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        const rerouteReason = String(routeOptions.reason || (isMidDrive ? 'off-route' : 'planning'));
+        let liveRerouteCommitted = false;
+
         // A mid-drive request is an explicit reroute. It is the only path
         // allowed to replace the route frozen at navigation start.
         if (isMidDrive && isLiveNavActive) {
@@ -2551,20 +2580,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     timestamp: lastGpsTimestamp || Date.now()
                 };
             }
-            navigationSessionRouteId = null;
-            navigationSessionRouteGeometry = null;
-            precisionReroutePending = false;
-            // Do not leave coloured "remaining" segments from the old
-            // route visible while the new forward route is being fetched.
-            // The verified route itself may stay on the map as context, but
-            // passed purple segments must be removed immediately.
-            if (activeRoutePolylineGroup) activeRoutePolylineGroup.clearLayers();
-            if (dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup.clearLayers();
-            dynamicRemainingLayers = new Map();
-            dynamicRemainingRouteId = null;
-            dynamicRemainingSegmentIndex = null;
-            resetNavigationRouteProgress(null);
-            if (window.DebugLogger) window.DebugLogger.log('route-reroute-start', {});
+            // Keep the verified guidance and its remaining polyline until a
+            // replacement OSRM route actually arrives. A network failure must
+            // not blank the map or discard the route used by active guidance.
+            if (window.DebugLogger) window.DebugLogger.log('route-reroute-start', { reason: rerouteReason });
         }
 
         const requestGeneration = ++routeAnalysisGeneration;
@@ -2623,13 +2642,15 @@ document.addEventListener('DOMContentLoaded', () => {
                             roleKey !== 'fastest' && roleMeta && roleMeta.analysisMode === 'scene' &&
                             enrichedSelection && enrichedSelection.analysisMode === 'scene';
                         const precisionStartsAtVehicle = precisionRouteStartsAtVehicle(enrichedSelection);
-                        if (isLiveNavActive && precisionReadyForRole && !precisionStartsAtVehicle && !precisionReroutePending) {
+                        if (isLiveNavActive && precisionReadyForRole && !precisionStartsAtVehicle &&
+                            !precisionReroutePending && Date.now() >= precisionRerouteCooldownUntil) {
                             // Scene refinement can finish after the vehicle has
                             // moved far from the original route origin. Do
                             // not swap to that stale geometry; request a fresh
                             // forward route from the current GPS position.
                             precisionReroutePending = true;
-                            updateRoute(true).catch(() => { precisionReroutePending = false; });
+                            precisionRerouteCooldownUntil = Date.now() + PRECISION_REROUTE_COOLDOWN_MS;
+                            updateRoute(true, { reason: 'precision-refresh' }).catch(() => { precisionReroutePending = false; });
                             return;
                         }
                         const canSwitchActiveGuidance = isLiveNavActive && precisionReadyForRole &&
@@ -2651,6 +2672,25 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                         } else if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId || progress.analysisPhase !== 'precision-final') {
                             selectedRouteObj = enrichedSelection;
+                        }
+                        if (isMidDrive && isLiveNavActive && !liveRerouteCommitted && selectedRouteObj) {
+                            // Commit the new session only after the first
+                            // verified OSRM result. This is the point where it
+                            // is safe to remove the old remaining polyline.
+                            liveRerouteCommitted = true;
+                            navigationSessionRouteId = selectedRouteObj.id || null;
+                            navigationSessionRouteGeometry = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
+                                ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])])
+                                : null;
+                            if (activeRoutePolylineGroup) activeRoutePolylineGroup.clearLayers();
+                            if (dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup.clearLayers();
+                            dynamicRemainingLayers = new Map();
+                            dynamicRemainingRouteId = null;
+                            dynamicRemainingSegmentIndex = null;
+                            resetNavigationRouteProgress(selectedRouteObj);
+                            if (window.DebugLogger) window.DebugLogger.log('route-reroute-committed', {
+                                reason: rerouteReason, routeId: navigationSessionRouteId || 'geometry-session'
+                            });
                         }
                         setNavigationButtonsEnabled(isCurrentRouteReady());
                         renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
@@ -2695,6 +2735,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (window.DebugLogger) window.DebugLogger.log('route-enrichment-failure', { message: String(e && e.message || e), keptPreviousRoute: hadPreviousRoute });
             return;
         } finally {
+            if (rerouteReason === 'precision-refresh') precisionReroutePending = false;
             if (routeAbortController === requestController) {
                 routeAbortController = null;
             }
@@ -3518,7 +3559,7 @@ document.addEventListener('DOMContentLoaded', () => {
         recenterMapToVehicle();
     }
 
-    function toggleLiveGpsNavigation() {
+    async function toggleLiveGpsNavigation() {
         const btn = document.getElementById('live-gps-nav-btn');
         const directMapBtn = document.getElementById('btn-map-start-nav');
         const isKo = I18n.getLanguage().startsWith('ko');
@@ -3587,7 +3628,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hasValidGpsHeading) setCompassMode('heading-up');
         else setCompassMode('north-up');
         compassModeUserOverride = false;
-        if (window.PipController) window.PipController.setNavigationActive(true);
+        if (window.PipController) {
+            try {
+                const nativeState = await window.PipController.setNavigationActive(true);
+                if (nativeState && nativeState.locationServiceStarted === false) {
+                    showApiNotice(isKo
+                        ? 'Android 백그라운드 위치 서비스는 시작되지 않았습니다. 앱을 열어 둔 동안 WebView GPS로 안내합니다.'
+                        : 'Android background location service did not start. Guidance will use WebView GPS while the app remains open.');
+                }
+            } catch (error) {
+                showApiNotice(isKo
+                    ? 'Android 위치 서비스 상태를 확인하지 못했습니다. 앱을 열어 둔 상태에서 안내를 계속합니다.'
+                    : 'Android location service status is unavailable. Guidance will continue while the app remains open.');
+            }
+        }
         if (window.DebugLogger) window.DebugLogger.log('navigation-start', { pipAutoEnter: window.PipController && window.PipController.getAutoEnter ? window.PipController.getAutoEnter() : false });
         recenterMapToVehicle();
 
@@ -3597,6 +3651,7 @@ document.addEventListener('DOMContentLoaded', () => {
         navigationSessionStartDistanceMeters = navStartDistanceMeters;
         navigationSessionArrived = false;
         precisionReroutePending = false;
+        precisionRerouteCooldownUntil = 0;
         navigationConsecutiveOffRouteCount = 0;
         lastPrecisionSwitchRouteId = null;
         lastProcessedNavigationTimestamp = 0;
@@ -3713,7 +3768,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     lastRerouteTime = now;
                     navigationConsecutiveOffRouteCount = 0;
                     TTSVoice.speak('Off route. Recalculating from current position.', true);
-                    updateRoute(true);
+                    updateRoute(true, { reason: 'off-route' });
                     return true;
                 }
             }
@@ -3819,7 +3874,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         lastRerouteTime = now;
                         consecutiveOffRouteCount = 0;
                         TTSVoice.speak(isKo ? "경로를 이탈했습니다. 현재 위치에서 새로 탐색합니다." : "Off route. Recalculating from current position.", true);
-                        updateRoute(true);
+                        updateRoute(true, { reason: 'off-route' });
                         return;
                     }
                 }
@@ -3889,7 +3944,7 @@ document.addEventListener('DOMContentLoaded', () => {
         directMapStartBtn.addEventListener('click', () => {
             if (isLiveNavActive && directMapStartBtn.classList.contains('reroute-mode')) {
                 // Reroute active guidance to newly selected route
-                updateRoute();
+                updateRoute(true, { reason: 'manual-route-change' });
                 directMapStartBtn.classList.remove('reroute-mode');
                 directMapStartBtn.innerHTML = `<i class="fa-solid fa-square"></i> ${I18n.getText('mapStopNav')}`;
 

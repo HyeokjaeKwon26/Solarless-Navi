@@ -426,14 +426,69 @@ test('guidance snap prefers forward route progress at self-crossings', () => {
     assert.ok(withProgress.segmentIndex >= 3, 'active guidance must not jump behind the last accepted segment');
 });
 
-test('reroute clears stale remaining layers and anchors OSRM to current heading', () => {
+test('reroute preserves verified guidance until a forward replacement arrives', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     const routerSource = fs.readFileSync(path.join(root, 'js/shadow-router.js'), 'utf8');
-    assert.ok(appSource.includes('dynamicRemainingPolylineGroup.clearLayers();'));
+    const rerouteStart = appSource.slice(
+        appSource.indexOf('if (isMidDrive && isLiveNavActive) {'),
+        appSource.indexOf('const requestGeneration = ++routeAnalysisGeneration;')
+    );
+    assert.equal(rerouteStart.includes('clearLayers()'), false, 'old route must remain visible while OSRM is pending');
+    assert.ok(appSource.includes("window.DebugLogger.log('route-reroute-committed'"));
+    assert.ok(appSource.includes('if (isMidDrive && isLiveNavActive && !liveRerouteCommitted && selectedRouteObj)'));
     assert.ok(appSource.includes('currentStart = {'));
     assert.ok(appSource.includes('startHeading: isMidDrive'));
     assert.ok(routerSource.includes('&bearings=${bearing},60;'));
     assert.ok(routerSource.includes('viaBearing'));
+});
+
+test('initial GPS acquisition retries a timeout with one bounded high-accuracy request', async () => {
+    const options = [];
+    const expected = { coords: { latitude: 42.4, longitude: -71.1, accuracy: 12 }, timestamp: Date.now() };
+    const geolocation = {
+        getCurrentPosition(success, error, requestOptions) {
+            options.push(requestOptions);
+            if (options.length === 1) {
+                const timeout = new Error('timeout');
+                timeout.code = 3;
+                setTimeout(() => error(timeout), 1);
+            } else {
+                setTimeout(() => success(expected), 1);
+            }
+        }
+    };
+    const result = await RouteState.acquireInitialPosition(geolocation);
+    assert.equal(result, expected);
+    assert.deepEqual(options.map(option => ({
+        high: option.enableHighAccuracy,
+        timeout: option.timeout,
+        maximumAge: option.maximumAge
+    })), [
+        { high: false, timeout: 8000, maximumAge: 120000 },
+        { high: true, timeout: 12000, maximumAge: 15000 }
+    ]);
+});
+
+test('initial GPS acquisition does not repeat a denied permission request', async () => {
+    let requests = 0;
+    const denied = new Error('denied');
+    denied.code = 1;
+    const geolocation = {
+        getCurrentPosition(success, error) {
+            requests += 1;
+            error(denied);
+        }
+    };
+    await assert.rejects(RouteState.acquireInitialPosition(geolocation), error => error.code === 1);
+    assert.equal(requests, 1);
+});
+
+test('a refined GPS fix restarts an in-flight route with a changed request identity', () => {
+    const oldKey = RouteState.createRouteRequestKey({ lat: 42.4, lng: -71.1 }, { lat: 42.5, lng: -71.2 }, 'fastest', false, 'realtime');
+    const newKey = RouteState.createRouteRequestKey({ lat: 42.4003, lng: -71.1003 }, { lat: 42.5, lng: -71.2 }, 'fastest', false, 'realtime');
+    assert.equal(RouteState.shouldRestartRouteForGpsFix(oldKey, newKey, true, false), true);
+    assert.equal(RouteState.shouldRestartRouteForGpsFix(oldKey, oldKey, true, false), false);
+    assert.equal(RouteState.shouldRestartRouteForGpsFix(oldKey, newKey, true, true), false);
 });
 
 test('route duplicate filtering compares sampled geometry after distance and duration', () => {
@@ -1260,7 +1315,8 @@ test('startup is north-up and native permission/PiP state is checked before onbo
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     assert.ok(appSource.includes("let compassMode = 'north-up'"));
     assert.ok(appSource.includes('getLocationPermissionState'));
-    assert.ok(appSource.includes('enableHighAccuracy: false, timeout: 2500, maximumAge: 120000'));
+    assert.ok(appSource.includes('window.RouteState.acquireInitialPosition(navigator.geolocation)'));
+    assert.equal(appSource.includes('timeout: 2500'), false);
     assert.ok(appSource.includes('updateGpsAccuracyCircle'));
     assert.equal(html.includes('map-container heading-up-active'), false);
     assert.equal(html.includes('compass-btn heading-up'), false);
@@ -1345,6 +1401,8 @@ test('precision progress can replace an active heuristic glare or shade route', 
     assert.ok(appSource.includes('canSwitchActiveGuidance'));
     assert.ok(appSource.includes('navigationSessionRouteGeometry = selectedRouteObj.analyzed'));
     assert.ok(appSource.includes('Guidance updated to the precision'));
+    assert.ok(appSource.includes('precisionRerouteCooldownUntil = Date.now() + PRECISION_REROUTE_COOLDOWN_MS'));
+    assert.equal(appSource.includes('navigationSessionRouteGeometry = null;\n            precisionReroutePending = false;'), false);
 });
 
 test('native and web location sources share the navigation pipeline and resume fix seam', () => {
@@ -1360,9 +1418,9 @@ test('native and web location sources share the navigation pipeline and resume f
 test('navigation freezes the direct route and permits replacement only through explicit reroute', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('route-frozen-for-navigation'));
-    assert.ok(appSource.includes('if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId)'));
+    assert.ok(appSource.includes("progress.analysisPhase !== 'precision-final'"));
     assert.ok(appSource.includes('A mid-drive request is an explicit reroute'));
-    assert.ok(appSource.includes("navigationSessionRouteId = null;"));
+    assert.ok(appSource.includes('liveRerouteCommitted = true;'));
 });
 
 test('debug diagnostics are debug-only, collapsed, and bounded', () => {
@@ -1393,13 +1451,23 @@ test('release metadata never treats local PBF mtime as extract timestamp', () =>
     assert.ok(source.includes('extractTimestamp: verifiedExtractTimestamp'));
 });
 
-test('PiP uses a map-only navigation HUD instead of regular banners', () => {
+test('PiP is map-only and hides every guidance banner', () => {
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
     const pipController = fs.readFileSync(path.join(root, 'js/pip-controller.js'), 'utf8');
     assert.ok(html.includes('id="pip-mini-icon"'));
-    assert.ok(html.includes('id="pip-mini-route-distance"'));
     assert.match(css, /body\.pip-mode[\s\S]*\.app-header[\s\S]*display:\s*none\s*!important/);
     assert.match(css, /body\.pip-mode[\s\S]*\.map-container[\s\S]*position:\s*absolute/);
+    assert.match(css, /body\.pip-mode \.pip-mini-hud\s*\{\s*display:\s*none\s*!important/);
     assert.ok(pipController.includes("classList.toggle('pip-mode'"));
+    assert.ok(fs.readFileSync(path.join(root, 'js/app.js'), 'utf8').includes('prefersReducedMotion() || isPipMode'));
+});
+
+test('Android location service activation is permission/provider-aware and reported to JavaScript', () => {
+    const plugin = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/solaris/nav/PipPlugin.java'), 'utf8');
+    assert.ok(plugin.includes('boolean legacyGranted = activity != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.M'));
+    assert.ok(plugin.includes('private static boolean startLocationService(Activity activity)'));
+    assert.ok(plugin.includes('hasEnabledLocationProvider(activity)'));
+    assert.ok(plugin.includes('result.put("locationServiceStarted", locationServiceStarted)'));
+    assert.ok(plugin.includes('navigationActive = locationServiceStarted;'));
 });

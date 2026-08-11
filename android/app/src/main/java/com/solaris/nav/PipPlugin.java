@@ -13,6 +13,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.util.Rational;
 import android.content.SharedPreferences;
+import android.location.LocationManager;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -34,7 +35,12 @@ public class PipPlugin extends Plugin {
         locationReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
                 if (LocationForegroundService.ACTION_SERVICE_STATUS.equals(intent.getAction())) {
-                    dispatchReason(intent.getStringExtra(LocationForegroundService.EXTRA_REASON));
+                    String reason = intent.getStringExtra(LocationForegroundService.EXTRA_REASON);
+                    if (reason != null && (reason.startsWith("LOCATION_SERVICE_") ||
+                        "LOCATION_PERMISSION_MISSING".equals(reason))) {
+                        navigationActive = false;
+                    }
+                    dispatchReason(reason);
                     return;
                 }
                 if (!LocationForegroundService.ACTION_LOCATION_UPDATE.equals(intent.getAction())) return;
@@ -99,9 +105,10 @@ public class PipPlugin extends Plugin {
     @PluginMethod
     public void getLocationPermissionState(PluginCall call) {
         Activity activity = getActivity();
-        boolean coarse = activity != null && Build.VERSION.SDK_INT >= 23 &&
+        boolean legacyGranted = activity != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.M;
+        boolean coarse = legacyGranted || activity != null &&
             activity.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
-        boolean fine = activity != null && Build.VERSION.SDK_INT >= 23 &&
+        boolean fine = legacyGranted || activity != null &&
             activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
         JSObject result = new JSObject();
         result.put("coarse", coarse);
@@ -161,12 +168,22 @@ public class PipPlugin extends Plugin {
 
     @PluginMethod
     public void setNavigationActive(PluginCall call) {
-        navigationActive = call.getBoolean("active", false);
+        boolean requestedActive = call.getBoolean("active", false);
         autoEnter = call.getBoolean("autoEnter", autoEnter);
         Activity activity = getActivity();
-        if (navigationActive) startLocationService(activity); else stopLocationService(activity);
+        boolean locationServiceStarted = false;
+        if (requestedActive) {
+            locationServiceStarted = startLocationService(activity);
+            navigationActive = locationServiceStarted;
+        } else {
+            navigationActive = false;
+            stopLocationService(activity);
+        }
         updateActivityParams(activity);
-        JSObject result = state(activity, navigationActive ? "NAVIGATION_ACTIVE" : "NAVIGATION_INACTIVE");
+        String reason = navigationActive ? "NAVIGATION_ACTIVE" :
+            (requestedActive ? "LOCATION_SERVICE_START_FAILED" : "NAVIGATION_INACTIVE");
+        JSObject result = state(activity, reason);
+        result.put("locationServiceStarted", locationServiceStarted);
         call.resolve(result);
     }
 
@@ -263,12 +280,39 @@ public class PipPlugin extends Plugin {
         try { activity.setPictureInPictureParams(buildParams()); } catch (Exception ignored) { }
     }
 
-    private static void startLocationService(Activity activity) {
-        if (activity == null) return;
+    private static boolean hasLocationPermission(Activity activity) {
+        if (activity == null) return false;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        return activity.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private static boolean hasEnabledLocationProvider(Activity activity) {
+        if (activity == null) return false;
+        try {
+            LocationManager manager = (LocationManager) activity.getSystemService(Context.LOCATION_SERVICE);
+            return manager != null && (manager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
+        } catch (RuntimeException error) {
+            return false;
+        }
+    }
+
+    private static boolean startLocationService(Activity activity) {
+        if (activity == null) return false;
+        if (!hasLocationPermission(activity)) {
+            dispatchReason("LOCATION_PERMISSION_MISSING");
+            return false;
+        }
+        if (!hasEnabledLocationProvider(activity)) {
+            dispatchReason("LOCATION_SERVICE_NO_PROVIDER");
+            return false;
+        }
         Intent intent = new Intent(activity, LocationForegroundService.class);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) activity.startForegroundService(intent);
             else activity.startService(intent);
+            return true;
         } catch (SecurityException error) {
             dispatchReason("LOCATION_PERMISSION_MISSING");
         } catch (IllegalStateException error) {
@@ -276,6 +320,7 @@ public class PipPlugin extends Plugin {
         } catch (RuntimeException error) {
             dispatchReason("LOCATION_SERVICE_START_FAILED");
         }
+        return false;
     }
 
     private static void stopLocationService(Activity activity) {
