@@ -94,9 +94,24 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
 | **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
 | **Solar Calculations** | Astronomical AA+ Julian Day Formulas (`SunCalc.js`) |
-| **Building / Terrain Occlusion** | GitHub precomputed regional 5 km scene tiles (Northeast/MA first) → Overpass + OpenTopoData fallback (bounded ray probes) |
+| **Building / Terrain Occlusion** | GitHub precomputed regional 5 km scene tiles (Northeast, Midwest, South, West, plus the existing MA release) → Overpass + OpenTopoData fallback (bounded ray probes) |
 | **Scene Tile Archive** | fflate (MIT) for local ZIP tile extraction |
 | **Audio & TTS** | Capacitor Native TextToSpeech & Web Audio Synth |
+
+---
+
+## 사전계산 장면 Release / Precomputed Scene Releases
+
+앱은 경로 주변의 5km 장면 타일을 GitHub Release에서 먼저 내려받아 로컬에 캐시합니다. 타일이 없거나 오래되었거나 다운로드에 실패하면 Overpass/OpenTopoData를 시도하고, 외부 장면 데이터도 사용할 수 없을 때 공통 휴리스틱으로 fallback합니다.
+
+| 권역 | Tile 수 | Release asset |
+| :--- | ---: | ---: |
+| [Northeast hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v1) | 7,221 | ZIP 333개 |
+| [Midwest hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v1) | 43,668 | ZIP 376개 |
+| [South hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v1) | 47,524 | ZIP 388개 |
+| [West hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v1) | 42,575 | ZIP 539개 |
+
+기존 Massachusetts `scene-ma-v1` Release는 유지됩니다. 원본 PBF/HGT, 중간 인덱스, Release ZIP, APK 바이너리는 Git에 커밋하지 않습니다.
 
 ---
 
@@ -248,9 +263,24 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
 | **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
 | **Solar Calculations** | Astronomical AA+ Julian Day Formulas (`SunCalc.js`) |
-| **Building / Terrain Occlusion** | GitHub precomputed regional 5 km scene tiles (Northeast/MA first) → Overpass + OpenTopoData fallback (bounded ray probes) |
+| **Building / Terrain Occlusion** | GitHub precomputed regional 5 km scene tiles (Northeast, Midwest, South, West, plus the existing MA release) → Overpass + OpenTopoData fallback (bounded ray probes) |
 | **Scene Tile Archive** | fflate (MIT) for local ZIP tile extraction |
 | **Audio & TTS** | Capacitor Native TextToSpeech & Web Audio Synth |
+
+---
+
+## Current precomputed scene releases / 현재 사전계산 장면 Release
+
+The app checks regional 5 km scene tile releases first, downloads only route-corridor tiles, and caches them locally. If a tile is missing or stale, it falls back to Overpass/OpenTopoData and then to the common heuristic tier.
+
+| Region | Tiles | Release assets |
+| :--- | ---: | ---: |
+| [Northeast hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v1) | 7,221 | 333 ZIPs |
+| [Midwest hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v1) | 43,668 | 376 ZIPs |
+| [South hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v1) | 47,524 | 388 ZIPs |
+| [West hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v1) | 42,575 | 539 ZIPs |
+
+The existing Massachusetts `scene-ma-v1` release is preserved. Release ZIPs, source PBF/HGT files, intermediate indexes, and APK binaries are not committed to Git.
 
 ---
 
@@ -271,10 +301,11 @@ Release builds require JDK 17, Android SDK/Gradle, and a signing keystore. Keep 
 ### Scope and limitations
 * Routing depends on the free public OSRM service and may fail or be rate-limited.
 * Search terms and location data may be sent to Nominatim, Photon, Overpass, and the selected map-tile providers (Esri/CARTO).
-* Regional scene tiles are downloaded only for the route corridor and cached locally; the app does not download an entire region at startup. If a GitHub tile is unavailable, it tries Overpass/OpenTopoData and then uses the heuristic tier.
+* Regional scene tiles are downloaded only for the route corridor and cached locally; the app does not download an entire region at startup. The current releases cover Northeast, Midwest, South, and West, while the existing Massachusetts release remains available. If a GitHub tile is unavailable, it tries Overpass/OpenTopoData and then uses the heuristic tier.
 * Durations are OSRM geometry/step durations with a fixed time-of-day adjustment, not live traffic information. Moving the time slider reuses the geometry and refreshes solar analysis without another OSRM request.
 * Buildings, tunnels, and terrain can adjust shade scores when optional OSM/DEM requests succeed. Routes expose heuristic, partial-scene, or precision-scene metadata; each role compares only within the same tier and falls back to heuristic when its scene data fails. These estimates do not guarantee shade, direct-sun reduction, temperature, or safety.
 * Public OSRM, Overpass, OpenTopoData, Nominatim/Photon, and Esri/CARTO tile services can be rate-limited or unavailable. Attribution links are required by the providers' licenses and cannot be removed.
+* The precomputed tiles store fixed OSM building/tunnel geometry and DEM samples. The app performs the time-dependent solar ray check at runtime; they are not a complete precomputed 3D horizon model.
 
 ---
 
