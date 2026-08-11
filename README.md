@@ -21,7 +21,7 @@
 ## ✨ 핵심 듀얼 기능 (Core Dual Pillars)
 
 ### 🌲 1. 그늘 가능성 추정 경로 안내
-* **장면 데이터 보정**: Northeast, Midwest, South, West 지역의 사전계산 장면 타일이 있으면 먼저 GitHub Release에서 경로 주변 5km 타일 묶음을 받아 로컬 캐시하고, 없을 때만 OSM Overpass/OpenTopoData를 시도합니다. 두 경로가 모두 실패하거나 데이터가 없는 구간은 도로 방향 기반 휴리스틱 추정으로 표시됩니다.
+* **장면 데이터 보정**: 미국 경로에 사전계산 장면 타일이 있으면 먼저 GitHub Release에서 경로 주변 5km 타일 묶음을 받아 로컬 캐시하고, 없을 때만 OSM Overpass/OpenTopoData를 시도합니다. 현재 사전계산 릴리스는 Northeast, Midwest, South, West 권역으로 나뉘며, 두 경로가 모두 실패하거나 데이터가 없는 구간은 도로 방향 기반 휴리스틱 추정으로 표시됩니다.
 * **휴리스틱·실험용 추정**: 건물 높이가 없으면 층수 또는 보수적인 기본 높이를 사용하고, DEM은 제한된 방향 표본만 조회합니다. 실제 차광률·UV 선량·온도를 측정하지 않습니다.
 * **실험용 비교 지표**: 실제 차광률이나 실내 온도를 측정하지 않고 경로 간 상대적인 태양 노출 가능성만 비교합니다.
 
@@ -94,7 +94,7 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
 | **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
 | **Solar Calculations** | Astronomical AA+ Julian Day Formulas (`SunCalc.js`) |
-| **Building / Terrain Occlusion** | GitHub precomputed regional 5 km scene tiles (Northeast, Midwest, South, and West) → Overpass + OpenTopoData fallback (bounded ray probes) |
+| **Building / Terrain Occlusion** | GitHub precomputed 5 km scene tiles for the United States (currently Northeast, Midwest, South, and West releases) → Overpass + OpenTopoData fallback (bounded ray probes) |
 | **Scene Tile Archive** | fflate (MIT) for local ZIP tile extraction |
 | **Audio & TTS** | Capacitor Native TextToSpeech & Web Audio Synth |
 
@@ -192,7 +192,7 @@ cmd /c "build_apk.bat"
 ## ✨ Core Dual Pillars
 
 ### 🌲 1. Estimated Shade-Possibility Route Guidance
-* **Scene-assisted estimate**: Uses a precomputed regional 5 km tile (Northeast, Midwest, South, or West where available), then falls back to OSM Overpass building/tunnel geometry and OpenTopoData ASTER30m elevation samples for bounded 2.5D sun-ray checks. Missing or failed data falls back to the road-direction heuristic and is labeled accordingly.
+* **Scene-assisted estimate**: Uses a precomputed 5 km tile for the United States where available (currently published through Northeast, Midwest, South, and West releases), then falls back to OSM Overpass building/tunnel geometry and OpenTopoData ASTER30m elevation samples for bounded 2.5D sun-ray checks. Missing or failed data falls back to the road-direction heuristic and is labeled accordingly.
 * **Heuristic estimate**: Building heights without tags use a level-based or conservative default height, while terrain is sampled along a few sun-facing probes; this is not a complete 3D building/terrain model.
 * **Experimental comparison only**: It does not measure actual shade coverage, cabin temperature, or UV dose.
 
@@ -263,7 +263,7 @@ $$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun
 | **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
 | **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
 | **Solar Calculations** | Astronomical AA+ Julian Day Formulas (`SunCalc.js`) |
-| **Building / Terrain Occlusion** | GitHub precomputed regional 5 km scene tiles (Northeast, Midwest, South, and West) → Overpass + OpenTopoData fallback (bounded ray probes) |
+| **Building / Terrain Occlusion** | GitHub precomputed 5 km scene tiles for the United States (currently Northeast, Midwest, South, and West releases) → Overpass + OpenTopoData fallback (bounded ray probes) |
 | **Scene Tile Archive** | fflate (MIT) for local ZIP tile extraction |
 | **Audio & TTS** | Capacitor Native TextToSpeech & Web Audio Synth |
 
@@ -301,7 +301,7 @@ Release builds require JDK 17, Android SDK/Gradle, and a signing keystore. Keep 
 ### Scope and limitations
 * Routing depends on the free public OSRM service and may fail or be rate-limited.
 * Search terms and location data may be sent to Nominatim, Photon, Overpass, and the selected map-tile providers (Esri/CARTO).
-* Regional scene tiles are downloaded only for the route corridor and cached locally; the app does not download an entire region at startup. The current releases cover Northeast, Midwest, South, and West. If a GitHub tile is unavailable, it tries Overpass/OpenTopoData and then uses the heuristic tier.
+* United States scene tiles are downloaded only for the route corridor and cached locally; the app does not download the entire country at startup. The current precomputed releases are split into Northeast, Midwest, South, and West archives. If a GitHub tile is unavailable, it tries Overpass/OpenTopoData and then uses the heuristic tier.
 * Durations are OSRM geometry/step durations with a fixed time-of-day adjustment, not live traffic information. Moving the time slider reuses the geometry and refreshes solar analysis without another OSRM request.
 * Buildings, tunnels, and terrain can adjust shade scores when optional OSM/DEM requests succeed. Routes expose heuristic, partial-scene, or precision-scene metadata; each role compares only within the same tier and falls back to heuristic when its scene data fails. These estimates do not guarantee shade, direct-sun reduction, temperature, or safety.
 * Public OSRM, Overpass, OpenTopoData, Nominatim/Photon, and Esri/CARTO tile services can be rate-limited or unavailable. Attribution links are required by the providers' licenses and cannot be removed.
