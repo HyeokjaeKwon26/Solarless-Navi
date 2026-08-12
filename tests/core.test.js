@@ -81,6 +81,47 @@ function suppressExpectedWarnings(task) {
     return Promise.resolve().then(task).finally(() => { console.warn = originalWarn; });
 }
 
+function createMemoryIndexedDb() {
+    const stores = new Map();
+    const makeStore = name => {
+        if (!stores.has(name)) stores.set(name, new Map());
+        const values = stores.get(name);
+        const request = result => {
+            const value = {};
+            queueMicrotask(() => { value.result = result(); if (value.onsuccess) value.onsuccess(); });
+            return value;
+        };
+        return {
+            indexNames: { contains: () => false },
+            createIndex: () => {},
+            put: (value, key) => values.set(key, structuredClone(value)),
+            get: key => request(() => values.has(key) ? structuredClone(values.get(key)) : undefined),
+            getAll: () => request(() => [...values.values()].map(value => structuredClone(value))),
+            getAllKeys: () => request(() => [...values.keys()]),
+            delete: key => values.delete(key)
+        };
+    };
+    const db = {
+        objectStoreNames: { contains: name => stores.has(name) },
+        createObjectStore: makeStore,
+        transaction(name) {
+            const transaction = { objectStore: () => makeStore(name) };
+            setTimeout(() => { if (transaction.oncomplete) transaction.oncomplete(); }, 0);
+            return transaction;
+        }
+    };
+    return {
+        open() {
+            const request = { result: db, transaction: { objectStore: makeStore } };
+            queueMicrotask(() => {
+                if (request.onupgradeneeded) request.onupgradeneeded();
+                if (request.onsuccess) request.onsuccess();
+            });
+            return request;
+        }
+    };
+}
+
 test('distance and bearing calculations handle normal and invalid inputs', () => {
     assert.equal(ShadowRouter.calculateDistanceMeters(0, 0, 0, 0), 0);
     assert.ok(Math.abs(ShadowRouter.calculateDistanceMeters(0, 0, 0, 1) - 111194.9) < 200);
@@ -128,6 +169,42 @@ test('scene projection and polygon ray intersection are deterministic', () => {
     assert.equal(SceneShadow.pointInPolygon({ x: 30, y: 0 }, square), true);
     assert.equal(SceneShadow.intersectRayWithPolygon({ x: 0, y: 0 }, { x: 1, y: 0 }, square), 20);
     assert.equal(SceneShadow.intersectRayWithPolygon({ x: 0, y: 30 }, { x: 1, y: 0 }, square), null);
+});
+
+test('terrain grid preserves exact nearest-sample results without retaining full building geometry', () => {
+    const samples = [];
+    for (let x = -1000; x <= 1000; x += 50) {
+        for (let y = -1000; y <= 1000; y += 50) samples.push({ x, y, elevation: 100 + (x + y) / 1000 });
+    }
+    const grid = SceneShadow.buildTerrainGrid(samples, 200);
+    for (const point of [{ x: 17, y: 29 }, { x: 851, y: -733 }, { x: -999, y: 998 }]) {
+        const linear = SceneShadow.findNearestTerrainSample(point, samples, Infinity);
+        const indexed = SceneShadow.findNearestTerrainSample(point, samples, Infinity, grid);
+        assert.equal(indexed.sample, linear.sample);
+        assert.equal(indexed.distance, linear.distance);
+    }
+    assert.ok(Object.keys(grid.cells).length < samples.length);
+});
+
+test('building spatial index keeps ray occlusion parity', () => {
+    const buildings = Array.from({ length: 500 }, (_, index) => ({
+        polygon: [{ x: 1000 + index * 20, y: 1000 }, { x: 1010 + index * 20, y: 1000 }, { x: 1010 + index * 20, y: 1010 }, { x: 1000 + index * 20, y: 1010 }],
+        bounds: { minX: 1000 + index * 20, maxX: 1010 + index * 20, minY: 1000, maxY: 1010 },
+        height: 10,
+        ground: 0
+    }));
+    buildings.push({
+        polygon: [{ x: 30, y: -10 }, { x: 60, y: -10 }, { x: 60, y: 10 }, { x: 30, y: 10 }],
+        bounds: { minX: 30, maxX: 60, minY: -10, maxY: 10 }, height: 30, ground: 0
+    });
+    const base = {
+        origin: { lat: 0, lng: 0 }, coverage: { buildings: true, terrain: false, tunnels: false },
+        buildings, tunnels: [], terrainSamples: [], terrainProfiles: []
+    };
+    const sun = { altitude: 10, azimuth: 90 };
+    const linear = SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, base, 0);
+    const indexed = SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, { ...base, buildingGrid: SceneShadow.buildBuildingGrid(buildings) }, 0);
+    assert.deepEqual(indexed, linear);
 });
 
 test('terrain ray obstruction respects night, invalid data, and horizon tolerance', () => {
@@ -180,6 +257,8 @@ test('scene coverage falls back to heuristics for uncovered route segments', () 
 
 test('precomputed scene packs are loaded once, cached, and produce a precision scene', async () => {
     const originalFetch = sandbox.fetch;
+    const originalIndexedDb = sandbox.indexedDB;
+    sandbox.indexedDB = createMemoryIndexedDb();
     const manifestUrl = 'https://example.test/scene-us-northeast/manifest.json';
     const tileNames = [];
     const tileMap = {};
@@ -198,6 +277,9 @@ test('precomputed scene packs are loaded once, cached, and produce a precision s
     const tilePayload = { schema: 1, buildings: [], tunnels: [], terrain };
     const files = {};
     for (const file of tileNames) files[file] = require('fflate').strToU8(JSON.stringify(tilePayload));
+    // This entry is intentionally invalid JSON. Selective extraction must not
+    // inflate or parse an unrequested file that merely shares the same pack.
+    files['unused-invalid.json'] = require('fflate').strToU8('{invalid');
     const zipBytes = require('fflate').zipSync(files, { level: 6 });
     const manifest = {
         schema: 2,
@@ -212,9 +294,12 @@ test('precomputed scene packs are loaded once, cached, and produce a precision s
         tiles: tileMap
     };
     let fetchCount = 0;
+    let packFetchAttempts = 0;
     sandbox.fetch = async url => {
         fetchCount++;
         if (String(url) === manifestUrl) return { ok: true, status: 200, json: async () => manifest };
+        packFetchAttempts++;
+        if (packFetchAttempts === 1) throw new Error('temporary mobile network failure');
         return { ok: true, status: 200, arrayBuffer: async () => zipBytes.buffer.slice(zipBytes.byteOffset, zipBytes.byteOffset + zipBytes.byteLength) };
     };
     try {
@@ -230,14 +315,47 @@ test('precomputed scene packs are loaded once, cached, and produce a precision s
         assert.equal(first.source, 'GitHub precomputed US-NORTHEAST scene tiles');
         assert.equal(first.precisionReady, true);
         assert.equal(first.tileKeys.length, 9);
+        assert.equal(Object.hasOwn(first, 'allBuildings'), false);
+        assert.equal(SceneShadow.getCacheStats().precomputedParsedEntries, 0);
+        assert.ok(SceneShadow.getCacheStats().precomputedMaxBytes <= 12 * 1024 * 1024);
+        assert.ok(SceneShadow.getCacheStats().precomputedPersistentMaxBytes > SceneShadow.getCacheStats().precomputedMaxBytes);
+        assert.equal(packFetchAttempts, 2, 'a failed pack download is retried exactly once');
         const countAfterFirst = fetchCount;
+        SceneShadow.clearPrecomputedMemoryCache();
         const second = await SceneShadow.fetchPrecomputedSceneForRoute(coordinates, options);
         assert.equal(second.precisionReady, true);
         assert.equal(fetchCount, countAfterFirst);
     } finally {
         sandbox.fetch = originalFetch;
+        sandbox.indexedDB = originalIndexedDb;
         SceneShadow.clearCaches();
     }
+});
+
+test('scene pack worker inflates and parses only requested JSON entries', () => {
+    const valid = require('fflate').strToU8(JSON.stringify({ id: 'wanted' }));
+    const invalid = require('fflate').strToU8('{not-json');
+    const zip = require('fflate').zipSync({ 'wanted.json': valid, 'unused.json': invalid });
+    const messages = [];
+    const workerSandbox = {
+        self: null,
+        Uint8Array,
+        Set,
+        String,
+        Object,
+        fflate: require('fflate'),
+        importScripts: () => {},
+        postMessage: message => messages.push(message)
+    };
+    workerSandbox.self = workerSandbox;
+    vm.createContext(workerSandbox);
+    vm.runInContext(fs.readFileSync(path.join(root, 'js/scene-pack-worker.js'), 'utf8'), workerSandbox);
+    const buffer = zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength);
+    workerSandbox.self.onmessage({ data: { buffer, fileNames: ['wanted.json'] } });
+    assert.equal(messages.length, 1);
+    assert.equal(JSON.parse(messages[0].files['wanted.json']).id, 'wanted');
+    assert.equal(Object.hasOwn(messages[0].files, 'unused.json'), false);
+    assert.equal(messages[0].sizes['wanted.json'], valid.byteLength);
 });
 
 test('solar worker handles heuristic and precision scene messages without scope errors', () => {
@@ -520,10 +638,10 @@ test('precision candidates include duration fastest plus purpose-specific heuris
     });
     const routes = [
         makeRoute('fast', 100, 0.80, 0.90, 0.10, 0),
-        makeRoute('glare-a', 140, 0.10, 0.70, 0.20, 1),
-        makeRoute('glare-b', 150, 0.20, 0.60, 0.30, 2),
-        makeRoute('shade-a', 160, 0.70, 0.10, 0.90, 3),
-        makeRoute('shade-b', 170, 0.60, 0.20, 0.80, 4)
+        makeRoute('glare-a', 120, 0.10, 0.70, 0.20, 1),
+        makeRoute('glare-b', 125, 0.20, 0.60, 0.30, 2),
+        makeRoute('shade-a', 130, 0.70, 0.10, 0.90, 3),
+        makeRoute('shade-b', 135, 0.60, 0.20, 0.80, 4)
     ];
     const selection = ShadowRouter.selectPrecisionCandidates(routes, 5);
     assert.equal(selection.fastest.id, 'fast');
@@ -531,6 +649,50 @@ test('precision candidates include duration fastest plus purpose-specific heuris
     assert.deepEqual(Array.from(selection.shadeCandidates, route => route.id), ['shade-a', 'shade-b']);
     assert.deepEqual(new Set(selection.precisionCandidates).size, 5);
     assert.ok(selection.precisionCandidates.some(route => route.id === 'shade-a'));
+});
+
+test('precision scheduling prioritizes the active role, then fastest, and skips noncompetitive noise', () => {
+    const makeRoute = (id, durationSec, glare, uv, shade, candidateIndex) => ({
+        id, durationSec, baseDurationSec: durationSec, candidateIndex,
+        analyzed: { avgGlareRisk: glare, totalUvExposureUnits: uv, avgShadeCoverage: shade }
+    });
+    const routes = [
+        makeRoute('fast', 100, 0.8, 1, 0.2, 0),
+        makeRoute('glare', 115, 0.1, 0.9, 0.25, 1),
+        makeRoute('shade', 120, 0.7, 0.7, 0.8, 2),
+        makeRoute('noise', 130, 0.795, 0.995, 0.205, 3)
+    ];
+    const glareFirst = ShadowRouter.selectPrecisionCandidates(routes, 5, 'glareFree');
+    assert.deepEqual(Array.from(glareFirst.precisionCandidates, route => route.id).slice(0, 3), ['glare', 'fast', 'shade']);
+    assert.equal(glareFirst.precisionCandidates.some(route => route.id === 'noise'), false);
+    const shadeFirst = ShadowRouter.selectPrecisionCandidates(routes, 5, 'shade');
+    assert.deepEqual(Array.from(shadeFirst.precisionCandidates, route => route.id).slice(0, 3), ['shade', 'fast', 'glare']);
+});
+
+test('precision analysis geometry is bounded while preserving endpoints, turns, and OSRM navigation geometry', () => {
+    const firstLeg = Array.from({ length: 101 }, (_, index) => [index * 0.00001, 0]);
+    const secondLeg = Array.from({ length: 100 }, (_, index) => [0.001, (index + 1) * 0.00001]);
+    const coordinates = [...firstLeg, ...secondLeg];
+    const raw = {
+        geometry: { coordinates },
+        legs: [{ steps: [{
+            maneuver: { location: [0.001, 0] },
+            tunnel: true,
+            geometry: { coordinates: [[0.001, 0], [0.001, 0.0005]] }
+        }] }]
+    };
+    const sampling = ShadowRouter.buildPrecisionAnalysisGeometry(raw, { steps: raw.legs[0].steps });
+    assert.deepEqual(Array.from(sampling.coordinates[0]), coordinates[0]);
+    assert.deepEqual(Array.from(sampling.coordinates.at(-1)), coordinates.at(-1));
+    assert.ok(sampling.coordinates.some(point => Math.abs(point[0] - 0.001) < 1e-10 && Math.abs(point[1]) < 1e-10));
+    assert.ok(sampling.analysisCoordinateCount < sampling.originalCoordinateCount / 2);
+
+    const heuristic = ShadowRouter.analyzeRouteSegments(coordinates, new Date('2024-06-21T12:00:00Z'), 100);
+    const sampled = ShadowRouter.analyzeRouteSegments(sampling.coordinates, new Date('2024-06-21T12:00:00Z'), 100);
+    const mapped = ShadowRouter.mapPrecisionAnalysisToOriginalGeometry(sampled, heuristic, coordinates, sampling);
+    assert.equal(mapped.coordinates, coordinates);
+    assert.equal(mapped.segments.length, heuristic.segments.length);
+    assert.equal(mapped.precisionSampling.analysisCoordinateCount, sampling.analysisCoordinateCount);
 });
 
 test('route roles preserve OSRM duration for fastest regardless of solar scores', () => {
@@ -700,18 +862,14 @@ test('identical route groups invoke scene analysis once and return scene-tier re
 test('partial scene failure falls back only the affected role comparison tier', async () => {
     const originalFetch = sandbox.fetch;
     const originalSceneFetch = SceneShadow.fetchSceneForRoute;
-    let requestIndex = 0;
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
     let sceneCalls = 0;
     const rawRoutes = [
-        { distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] },
-        { distance: 1400, duration: 130, geometry: { coordinates: [[0, 0], [0.012, 0.001]] }, legs: [{ steps: [] }] },
-        { distance: 1800, duration: 160, geometry: { coordinates: [[0, 0], [0.014, -0.001]] }, legs: [{ steps: [] }] }
+        { distance: 1100, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0.0045]] }, legs: [{ steps: [] }] },
+        { distance: 1200, duration: 115, geometry: { coordinates: [[0, 0], [0, 0.01]] }, legs: [{ steps: [] }] },
+        { distance: 1250, duration: 120, geometry: { coordinates: [[0, 0], [0, -0.01]] }, legs: [{ steps: [] }] }
     ];
-    sandbox.fetch = async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({ routes: [rawRoutes[requestIndex++ % rawRoutes.length]] })
-    });
+    SceneShadow.fetchPrecomputedSceneForRoute = async () => null;
     SceneShadow.fetchSceneForRoute = async () => {
         sceneCalls++;
         if (sceneCalls > 1) throw new Error('mock partial scene outage');
@@ -725,7 +883,10 @@ test('partial scene failure falls back only the affected role comparison tier', 
         };
     };
     try {
-        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false));
+        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0.0045, lng: 0.01 }, new Date('2024-06-21T07:00:00Z'), false,
+            { candidates: rawRoutes, preferredRouteRole: 'fastest' }
+        ));
         assert.ok(sceneCalls > 1);
         assert.equal(result.analysisMode, 'mixed-by-role');
         assert.equal(result.routes.fastest.analysisMode, 'scene');
@@ -734,26 +895,23 @@ test('partial scene failure falls back only the affected role comparison tier', 
     } finally {
         sandbox.fetch = originalFetch;
         SceneShadow.fetchSceneForRoute = originalSceneFetch;
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
     }
 });
 
 test('scene analysis concurrency is bounded and queued candidates remain cancellable', async () => {
     const originalFetch = sandbox.fetch;
     const originalSceneFetch = SceneShadow.fetchSceneForRoute;
-    let requestIndex = 0;
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
     let active = 0;
     let maxActive = 0;
-    const rawRoutes = Array.from({ length: 5 }, (_, index) => ({
-        distance: 1000 + index * 100,
-        duration: 100 + index * 20,
-        geometry: { coordinates: [[0, 0], [0.01, (index + 1) * 0.001]] },
-        legs: [{ steps: [] }]
-    }));
-    sandbox.fetch = async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({ routes: [rawRoutes[requestIndex++ % rawRoutes.length]] })
-    });
+    const rawRoutes = [
+        { distance: 1100, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0.0045]] }, legs: [{ steps: [] }] },
+        { distance: 1200, duration: 112, geometry: { coordinates: [[0, 0], [0, 0.01]] }, legs: [{ steps: [] }] },
+        { distance: 1250, duration: 118, geometry: { coordinates: [[0, 0], [0, -0.01]] }, legs: [{ steps: [] }] },
+        { distance: 1300, duration: 124, geometry: { coordinates: [[0, 0], [-0.01, 0]] }, legs: [{ steps: [] }] }
+    ];
+    SceneShadow.fetchPrecomputedSceneForRoute = async () => null;
     SceneShadow.fetchSceneForRoute = async () => {
         active++;
         maxActive = Math.max(maxActive, active);
@@ -770,14 +928,15 @@ test('scene analysis concurrency is bounded and queued candidates remain cancell
     };
     try {
         const result = await ShadowRouter.fetchAndAnalyzeRoutes(
-            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false,
-            { sceneConcurrency: 2 }
+            { lat: 0, lng: 0 }, { lat: 0.0045, lng: 0.01 }, new Date('2024-06-21T07:00:00Z'), false,
+            { sceneConcurrency: 2, candidates: rawRoutes, preferredRouteRole: 'shade' }
         );
         assert.ok(result.precisionCandidateIds.length >= 2);
         assert.ok(maxActive <= 2, `expected at most 2 concurrent scene requests, got ${maxActive}`);
     } finally {
         sandbox.fetch = originalFetch;
         SceneShadow.fetchSceneForRoute = originalSceneFetch;
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
     }
 });
 
@@ -848,7 +1007,8 @@ test('building ground elevation uses the nearest valid DEM sample and does not f
             [[0, 0], [0.001, 0]], { dateObj: testDate, durationSec: 100 }
         );
         assert.equal(scene.buildings.length, 2);
-        assert.equal(scene.allBuildings.length, 3);
+        assert.equal(scene.diagnostics.totalBuildings, 3);
+        assert.equal(Object.hasOwn(scene, 'allBuildings'), false);
         assert.ok(scene.buildings.every(building => Number.isFinite(building.ground)));
         assert.notEqual(scene.buildings[0].ground, scene.buildings[1].ground);
 
@@ -936,7 +1096,8 @@ test('scene tiles deduplicate OSM ids and reuse overlapping tile cache', async (
             durationSec: 200
         });
         assert.ok(overpassCalls > 1);
-        assert.equal(new Set(first.allBuildings.map(building => String(building.id))).size, first.allBuildings.length);
+        assert.equal(first.diagnostics.totalBuildings, 2);
+        assert.equal(Object.hasOwn(first, 'allBuildings'), false);
         const callsAfterFirst = overpassCalls;
         const terrainAfterFirst = terrainCalls;
         const second = await SceneShadow.fetchSceneForRoute(route, {
@@ -949,7 +1110,7 @@ test('scene tiles deduplicate OSM ids and reuse overlapping tile cache', async (
         });
         assert.equal(overpassCalls, callsAfterFirst);
         assert.equal(terrainCalls, terrainAfterFirst);
-        assert.equal(second.allBuildings.length, first.allBuildings.length);
+        assert.equal(second.diagnostics.totalBuildings, first.diagnostics.totalBuildings);
     } finally {
         sandbox.fetch = originalFetch;
         SceneShadow.clearCaches();
@@ -1395,6 +1556,47 @@ test('route analysis emits heuristic progress before non-blocking scene refineme
     }
 });
 
+test('selected-role scene is fetched before fastest and emits a same-tier partial result', async () => {
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
+    const rawRoutes = [
+        { distance: 1100, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0.0045]] }, legs: [{ steps: [] }] },
+        { distance: 1200, duration: 112, geometry: { coordinates: [[0, 0], [0, 0.01]] }, legs: [{ steps: [] }] },
+        { distance: 1250, duration: 118, geometry: { coordinates: [[0, 0], [0, -0.01]] }, legs: [{ steps: [] }] }
+    ];
+    const fetchedEndpoints = [];
+    const phases = [];
+    SceneShadow.fetchPrecomputedSceneForRoute = async () => null;
+    SceneShadow.fetchSceneForRoute = async coordinates => {
+        fetchedEndpoints.push(Array.from(coordinates.at(-1)));
+        return {
+            precisionReady: true,
+            origin: { lat: 0, lng: 0 },
+            coverage: { buildings: true, terrain: true, tunnels: true },
+            segmentCoverage: Array.from({ length: coordinates.length - 1 }, () => ({ buildings: true, terrain: true, tunnels: true })),
+            buildings: [], tunnels: [], terrainSamples: [], terrainProfiles: [], source: 'mock scene'
+        };
+    };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0.0045, lng: 0.01 }, new Date('2024-06-21T07:00:00Z'), false,
+            { candidates: rawRoutes, preferredRouteRole: 'shade', onProgress: async progress => phases.push(progress) }
+        );
+        assert.ok(fetchedEndpoints[0][0] === 0 && Math.abs(fetchedEndpoints[0][1]) === 0.01);
+        assert.deepEqual(fetchedEndpoints[1], [0.01, 0.0045]);
+        const partial = phases.find(progress => progress.analysisPhase === 'precision-partial');
+        assert.ok(partial);
+        assert.equal(partial.enrichmentPending, true);
+        assert.ok(partial.refinedCandidateIds.length >= 2);
+        assert.ok(['scene', 'mixed-by-role'].includes(partial.analysisMode));
+        assert.equal(result.routes.fastest.analyzed.coordinates, rawRoutes[0].geometry.coordinates);
+        assert.ok(result.routes.fastest.analyzed.precisionSampling.analysisCoordinateCount < 100);
+    } finally {
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
+    }
+});
+
 test('precision progress can replace an active heuristic glare or shade route', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes("progress.analysisPhase === 'precision-final'"));
@@ -1418,7 +1620,9 @@ test('native and web location sources share the navigation pipeline and resume f
 test('navigation freezes the direct route and permits replacement only through explicit reroute', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('route-frozen-for-navigation'));
-    assert.ok(appSource.includes("progress.analysisPhase !== 'precision-final'"));
+    assert.ok(appSource.includes("progress.analysisPhase === 'precision-partial'"));
+    assert.ok(appSource.includes('A partial precision callback is an enrichment'));
+    assert.ok(appSource.includes('isLiveNavActive && precisionReadyForRole &&'));
     assert.ok(appSource.includes('A mid-drive request is an explicit reroute'));
     assert.ok(appSource.includes('liveRerouteCommitted = true;'));
 });
@@ -1437,9 +1641,13 @@ test('scene pack worker and regional merge hooks are present', () => {
     const worker = fs.readFileSync(path.join(root, 'js/scene-pack-worker.js'), 'utf8');
     const scene = fs.readFileSync(path.join(root, 'js/scene-shadow.js'), 'utf8');
     assert.ok(worker.includes('unzipSync'));
+    assert.ok(worker.includes('requested.has(file.name)'));
     assert.ok(worker.includes('postMessage'));
     assert.ok(scene.includes('mergePrecomputedScenes'));
-    assert.ok(scene.includes('mapWithConcurrency(tileKeys'));
+    assert.ok(scene.includes('streamPrecomputedTiles(manifest, tileKeys'));
+    assert.equal(scene.includes('for (const tile of tileValues)'), false);
+    assert.ok(scene.includes('buildTerrainGrid'));
+    assert.ok(scene.includes('rayBuildingCandidateIndices'));
     assert.ok(scene.includes("indexedDB.open('solarless-scene-cache', 2)"));
     assert.ok(scene.includes('PRECOMPUTED_CACHE_MAX_BYTES'));
 });

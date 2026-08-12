@@ -26,6 +26,8 @@
     const DEFAULT_MAX_SCENE_TILES = 8;
     const DEFAULT_SCENE_TILE_ROUTE_METERS = 5000;
     const MAX_SHADOW_RAY_DISTANCE_METERS = 4500;
+    const TERRAIN_GRID_CELL_METERS = 200;
+    const BUILDING_GRID_CELL_METERS = 250;
     const PRECOMPUTED_REGION_MANIFESTS = [
         {
             id: 'us-northeast',
@@ -50,10 +52,16 @@
     ];
     const PRECOMPUTED_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
     const PRECOMPUTED_MANIFEST_REVALIDATE_MS = 24 * 60 * 60 * 1000;
+    const PRECOMPUTED_MANIFEST_TIMEOUT_MS = 5000;
+    const PRECOMPUTED_PACK_TIMEOUT_MS = 15000;
+    const PRECOMPUTED_PACK_RETRY_COUNT = 1;
     // Byte budget is the primary bound. This large cap is only a failsafe for
     // malformed manifests; ordinary routes may retain more than 64 tiles.
     const PRECOMPUTED_CACHE_MAX_ENTRIES = 4096;
-    const PRECOMPUTED_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+    // Parsed scene graphs are deliberately never cached. Compact serialized
+    // tiles get a small hot cache; IndexedDB remains the durable warm cache.
+    const PRECOMPUTED_CACHE_MAX_BYTES = 12 * 1024 * 1024;
+    const PRECOMPUTED_PERSISTENT_CACHE_MAX_BYTES = 256 * 1024 * 1024;
     const overpassCache = new Map();
     const terrainCache = new Map();
     const terrainInflight = new Map();
@@ -484,7 +492,7 @@
         const remove = expired.concat(live.sort((a, b) => Number(a.lastAccess || 0) - Number(b.lastAccess || 0)));
         const toDelete = [];
         for (const record of remove) {
-            if (!expired.includes(record) && live.length - toDelete.length <= PRECOMPUTED_CACHE_MAX_ENTRIES && totalBytes <= PRECOMPUTED_CACHE_MAX_BYTES) break;
+            if (!expired.includes(record) && live.length - toDelete.length <= PRECOMPUTED_CACHE_MAX_ENTRIES && totalBytes <= PRECOMPUTED_PERSISTENT_CACHE_MAX_BYTES) break;
             const bytes = Number(record.bytes) || estimateCacheBytes(record.value);
             totalBytes = Math.max(0, totalBytes - bytes);
             toDelete.push(record);
@@ -519,7 +527,7 @@
                 const fetchFn = root.fetch || (typeof fetch === 'function' ? fetch : null);
                 if (!fetchFn) return stored && stored.value || null;
                 const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-                const timeoutMs = options.precomputedTimeoutMs || 5000;
+                const timeoutMs = options.precomputedManifestTimeoutMs || PRECOMPUTED_MANIFEST_TIMEOUT_MS;
                 let timer = null;
                 let abortHandler = null;
                 try {
@@ -616,11 +624,20 @@
         return promise;
     }
 
-    function unzipPackPayload(bytes, options = {}) {
+    function unzipPackPayload(bytes, requestedFileNames, options = {}) {
+        const requested = new Set((requestedFileNames || []).map(String));
         const canUseWorker = options.disableScenePackWorker !== true && typeof root.Worker === 'function';
         if (!canUseWorker) {
             if (!root.fflate || typeof root.fflate.unzipSync !== 'function') throw new Error('scene tile decompressor unavailable');
-            return Promise.resolve(root.fflate.unzipSync(bytes));
+            const files = root.fflate.unzipSync(bytes, { filter: file => requested.size === 0 || requested.has(file.name) });
+            const parsed = {};
+            for (const [name, content] of Object.entries(files)) {
+                if (!name.endsWith('.json') || (requested.size > 0 && !requested.has(name))) continue;
+                const text = root.fflate.strFromU8(content);
+                parsed[name] = text;
+            }
+            Object.defineProperty(parsed, '__sceneByteSizes', { value: Object.fromEntries(Object.entries(files).map(([name, content]) => [name, content.byteLength])), enumerable: false });
+            return Promise.resolve(parsed);
         }
         return new Promise((resolve, reject) => {
             let worker;
@@ -640,8 +657,8 @@
                 worker.onmessage = event => {
                     const payload = event && event.data;
                     if (!payload || payload.error) { finish(new Error(payload && payload.error || 'scene pack worker failed')); return; }
-                    const files = {};
-                    Object.entries(payload.files || {}).forEach(([name, buffer]) => { files[name] = new Uint8Array(buffer); });
+                    const files = payload.files || {};
+                    Object.defineProperty(files, '__sceneByteSizes', { value: payload.sizes || {}, enumerable: false });
                     finish(null, files);
                 };
                 worker.onerror = () => finish(new Error('scene pack worker failed'));
@@ -652,7 +669,7 @@
                     options.signal.addEventListener('abort', abortHandler, { once: true });
                 }
                 const transferable = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-                worker.postMessage(transferable, [transferable]);
+                worker.postMessage({ buffer: transferable, fileNames: [...requested] }, [transferable]);
                 debugScene('scene-pack-unzip-start', { bytes: bytes.byteLength, worker: true });
             } catch (error) {
                 finish(error);
@@ -661,65 +678,81 @@
             if (options.signal && options.signal.aborted) throw error;
             debugScene('scene-pack-unzip-failure', { message: String(error && error.message || error), fallback: true });
             if (!root.fflate || typeof root.fflate.unzipSync !== 'function') throw error;
-            return root.fflate.unzipSync(bytes);
+            const files = root.fflate.unzipSync(bytes, { filter: file => requested.size === 0 || requested.has(file.name) });
+            const parsed = {};
+            for (const [name, content] of Object.entries(files)) {
+                if (!name.endsWith('.json') || (requested.size > 0 && !requested.has(name))) continue;
+                const text = root.fflate.strFromU8(content);
+                parsed[name] = text;
+            }
+            Object.defineProperty(parsed, '__sceneByteSizes', { value: Object.fromEntries(Object.entries(files).map(([name, content]) => [name, content.byteLength])), enumerable: false });
+            return parsed;
         });
     }
 
-    async function loadPrecomputedPack(manifest, pack, options = {}) {
+    async function loadPrecomputedPack(manifest, pack, requestedFileNames, options = {}) {
         const identity = await manifestCacheIdentity(manifest);
-        const cacheKey = `${identity}:pack:${pack}`;
-        const cached = getPrecomputedCacheValue(cacheKey);
-        if (cached) { debugScene('scene-pack-memory-hit', { pack }); return cached; }
-        if (precomputedTileInflight.has(cacheKey)) return precomputedTileInflight.get(cacheKey);
+        const wanted = [...new Set((requestedFileNames || []).map(String))];
+        if (!wanted.length) return {};
+        const cacheKey = `${identity}:pack-download:${pack}`;
         const url = sceneTileUrl(manifest, pack);
         if (!url) return null;
-        const promise = (async () => {
+        let downloadPromise = precomputedTileInflight.get(cacheKey);
+        if (!downloadPromise) downloadPromise = (async () => {
             const fetchFn = root.fetch || (typeof fetch === 'function' ? fetch : null);
             if (!fetchFn) return null;
-            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-            let timer = null;
-            let abortHandler = null;
-            try {
-                if (controller) {
-                    timer = setTimeout(() => controller.abort(), options.precomputedTimeoutMs || 10000);
-                    if (options.signal) {
-                        abortHandler = () => controller.abort();
-                        if (options.signal.aborted) controller.abort();
-                        else options.signal.addEventListener('abort', abortHandler, { once: true });
+            const retryCount = Math.max(0, Math.min(1, Number(options.precomputedPackRetryCount ?? PRECOMPUTED_PACK_RETRY_COUNT)));
+            for (let attempt = 0; attempt <= retryCount; attempt++) {
+                if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
+                const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                let timer = null;
+                let abortHandler = null;
+                try {
+                    if (controller) {
+                        timer = setTimeout(() => controller.abort(), options.precomputedPackTimeoutMs || PRECOMPUTED_PACK_TIMEOUT_MS);
+                        if (options.signal) {
+                            abortHandler = () => controller.abort();
+                            if (options.signal.aborted) controller.abort();
+                            else options.signal.addEventListener('abort', abortHandler, { once: true });
+                        }
                     }
+                    const response = await fetchFn(url, controller ? { signal: controller.signal } : {});
+                    if (!response || !response.ok) throw new Error(`HTTP ${response && response.status || 0}`);
+                    const bytes = new Uint8Array(await response.arrayBuffer());
+                    debugScene('scene-pack-download-end', { pack, bytes: bytes.byteLength, attempt });
+                    const expectedHash = manifest.packs && manifest.packs[pack] && manifest.packs[pack].sha256;
+                    if (expectedHash && root.crypto && root.crypto.subtle && typeof root.crypto.subtle.digest === 'function') {
+                        const digest = new Uint8Array(await root.crypto.subtle.digest('SHA-256', bytes));
+                        const actualHash = [...digest].map(value => value.toString(16).padStart(2, '0')).join('');
+                        if (actualHash.toLowerCase() !== String(expectedHash).toLowerCase()) { debugScene('scene-pack-checksum-failure', { pack, attempt }); throw new Error('scene tile checksum mismatch'); }
+                    }
+                    return bytes;
+                } catch (error) {
+                    if (options.signal && options.signal.aborted) throw error;
+                    if (attempt >= retryCount) throw error;
+                    debugScene('scene-pack-download-retry', { pack, attempt: attempt + 1, message: String(error && error.message || error) });
+                } finally {
+                    if (timer) clearTimeout(timer);
+                    if (options.signal && abortHandler) options.signal.removeEventListener('abort', abortHandler);
                 }
-                const response = await fetchFn(url, controller ? { signal: controller.signal } : {});
-                if (!response || !response.ok) throw new Error(`HTTP ${response && response.status || 0}`);
-                const bytes = new Uint8Array(await response.arrayBuffer());
-                debugScene('scene-pack-download-end', { pack, bytes: bytes.byteLength });
-                const expectedHash = manifest.packs && manifest.packs[pack] && manifest.packs[pack].sha256;
-                if (expectedHash && root.crypto && root.crypto.subtle && typeof root.crypto.subtle.digest === 'function') {
-                    const digest = new Uint8Array(await root.crypto.subtle.digest('SHA-256', bytes));
-                    const actualHash = [...digest].map(value => value.toString(16).padStart(2, '0')).join('');
-                    if (actualHash.toLowerCase() !== String(expectedHash).toLowerCase()) { debugScene('scene-pack-checksum-failure', { pack }); throw new Error('scene tile checksum mismatch'); }
-                }
-                const files = await unzipPackPayload(bytes, options);
-                const parsed = {};
-                const storedEntries = [];
-                for (const [name, content] of Object.entries(files)) {
-                    if (!name.endsWith('.json')) continue;
-                    const text = root.fflate.strFromU8(content);
-                    parsed[name] = JSON.parse(text);
-                    const tileKey = `${identity}:tile:${name}`;
-                    setPrecomputedCacheValue(tileKey, parsed[name], content.byteLength);
-                    storedEntries.push({ key: tileKey, value: { key: tileKey, value: parsed[name], bytes: content.byteLength, lastAccess: Date.now(), expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS, manifestIdentity: identity } });
-                }
-                await writeStoredSceneValues('tiles', storedEntries);
-                await pruneStoredSceneTiles();
-                setPrecomputedCacheValue(cacheKey, parsed, bytes.byteLength);
-                return parsed;
-            } finally {
-                if (timer) clearTimeout(timer);
-                if (options.signal && abortHandler) options.signal.removeEventListener('abort', abortHandler);
             }
+            return null;
         })().finally(() => precomputedTileInflight.delete(cacheKey));
-        precomputedTileInflight.set(cacheKey, promise);
-        return promise;
+        if (!precomputedTileInflight.has(cacheKey)) precomputedTileInflight.set(cacheKey, downloadPromise);
+        const bytes = await downloadPromise;
+        if (!bytes) return null;
+        const parsed = await unzipPackPayload(bytes, wanted, options);
+        debugScene('scene-pack-unzip-end', { pack, requestedFiles: wanted.length, returnedFiles: Object.keys(parsed || {}).length });
+        const storedEntries = [];
+        for (const [name, value] of Object.entries(parsed || {})) {
+            const tileCacheKey = `${identity}:tile:${name}`;
+            const estimatedBytes = Number(parsed.__sceneByteSizes && parsed.__sceneByteSizes[name]) || 1024;
+            setPrecomputedCacheValue(tileCacheKey, value, estimatedBytes);
+            storedEntries.push({ key: tileCacheKey, value: { key: tileCacheKey, value, bytes: estimatedBytes, lastAccess: Date.now(), expiresAt: Date.now() + PRECOMPUTED_CACHE_TTL_MS, manifestIdentity: identity } });
+        }
+        await writeStoredSceneValues('tiles', storedEntries);
+        await pruneStoredSceneTiles();
+        return parsed;
     }
 
     async function loadPrecomputedTile(manifest, tileKey, options = {}) {
@@ -727,17 +760,54 @@
         if (!tileMeta) return null;
         const cacheKey = `${await manifestCacheIdentity(manifest)}:tile:${tileMeta.file}`;
         const cached = getPrecomputedCacheValue(cacheKey);
-        if (cached) { debugScene('scene-tile-memory-hit', { tileKey }); return cached; }
+        if (cached) { debugScene('scene-tile-memory-hit', { tileKey }); return typeof cached === 'string' ? JSON.parse(cached) : cached; }
         const stored = await readStoredSceneValue('tiles', cacheKey);
         if (stored && stored.value && (!stored.expiresAt || stored.expiresAt > Date.now())) {
-            setPrecomputedCacheValue(cacheKey, stored.value);
+            const serialized = typeof stored.value === 'string' ? stored.value : JSON.stringify(stored.value);
+            setPrecomputedCacheValue(cacheKey, serialized, Number(stored.bytes) || undefined);
             touchStoredSceneTile(cacheKey, stored).catch(() => {});
             debugScene('scene-tile-idb-hit', { tileKey });
-            return stored.value;
+            return JSON.parse(serialized);
         }
         debugScene('scene-tile-miss', { tileKey });
-        const pack = await loadPrecomputedPack(manifest, tileMeta.pack, options);
-        return pack && pack[tileMeta.file] ? pack[tileMeta.file] : null;
+        const pack = await loadPrecomputedPack(manifest, tileMeta.pack, [tileMeta.file], options);
+        return pack && pack[tileMeta.file] ? JSON.parse(pack[tileMeta.file]) : null;
+    }
+
+    async function streamPrecomputedTiles(manifest, tileKeys, onTile, options = {}) {
+        const identity = await manifestCacheIdentity(manifest);
+        const missingByPack = new Map();
+        let processed = 0;
+        const consume = async (tileKey, serialized) => {
+            if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
+            const tile = typeof serialized === 'string' ? JSON.parse(serialized) : serialized;
+            if (!tile) return;
+            await onTile(tile, tileKey);
+            processed++;
+            debugScene('scene-tile-consumed', { tileKey, processed });
+        };
+        for (const tileKey of tileKeys) {
+            const meta = manifest.tiles && manifest.tiles[tileKey];
+            if (!meta) continue;
+            const cacheKey = `${identity}:tile:${meta.file}`;
+            let serialized = getPrecomputedCacheValue(cacheKey);
+            if (!serialized) {
+                const stored = await readStoredSceneValue('tiles', cacheKey);
+                if (stored && stored.value && (!stored.expiresAt || stored.expiresAt > Date.now())) {
+                    serialized = typeof stored.value === 'string' ? stored.value : JSON.stringify(stored.value);
+                    setPrecomputedCacheValue(cacheKey, serialized, Number(stored.bytes) || undefined);
+                    touchStoredSceneTile(cacheKey, stored).catch(() => {});
+                }
+            }
+            if (serialized) { await consume(tileKey, serialized); continue; }
+            if (!missingByPack.has(meta.pack)) missingByPack.set(meta.pack, []);
+            missingByPack.get(meta.pack).push({ tileKey, file: meta.file });
+        }
+        await mapWithConcurrency([...missingByPack.entries()], options.scenePackConcurrency || 2, async ([pack, entries]) => {
+            const parsed = await loadPrecomputedPack(manifest, pack, entries.map(entry => entry.file), options);
+            for (const entry of entries) if (parsed && parsed[entry.file]) await consume(entry.tileKey, parsed[entry.file]);
+        }, options.signal);
+        return processed;
     }
 
     function readOverpassGeometry(element, origin) {
@@ -751,6 +821,58 @@
             minX: Math.min(box.minX, p.x), maxX: Math.max(box.maxX, p.x),
             minY: Math.min(box.minY, p.y), maxY: Math.max(box.maxY, p.y)
         }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+    }
+
+    function buildTerrainGrid(terrainSamples, cellSize = TERRAIN_GRID_CELL_METERS) {
+        const cells = Object.create(null);
+        let count = 0;
+        let minCellX = Infinity, maxCellX = -Infinity, minCellY = Infinity, maxCellY = -Infinity;
+        (terrainSamples || []).forEach((sample, index) => {
+            if (!finite(sample.x) || !finite(sample.y) || !finite(sample.elevation)) return;
+            const cellX = Math.floor(Number(sample.x) / cellSize);
+            const cellY = Math.floor(Number(sample.y) / cellSize);
+            const key = `${cellX}:${cellY}`;
+            if (!cells[key]) cells[key] = [];
+            cells[key].push(index);
+            count++;
+            minCellX = Math.min(minCellX, cellX); maxCellX = Math.max(maxCellX, cellX);
+            minCellY = Math.min(minCellY, cellY); maxCellY = Math.max(maxCellY, cellY);
+        });
+        return { cellSize, cells, count, minCellX, maxCellX, minCellY, maxCellY };
+    }
+
+    function buildBuildingGrid(buildings, cellSize = BUILDING_GRID_CELL_METERS) {
+        const cells = Object.create(null);
+        (buildings || []).forEach((building, index) => {
+            const bounds = building.bounds || computeBounds(building.polygon);
+            if (!bounds) return;
+            building.bounds = bounds;
+            const minX = Math.floor(bounds.minX / cellSize), maxX = Math.floor(bounds.maxX / cellSize);
+            const minY = Math.floor(bounds.minY / cellSize), maxY = Math.floor(bounds.maxY / cellSize);
+            for (let x = minX; x <= maxX; x++) for (let y = minY; y <= maxY; y++) {
+                const key = `${x}:${y}`;
+                if (!cells[key]) cells[key] = [];
+                cells[key].push(index);
+            }
+        });
+        return { cellSize, cells };
+    }
+
+    function rayBuildingCandidateIndices(point, direction, grid, maxDistance = MAX_SHADOW_RAY_DISTANCE_METERS) {
+        if (!grid || !grid.cells) return null;
+        const result = new Set();
+        const step = Math.max(25, Number(grid.cellSize) / 2);
+        for (let distance = 0; distance <= maxDistance; distance += step) {
+            const x = point.x + direction.x * distance;
+            const y = point.y + direction.y * distance;
+            const cellX = Math.floor(x / grid.cellSize), cellY = Math.floor(y / grid.cellSize);
+            // Neighbor cells make the sampled ray conservative near cell and
+            // polygon boundaries; exact polygon intersection remains final.
+            for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+                for (const index of grid.cells[`${cellX + dx}:${cellY + dy}`] || []) result.add(index);
+            }
+        }
+        return [...result];
     }
 
     function parseOverpassData(data, origin) {
@@ -1026,7 +1148,9 @@
         }));
         const allBuildings = overpass.buildings || [];
         const relevantBuildings = selectRelevantBuildings(allBuildings, profiles, MAX_SHADOW_RAY_DISTANCE_METERS);
-        assignBuildingGroundElevations(relevantBuildings, terrainSamples);
+        const terrainGrid = buildTerrainGrid(terrainSamples);
+        assignBuildingGroundElevations(relevantBuildings, terrainSamples, BUILDING_GROUND_MAX_SAMPLE_DISTANCE_METERS, terrainGrid);
+        const buildingGrid = buildBuildingGrid(relevantBuildings);
         const terrainAvailable = terrainSamples.some(p => finite(p.elevation));
         const buildingGroundAvailable = relevantBuildings.every(building => finite(building.ground));
         const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, (_, segmentIndex) => {
@@ -1049,14 +1173,13 @@
         const sceneResult = {
             origin,
             baseElevation: finite(baseElevation) ? baseElevation : null,
-            // Only buildings that can intersect a sampled sun ray are used by
-            // getSegmentOcclusion. Keep the full OSM result separately for
-            // diagnostics without allowing an irrelevant building to downgrade
-            // the analysis tier.
+            // Only ray-relevant geometry is retained. Full Overpass geometry
+            // can be hundreds of MB on mobile; diagnostics retain counts only.
             buildings: relevantBuildings,
-            allBuildings,
             tunnels: overpass.tunnels || [],
             terrainSamples,
+            terrainGrid,
+            buildingGrid,
             terrainProfiles: profiles,
             segmentCoverage,
             coverage: {
@@ -1067,6 +1190,7 @@
                 relevantBuildings: relevantBuildings.length,
                 totalBuildings: allBuildings.length
             },
+            diagnostics: { totalBuildings: allBuildings.length, relevantBuildings: relevantBuildings.length },
             // A route is scene-comparable only when the shared Overpass data
             // and every route segment's DEM profile are available. Partial
             // coverage remains attached for diagnostics but forces the common
@@ -1102,62 +1226,94 @@
         if (!tileKeys.length || tileKeys.length > maxTiles) return null;
         if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
         if (tileKeys.some(key => !manifest.tiles[key])) return null;
-        let tileValues;
+        const originCoordinate = coordinates[Math.floor(coordinates.length / 2)];
+        const origin = { lat: Number(originCoordinate[1]), lng: Number(originCoordinate[0]) };
+        const plan = makeTerrainPlan(coordinates, options);
+        const selectionProfiles = plan.profiles.map(profile => {
+            const coordinate = coordinates[profile.coordinateIndex];
+            return {
+                coordinateIndex: profile.coordinateIndex,
+                anchor: projectPoint(Number(coordinate[1]), Number(coordinate[0]), origin),
+                direction: profile.direction,
+                elevation: profile.elevation
+            };
+        });
+        const routePoints = coordinates.map(coordinate => projectPoint(Number(coordinate[1]), Number(coordinate[0]), origin));
+        const routeBounds = computeBounds(routePoints);
+        const buildings = new Map();
+        const totalBuildingIds = new Set();
+        const tunnels = new Map();
+        const terrain = new Map();
+        let processedTiles = 0;
         try {
-            tileValues = await mapWithConcurrency(tileKeys, options.sceneTileConcurrency || 6,
-                key => loadPrecomputedTile(manifest, key, options), options.signal);
+            // Consume one tile at a time. Raw tile objects and non-relevant
+            // building geometry become collectible immediately after this
+            // callback instead of accumulating for the entire route.
+            processedTiles = await streamPrecomputedTiles(manifest, tileKeys, tile => {
+                const tileBuildingCandidates = [];
+                for (const building of tile.buildings || []) {
+                    const key = String(building.id || `building:${JSON.stringify(building.polygon)}`);
+                    totalBuildingIds.add(key);
+                    if (buildings.has(key)) continue;
+                    const candidate = {
+                        id: building.id,
+                        polygon: (building.polygon || []).filter(point => Array.isArray(point) && finite(point[0]) && finite(point[1]))
+                            .map(point => projectPoint(Number(point[0]), Number(point[1]), origin)),
+                        height: Number(building.height) || 6,
+                        heightEstimated: !!building.heightEstimated,
+                        ground: finite(building.ground) ? Number(building.ground) : null,
+                        relevantProfileIndices: []
+                    };
+                    if (candidate.polygon.length < 3) continue;
+                    candidate.bounds = computeBounds(candidate.polygon);
+                    if (routeBounds && candidate.bounds) {
+                        const dx = Math.max(candidate.bounds.minX - routeBounds.maxX, routeBounds.minX - candidate.bounds.maxX, 0);
+                        const dy = Math.max(candidate.bounds.minY - routeBounds.maxY, routeBounds.minY - candidate.bounds.maxY, 0);
+                        if (Math.hypot(dx, dy) > MAX_SHADOW_RAY_DISTANCE_METERS) continue;
+                    }
+                    candidate.__sceneKey = key;
+                    tileBuildingCandidates.push(candidate);
+                }
+                for (const relevant of selectRelevantBuildings(tileBuildingCandidates, selectionProfiles, MAX_SHADOW_RAY_DISTANCE_METERS)) {
+                    const key = relevant.__sceneKey;
+                    delete relevant.__sceneKey;
+                    const existing = buildings.get(key);
+                    if (!existing) buildings.set(key, relevant);
+                    else existing.relevantProfileIndices = [...new Set([...(existing.relevantProfileIndices || []), ...(relevant.relevantProfileIndices || [])])];
+                }
+                for (const tunnel of tile.tunnels || []) {
+                    const key = String(tunnel.id || `tunnel:${JSON.stringify(tunnel.line)}`);
+                    if (!tunnels.has(key)) tunnels.set(key, {
+                        id: tunnel.id,
+                        line: (tunnel.line || []).filter(point => Array.isArray(point) && finite(point[0]) && finite(point[1]))
+                            .map(point => projectPoint(Number(point[0]), Number(point[1]), origin))
+                    });
+                }
+                for (const sample of tile.terrain || []) {
+                    if (!Array.isArray(sample) || sample.length < 3 || !finite(sample[0]) || !finite(sample[1]) || !finite(sample[2])) continue;
+                    const local = projectPoint(Number(sample[0]), Number(sample[1]), origin);
+                    const key = quantizePoint(Number(sample[0]), Number(sample[1]));
+                    if (!terrain.has(key)) terrain.set(key, {
+                        key, lat: Number(sample[0]), lng: Number(sample[1]), x: local.x, y: local.y, elevation: Number(sample[2])
+                    });
+                }
+            }, options);
         } catch (error) {
             if (options.signal && options.signal.aborted) throw error;
             return null;
         }
-        if (tileValues.some(tile => !tile)) return null;
-
-        const originCoordinate = coordinates[Math.floor(coordinates.length / 2)];
-        const origin = { lat: Number(originCoordinate[1]), lng: Number(originCoordinate[0]) };
-        const buildings = new Map();
-        const tunnels = new Map();
-        const terrain = new Map();
-        for (const tile of tileValues) {
-            for (const building of tile.buildings || []) {
-                const key = String(building.id || `building:${JSON.stringify(building.polygon)}`);
-                if (!buildings.has(key)) buildings.set(key, {
-                    id: building.id,
-                    polygon: (building.polygon || []).filter(point => Array.isArray(point) && finite(point[0]) && finite(point[1]))
-                        .map(point => projectPoint(Number(point[0]), Number(point[1]), origin)),
-                    height: Number(building.height) || 6,
-                    heightEstimated: !!building.heightEstimated,
-                    ground: finite(building.ground) ? Number(building.ground) : null,
-                    relevantProfileIndices: []
-                });
-            }
-            for (const tunnel of tile.tunnels || []) {
-                const key = String(tunnel.id || `tunnel:${JSON.stringify(tunnel.line)}`);
-                if (!tunnels.has(key)) tunnels.set(key, {
-                    id: tunnel.id,
-                    line: (tunnel.line || []).filter(point => Array.isArray(point) && finite(point[0]) && finite(point[1]))
-                        .map(point => projectPoint(Number(point[0]), Number(point[1]), origin))
-                });
-            }
-            for (const sample of tile.terrain || []) {
-                if (!Array.isArray(sample) || sample.length < 3 || !finite(sample[0]) || !finite(sample[1]) || !finite(sample[2])) continue;
-                const local = projectPoint(Number(sample[0]), Number(sample[1]), origin);
-                const key = quantizePoint(Number(sample[0]), Number(sample[1]));
-                if (!terrain.has(key)) terrain.set(key, {
-                    key, lat: Number(sample[0]), lng: Number(sample[1]), x: local.x, y: local.y, elevation: Number(sample[2])
-                });
-            }
-        }
+        if (processedTiles !== tileKeys.length) return null;
         const terrainSamples = [...terrain.values()];
-        const plan = makeTerrainPlan(coordinates, options);
+        const terrainGrid = buildTerrainGrid(terrainSamples);
         const profiles = plan.profiles.map(profile => {
             const coordinate = coordinates[profile.coordinateIndex];
             const lat = Number(coordinate[1]);
             const lng = Number(coordinate[0]);
             const anchorPoint = projectPoint(lat, lng, origin);
-            const anchorMatch = findNearestTerrainSample(anchorPoint, terrainSamples, 180);
+            const anchorMatch = findNearestTerrainSample(anchorPoint, terrainSamples, 180, terrainGrid);
             const elevations = profile.distances.map(distance => {
                 const probe = destinationPoint(lat, lng, Number(profile.direction), Number(distance));
-                const match = findNearestTerrainSample(projectPoint(probe.lat, probe.lng, origin), terrainSamples, 180);
+                const match = findNearestTerrainSample(projectPoint(probe.lat, probe.lng, origin), terrainSamples, 180, terrainGrid);
                 return match ? Number(match.sample.elevation) : null;
             });
             return {
@@ -1169,20 +1325,8 @@
                 elevations
             };
         });
-        const allBuildings = [...buildings.values()].filter(building => building.polygon.length >= 3).map(building => ({
-            ...building,
-            bounds: computeBounds(building.polygon)
-        }));
-        const routePoints = coordinates.map(coordinate => projectPoint(Number(coordinate[1]), Number(coordinate[0]), origin));
-        const routeBounds = computeBounds(routePoints);
-        const buildingCandidates = routeBounds ? allBuildings.filter(building => {
-            const bounds = building.bounds;
-            if (!bounds) return true;
-            const dx = Math.max(bounds.minX - routeBounds.maxX, routeBounds.minX - bounds.maxX, 0);
-            const dy = Math.max(bounds.minY - routeBounds.maxY, routeBounds.minY - bounds.maxY, 0);
-            return Math.hypot(dx, dy) <= MAX_SHADOW_RAY_DISTANCE_METERS;
-        }) : allBuildings;
-        const relevantBuildings = selectRelevantBuildings(buildingCandidates, profiles, MAX_SHADOW_RAY_DISTANCE_METERS);
+        const relevantBuildings = [...buildings.values()];
+        const buildingGrid = buildBuildingGrid(relevantBuildings);
         const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, (_, segmentIndex) => {
             const nearbyProfile = profiles
                 .filter(profile => profile.anchor && profile.elevations.length > 0 && profile.elevations.every(finite))
@@ -1205,13 +1349,10 @@
             origin,
             baseElevation: terrainSamples[0] && finite(terrainSamples[0].elevation) ? terrainSamples[0].elevation : null,
             buildings: relevantBuildings,
-            // Keep only corridor-near buildings attached to the route scene;
-            // the manifest remains the source of truth for the full tile
-            // counts, and retaining every building from nine neighbor tiles
-            // would unnecessarily inflate mobile memory usage.
-            allBuildings: buildingCandidates,
             tunnels: [...tunnels.values()],
             terrainSamples,
+            terrainGrid,
+            buildingGrid,
             terrainProfiles: profiles,
             segmentCoverage,
             coverage: {
@@ -1220,9 +1361,10 @@
                 terrain: terrainAvailable,
                 buildingGround: buildingGroundAvailable,
                 relevantBuildings: relevantBuildings.length,
-                totalBuildings: allBuildings.length,
+                totalBuildings: totalBuildingIds.size,
                 precomputedTiles: tileKeys.length
             },
+            diagnostics: { totalBuildings: totalBuildingIds.size, relevantBuildings: relevantBuildings.length },
             precisionReady: terrainAvailable && buildingGroundAvailable &&
                 segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround),
             source: precomputedSourceLabel(manifest),
@@ -1279,9 +1421,14 @@
             });
         }
         const complete = parts.every(scene => scene.precisionReady) && segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround);
+        const mergedBuildings = [...buildings.values()];
+        const mergedTerrain = [...terrain.values()];
+        const totalBuildings = parts.reduce((sum, scene) => sum + Number(scene.coverage && scene.coverage.totalBuildings || 0), 0);
         return {
-            ...parts[0], origin, buildings: [...buildings.values()], allBuildings: [...buildings.values()], tunnels: [...tunnels.values()], terrainSamples: [...terrain.values()],
-            segmentCoverage, coverage: { ...(parts[0].coverage || {}), regions: regions.length, relevantBuildings: buildings.size, totalBuildings: buildings.size },
+            ...parts[0], origin, buildings: mergedBuildings, tunnels: [...tunnels.values()], terrainSamples: mergedTerrain,
+            terrainGrid: buildTerrainGrid(mergedTerrain), buildingGrid: buildBuildingGrid(mergedBuildings),
+            segmentCoverage, coverage: { ...(parts[0].coverage || {}), regions: regions.length, relevantBuildings: buildings.size, totalBuildings },
+            diagnostics: { totalBuildings, relevantBuildings: buildings.size },
             sceneRegions: regions, precisionReady: complete, partial: !complete, source: regions.map(region => region.source).filter(Boolean).join(' + ') || 'GitHub precomputed scene tiles',
             sceneCoverage: { regions: regions.map(region => region.region).filter(Boolean), partial: !complete }
         };
@@ -1323,23 +1470,46 @@
         return mergePrecomputedScenes(parts, coordinates);
     }
 
-    function findNearestTerrainSample(point, terrainSamples, maxDistance = Infinity) {
+    function findNearestTerrainSample(point, terrainSamples, maxDistance = Infinity, terrainGrid = null) {
         let nearest = null;
         let nearestDistance = Infinity;
-        for (const sample of terrainSamples || []) {
-            if (!finite(sample.elevation)) continue;
+        const samples = terrainSamples || [];
+        const consider = index => {
+            const sample = samples[index];
+            if (!sample || !finite(sample.elevation)) return;
             const distance = Math.hypot(point.x - sample.x, point.y - sample.y);
-            if (distance < nearestDistance) {
-                nearestDistance = distance;
-                nearest = sample;
+            if (distance < nearestDistance) { nearestDistance = distance; nearest = sample; }
+        };
+        if (terrainGrid && terrainGrid.cells && Number(terrainGrid.count) > 0 && finite(point.x) && finite(point.y)) {
+            const cellSize = Number(terrainGrid.cellSize) || TERRAIN_GRID_CELL_METERS;
+            const centerX = Math.floor(Number(point.x) / cellSize);
+            const centerY = Math.floor(Number(point.y) / cellSize);
+            const boundsRadius = Math.max(
+                Math.abs(centerX - Number(terrainGrid.minCellX)), Math.abs(centerX - Number(terrainGrid.maxCellX)),
+                Math.abs(centerY - Number(terrainGrid.minCellY)), Math.abs(centerY - Number(terrainGrid.maxCellY))
+            );
+            const maxRadius = Number.isFinite(maxDistance)
+                ? Math.min(boundsRadius, Math.ceil(maxDistance / cellSize) + 1)
+                : boundsRadius;
+            for (let radius = 0; radius <= maxRadius; radius++) {
+                for (let dx = -radius; dx <= radius; dx++) for (let dy = -radius; dy <= radius; dy++) {
+                    if (radius > 0 && Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
+                    for (const index of terrainGrid.cells[`${centerX + dx}:${centerY + dy}`] || []) consider(index);
+                }
+                // Any unvisited cell is separated by at least roughly one
+                // additional cell width; once farther than the best sample it
+                // cannot change the exact nearest result.
+                if (nearest && Math.max(0, radius - 1) * cellSize > nearestDistance) break;
             }
+        } else {
+            for (let index = 0; index < samples.length; index++) consider(index);
         }
         return nearest && nearestDistance <= maxDistance
             ? { sample: nearest, distance: nearestDistance }
             : null;
     }
 
-    function assignBuildingGroundElevations(buildings, terrainSamples, maxDistance = BUILDING_GROUND_MAX_SAMPLE_DISTANCE_METERS) {
+    function assignBuildingGroundElevations(buildings, terrainSamples, maxDistance = BUILDING_GROUND_MAX_SAMPLE_DISTANCE_METERS, terrainGrid = null) {
         for (const building of buildings || []) {
             const bounds = building.bounds;
             const center = bounds
@@ -1348,7 +1518,7 @@
                     x: sum.x + point.x / Math.max(1, points.length),
                     y: sum.y + point.y / Math.max(1, points.length)
                 }), { x: 0, y: 0 });
-            const match = findNearestTerrainSample(center, terrainSamples, maxDistance);
+            const match = findNearestTerrainSample(center, terrainSamples, maxDistance, terrainGrid);
             if (match) {
                 building.ground = Number(match.sample.elevation);
                 building.groundSampleKey = match.sample.key;
@@ -1366,28 +1536,36 @@
     }
 
     function selectRelevantBuildings(buildings, profiles, maxRayDistance = MAX_SHADOW_RAY_DISTANCE_METERS) {
-        const relevantBuildings = [];
-        for (const building of buildings || []) {
-            const profileIndices = [];
-            for (const profile of profiles || []) {
-                if (!profile.anchor || !finite(profile.elevation) || Number(profile.elevation) <= -0.833) continue;
-                const direction = {
-                    x: Math.sin(Number(profile.direction) * RAD),
-                    y: Math.cos(Number(profile.direction) * RAD)
-                };
-                const hitDistance = intersectRayWithPolygon(profile.anchor, direction, building.polygon, maxRayDistance);
-                if (hitDistance !== null) profileIndices.push(profile.coordinateIndex);
+        const source = buildings || [];
+        const spatialGrid = buildBuildingGrid(source);
+        const matches = new Map();
+        for (const profile of profiles || []) {
+            if (!profile.anchor || !finite(profile.elevation) || Number(profile.elevation) <= -0.833) continue;
+            const direction = {
+                x: Math.sin(Number(profile.direction) * RAD),
+                y: Math.cos(Number(profile.direction) * RAD)
+            };
+            const candidateIndices = rayBuildingCandidateIndices(profile.anchor, direction, spatialGrid, maxRayDistance) || [];
+            for (const index of candidateIndices) {
+                const building = source[index];
+                if (!building || intersectRayWithPolygon(profile.anchor, direction, building.polygon, maxRayDistance) === null) continue;
+                if (!matches.has(index)) matches.set(index, []);
+                matches.get(index).push(profile.coordinateIndex);
             }
+        }
+        const relevantBuildings = [];
+        source.forEach((building, index) => {
+            const profileIndices = matches.get(index) || [];
             if (profileIndices.length > 0) {
                 building.relevantProfileIndices = profileIndices;
                 relevantBuildings.push(building);
             }
-        }
+        });
         return relevantBuildings;
     }
 
     function nearestTerrainElevation(point, scene) {
-        const match = findNearestTerrainSample(point, scene && scene.terrainSamples, Infinity);
+        const match = findNearestTerrainSample(point, scene && scene.terrainSamples, Infinity, scene && scene.terrainGrid);
         return match ? Number(match.sample.elevation) : null;
     }
 
@@ -1437,11 +1615,14 @@
 
         let buildingBlocked = false;
         if (segmentCoverage.buildings && segmentCoverage.buildingGround !== false) {
-            for (const building of scene.buildings || []) {
+            const buildings = scene.buildings || [];
+            const candidateIndices = rayBuildingCandidateIndices(point, direction, scene.buildingGrid, MAX_SHADOW_RAY_DISTANCE_METERS);
+            const candidates = candidateIndices ? candidateIndices.map(index => buildings[index]).filter(Boolean) : buildings;
+            for (const building of candidates) {
                 const bounds = building.bounds;
                 if (bounds && (direction.x > 0 ? bounds.maxX < point.x : bounds.minX > point.x)) continue;
                 if (bounds && (direction.y > 0 ? bounds.maxY < point.y : bounds.minY > point.y)) continue;
-                const hitDistance = intersectRayWithPolygon(point, direction, building.polygon, 4500);
+                const hitDistance = intersectRayWithPolygon(point, direction, building.polygon, MAX_SHADOW_RAY_DISTANCE_METERS);
                 if (hitDistance === null) continue;
                 if (!finite(building.ground)) continue;
                 // A hand-built/test scene may omit route DEM samples.  In
@@ -1484,11 +1665,28 @@
         routeBbox,
         bboxMetrics,
         splitRouteIntoSceneTiles,
+        buildTerrainGrid,
+        buildBuildingGrid,
+        findNearestTerrainSample,
         fetchPrecomputedSceneForRoute,
         fetchSceneForRoute,
         getSegmentOcclusion,
         calculateRouteLengthMeters,
-        getCacheStats: () => ({ overpass: overpassCache.size, terrain: terrainCache.size, precomputedEntries: precomputedTileCache.size, precomputedBytes: precomputedTileCacheBytes, precomputedMaxBytes: PRECOMPUTED_CACHE_MAX_BYTES, ttlMs: CACHE_TTL_MS }),
+        getCacheStats: () => ({
+            overpass: overpassCache.size,
+            terrain: terrainCache.size,
+            precomputedEntries: precomputedTileCache.size,
+            precomputedParsedEntries: [...precomputedTileCache.values()].filter(record => typeof record.value !== 'string').length,
+            precomputedBytes: precomputedTileCacheBytes,
+            precomputedMaxBytes: PRECOMPUTED_CACHE_MAX_BYTES,
+            precomputedPersistentMaxBytes: PRECOMPUTED_PERSISTENT_CACHE_MAX_BYTES,
+            ttlMs: CACHE_TTL_MS
+        }),
+        clearPrecomputedMemoryCache: () => {
+            precomputedTileCache.clear();
+            precomputedTileCacheBytes = 0;
+            precomputedTileInflight.clear();
+        },
         clearCaches: () => {
             overpassCache.clear();
             terrainCache.clear();

@@ -539,6 +539,178 @@ window.ShadowRouter = (function () {
             Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
     }
 
+    const PRECISION_SAMPLE_INTERVAL_METERS = 50;
+    const PRECISION_DETAIL_INTERVAL_METERS = 25;
+    const PRECISION_TURN_THRESHOLD_DEG = 18;
+
+    function angularDifferenceDegrees(a, b) {
+        const delta = Math.abs((((Number(a) - Number(b)) % 360) + 540) % 360 - 180);
+        return Number.isFinite(delta) ? delta : 0;
+    }
+
+    function interpolateRoutePointAtDistance(coordinates, cumulative, targetMeters) {
+        if (!coordinates.length) return null;
+        if (targetMeters <= 0) return [Number(coordinates[0][0]), Number(coordinates[0][1])];
+        const total = cumulative[cumulative.length - 1] || 0;
+        if (targetMeters >= total) {
+            const last = coordinates[coordinates.length - 1];
+            return [Number(last[0]), Number(last[1])];
+        }
+        let low = 1;
+        let high = cumulative.length - 1;
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            if (cumulative[mid] < targetMeters) low = mid + 1;
+            else high = mid;
+        }
+        const endIndex = low;
+        const startIndex = Math.max(0, endIndex - 1);
+        const span = cumulative[endIndex] - cumulative[startIndex];
+        const fraction = span > 0 ? (targetMeters - cumulative[startIndex]) / span : 0;
+        return [
+            Number(coordinates[startIndex][0]) + (Number(coordinates[endIndex][0]) - Number(coordinates[startIndex][0])) * fraction,
+            Number(coordinates[startIndex][1]) + (Number(coordinates[endIndex][1]) - Number(coordinates[startIndex][1])) * fraction
+        ];
+    }
+
+    function nearestRouteDistanceForPoint(point, coordinates, cumulative) {
+        if (!Array.isArray(point) || point.length < 2) return null;
+        const lng = Number(point[0]);
+        const lat = Number(point[1]);
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+        let best = null;
+        for (let i = 0; i < coordinates.length - 1; i++) {
+            const projection = projectPointToSegment(lat, lng, coordinates[i], coordinates[i + 1]);
+            if (!projection || projection === Infinity) continue;
+            const distanceMeters = calculateDistanceMeters(lat, lng, projection.lat, projection.lng);
+            if (!Number.isFinite(distanceMeters)) continue;
+            const segmentMeters = cumulative[i + 1] - cumulative[i];
+            const routeMeters = cumulative[i] + segmentMeters * projection.t;
+            if (!best || distanceMeters < best.distanceMeters) {
+                best = { distanceMeters, routeMeters };
+            }
+        }
+        return best ? best.routeMeters : null;
+    }
+
+    function stepLooksLikeTunnel(step) {
+        if (!step) return false;
+        if (step.tunnel === true || String(step.tunnel || '').toLowerCase() === 'yes') return true;
+        const classes = [];
+        if (Array.isArray(step.classes)) classes.push(...step.classes);
+        (step.intersections || []).forEach(intersection => {
+            if (Array.isArray(intersection.classes)) classes.push(...intersection.classes);
+        });
+        return classes.some(value => String(value).toLowerCase().includes('tunnel'));
+    }
+
+    /**
+     * Produce a bounded geometry for expensive building/terrain ray tests while
+     * retaining the untouched OSRM geometry for map display and navigation.
+     * Normal road spans use 50 m samples. Sharp turns, maneuver boundaries and
+     * OSRM tunnel-labelled steps are retained/densified at 25 m.
+     */
+    function buildPrecisionAnalysisGeometry(rawRoute, options = {}) {
+        const coordinates = getRouteCoordinates(rawRoute);
+        if (coordinates.length < 2) {
+            return { coordinates: coordinates.map(point => [Number(point[0]), Number(point[1])]), distances: [0], originalCoordinateCount: coordinates.length };
+        }
+        const normalInterval = Math.max(25, Number(options.intervalMeters) || PRECISION_SAMPLE_INTERVAL_METERS);
+        const detailInterval = Math.min(normalInterval, Math.max(10, Number(options.detailIntervalMeters) || PRECISION_DETAIL_INTERVAL_METERS));
+        const cumulative = [0];
+        for (let i = 1; i < coordinates.length; i++) {
+            cumulative.push(cumulative[i - 1] + calculateDistanceMeters(
+                Number(coordinates[i - 1][1]), Number(coordinates[i - 1][0]),
+                Number(coordinates[i][1]), Number(coordinates[i][0])
+            ));
+        }
+        const total = cumulative[cumulative.length - 1];
+        if (!Number.isFinite(total) || total <= 0) {
+            return { coordinates: coordinates.map(point => [Number(point[0]), Number(point[1])]), distances: cumulative, originalCoordinateCount: coordinates.length };
+        }
+
+        const targetDistances = new Set([0, total]);
+        for (let distance = normalInterval; distance < total; distance += normalInterval) targetDistances.add(distance);
+
+        // Preserve original vertices that materially change road direction and
+        // add one detailed sample on each side of the turn.
+        for (let i = 1; i < coordinates.length - 1; i++) {
+            const before = calculateBearing(coordinates[i - 1][1], coordinates[i - 1][0], coordinates[i][1], coordinates[i][0]);
+            const after = calculateBearing(coordinates[i][1], coordinates[i][0], coordinates[i + 1][1], coordinates[i + 1][0]);
+            if (angularDifferenceDegrees(before, after) >= PRECISION_TURN_THRESHOLD_DEG) {
+                targetDistances.add(cumulative[i]);
+                targetDistances.add(Math.max(0, cumulative[i] - detailInterval));
+                targetDistances.add(Math.min(total, cumulative[i] + detailInterval));
+            }
+        }
+
+        const routeSteps = Array.isArray(options.steps) ? options.steps : [];
+        routeSteps.forEach(step => {
+            const stepCoordinates = step && step.geometry && Array.isArray(step.geometry.coordinates)
+                ? step.geometry.coordinates : [];
+            const anchors = [];
+            if (step.maneuver && Array.isArray(step.maneuver.location)) anchors.push(step.maneuver.location);
+            if (stepCoordinates.length) anchors.push(stepCoordinates[0], stepCoordinates[stepCoordinates.length - 1]);
+            const anchorDistances = anchors.map(point => nearestRouteDistanceForPoint(point, coordinates, cumulative))
+                .filter(Number.isFinite);
+            anchorDistances.forEach(distance => targetDistances.add(distance));
+            if (stepLooksLikeTunnel(step) && anchorDistances.length >= 2) {
+                const start = Math.min(...anchorDistances);
+                const end = Math.max(...anchorDistances);
+                for (let distance = start; distance <= end; distance += detailInterval) targetDistances.add(distance);
+            }
+        });
+
+        const distances = Array.from(targetDistances).filter(Number.isFinite).sort((a, b) => a - b)
+            .filter((distance, index, values) => index === 0 || distance - values[index - 1] >= 0.25);
+        const sampled = distances.map(distance => interpolateRoutePointAtDistance(coordinates, cumulative, distance));
+        return {
+            coordinates: sampled,
+            distances,
+            totalMeters: total,
+            originalCoordinateCount: coordinates.length,
+            analysisCoordinateCount: sampled.length,
+            intervalMeters: normalInterval,
+            detailIntervalMeters: detailInterval
+        };
+    }
+
+    function mapPrecisionAnalysisToOriginalGeometry(refinedAnalyzed, heuristicAnalyzed, rawCoordinates, sampling) {
+        if (!refinedAnalyzed || !heuristicAnalyzed || !Array.isArray(rawCoordinates)) return refinedAnalyzed;
+        const precisionSegments = Array.isArray(refinedAnalyzed.segments) ? refinedAnalyzed.segments : [];
+        const sampleDistances = sampling && Array.isArray(sampling.distances) ? sampling.distances : [];
+        const originalSegments = Array.isArray(heuristicAnalyzed.segments) ? heuristicAnalyzed.segments : [];
+        let precisionIndex = 0;
+        let originalDistance = 0;
+        const mappedSegments = originalSegments.map(segment => {
+            const segmentMeters = calculateDistanceMeters(segment.p1[0], segment.p1[1], segment.p2[0], segment.p2[1]);
+            const midpoint = originalDistance + segmentMeters / 2;
+            while (precisionIndex < precisionSegments.length - 1 && Number(sampleDistances[precisionIndex + 1]) < midpoint) precisionIndex++;
+            originalDistance += segmentMeters;
+            const precision = precisionSegments[precisionIndex];
+            if (!precision) return Object.assign({}, segment);
+            return Object.assign({}, segment, {
+                shadeScore: precision.shadeScore,
+                shadeSource: precision.shadeSource,
+                sceneOcclusion: precision.sceneOcclusion,
+                uvScore: precision.uvScore
+            });
+        });
+        return Object.assign({}, refinedAnalyzed, {
+            // Consumers use this geometry for snapping, rendering, rerouting
+            // and turn guidance, so it must remain byte-for-byte OSRM-shaped.
+            coordinates: rawCoordinates,
+            segments: mappedSegments,
+            precisionAnalysisCoordinates: sampling.coordinates,
+            precisionSampling: {
+                originalCoordinateCount: sampling.originalCoordinateCount,
+                analysisCoordinateCount: sampling.analysisCoordinateCount,
+                intervalMeters: sampling.intervalMeters,
+                detailIntervalMeters: sampling.detailIntervalMeters
+            }
+        });
+    }
+
     function sampleRouteGeometry(route, maxSamples = ROUTE_GEOMETRY_SAMPLE_COUNT) {
         const coordinates = getRouteCoordinates(route);
         if (!coordinates.length) return [];
@@ -652,19 +824,35 @@ window.ShadowRouter = (function () {
             : Number(route && route.durationSec) || Infinity;
     }
 
-    function selectPrecisionCandidates(routes, maxCandidates = 5) {
+    function normalizePreferredRouteRole(role) {
+        if (role === 'shade') return 'shade';
+        if (role === 'fastest') return 'fastest';
+        return 'glareFree';
+    }
+
+    function selectPrecisionCandidates(routes, maxCandidates = 5, preferredRole = 'glareFree') {
         if (!Array.isArray(routes) || routes.length === 0) {
             return { fastest: null, glareCandidates: [], shadeCandidates: [], precisionCandidates: [] };
         }
         const fastest = stableSortRoutes(routes, (a, b) => routeDurationForSelection(a) - routeDurationForSelection(b))[0];
-        const glareCandidates = stableSortRoutes(routes, (a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk).slice(0, 2);
-        const shadeCandidates = stableSortRoutes(routes, (a, b) => {
+        const glareCandidates = stableSortRoutes(routes.filter(route => route.id === fastest.id ||
+            isMeaningfulGlareAlternative(calculateRouteTradeoff(fastest, route))),
+        (a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk).slice(0, 2);
+        const shadeCandidates = stableSortRoutes(routes.filter(route => route.id === fastest.id ||
+            isMeaningfulShadeAlternative(calculateRouteTradeoff(fastest, route))), (a, b) => {
             const uvDifference = a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits;
             return Math.abs(uvDifference) > 0.001 ? uvDifference : b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage;
         }).slice(0, 2);
+        const heuristicRoles = selectRouteRoles(routes);
+        const role = normalizePreferredRouteRole(preferredRole);
+        const preferred = heuristicRoles[role];
+        const otherPurpose = role === 'shade' ? heuristicRoles.glareFree : heuristicRoles.shade;
         const selected = [];
         const seen = new Set();
-        [fastest, ...glareCandidates, ...shadeCandidates].forEach(route => {
+        // Expensive scenes are ordered for user value rather than OSRM array
+        // order: the active purpose first, then its duration baseline, then
+        // only alternatives that passed the detour/improvement noise guards.
+        [preferred, fastest, otherPurpose, ...glareCandidates, ...shadeCandidates].forEach(route => {
             if (route && !seen.has(route.id) && selected.length < maxCandidates) {
                 seen.add(route.id);
                 selected.push(route);
@@ -1068,27 +1256,27 @@ window.ShadowRouter = (function () {
         const analyzedRoutes = await Promise.all(uniqueRoutes.map((route, idx) =>
             analyzeRawRoute(route, idx, dateObj, timeOfDayAdjustment, options.signal)));
 
-        const selection = selectPrecisionCandidates(analyzedRoutes, 5);
-        // Scene APIs are optional and rate-limited.  Analyze at most two
-        // precision candidates at a time; queued work observes cancellation
-        // before starting another Overpass/DEM request.
-        const refinedResults = await mapWithConcurrency(
-            selection.precisionCandidates,
-            options.sceneConcurrency || 2,
-            async route => {
+        const selection = selectPrecisionCandidates(analyzedRoutes, 5, options.preferredRouteRole);
+        const refineRoute = async route => {
+            if (options.signal && options.signal.aborted) throw createAbortError();
             const useSceneCache = options.reuseSceneCache === true;
             let scene = useSceneCache ? getCachedScene(route.id) : null;
             let refinedAnalyzed = null;
             let fallbackReason = null;
+            const rawCoordinates = route.raw.geometry.coordinates;
+            const precisionSampling = buildPrecisionAnalysisGeometry(route.raw, { steps: route.routeSteps });
+            const precisionCoordinates = precisionSampling.coordinates;
             try {
                 const sceneOptions = {
                     dateObj,
                     durationSec: route.durationSec,
-                    timeLookup: buildStepTimeLookup(route.raw.geometry.coordinates, route.routeSteps, route.durationSec),
+                    timeLookup: buildStepTimeLookup(precisionCoordinates, route.routeSteps, route.durationSec),
                     signal: options.signal,
                     timeoutMs: 12000,
                     terrainTimeoutMs: 10000,
-                    precomputedTimeoutMs: options.precomputedTimeoutMs || 8000,
+                    precomputedManifestTimeoutMs: options.precomputedManifestTimeoutMs || 5000,
+                    precomputedPackTimeoutMs: options.precomputedPackTimeoutMs || 15000,
+                    precomputedPackRetryCount: options.precomputedPackRetryCount ?? 1,
                     precomputedManifestUrl: options.precomputedManifestUrl,
                     maxRouteMeters: 250000
                 };
@@ -1096,16 +1284,19 @@ window.ShadowRouter = (function () {
                 // when a tile is missing or the manifest is unavailable do we
                 // fall back to the live Overpass/DEM scene request.
                 if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchPrecomputedSceneForRoute === 'function') {
-                    scene = await window.SceneShadow.fetchPrecomputedSceneForRoute(route.raw.geometry.coordinates, sceneOptions);
+                    scene = await window.SceneShadow.fetchPrecomputedSceneForRoute(precisionCoordinates, sceneOptions);
                 }
                 if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
-                    scene = await window.SceneShadow.fetchSceneForRoute(route.raw.geometry.coordinates, sceneOptions);
+                    scene = await window.SceneShadow.fetchSceneForRoute(precisionCoordinates, sceneOptions);
                 }
                 if (scene && useSceneCache) {
                     cacheScene(route.id, scene);
                 }
                 if (isPrecisionScene(scene)) {
-                    refinedAnalyzed = await analyzeRouteSegmentsAsync(route.raw.geometry.coordinates, dateObj, route.durationSec, route.routeSteps, scene, options.signal);
+                    const sampledAnalysis = await analyzeRouteSegmentsAsync(precisionCoordinates, dateObj, route.durationSec, route.routeSteps, scene, options.signal);
+                    refinedAnalyzed = mapPrecisionAnalysisToOriginalGeometry(
+                        sampledAnalysis, route.analyzed, rawCoordinates, precisionSampling
+                    );
                 } else {
                     fallbackReason = 'SCENE_DATA_UNAVAILABLE';
                 }
@@ -1114,10 +1305,74 @@ window.ShadowRouter = (function () {
                 console.warn('Scene data unavailable; retaining common heuristic comparison.', sceneError);
                 fallbackReason = sceneFallbackReason(sceneError);
             }
-            return { route, scene, refinedAnalyzed, fallbackReason, ready: !!refinedAnalyzed && refinedAnalyzed.analysisMode === 'scene' };
-            },
-            options.signal
-        );
+            const result = { route, scene, refinedAnalyzed, fallbackReason, ready: !!refinedAnalyzed && refinedAnalyzed.analysisMode === 'scene' };
+            if (refinedAnalyzed) route.sceneAnalysis = refinedAnalyzed;
+            route.sceneCoverage = scene && scene.coverage ? scene.coverage : route.analyzed.sceneCoverage;
+            route.sceneSource = scene && scene.source ? scene.source : route.analyzed.sceneSource;
+            route.fallbackReason = fallbackReason || null;
+            return result;
+        };
+
+        function buildTieredProgress(processedResults, phase, enrichmentPending) {
+            const processedById = new Map(processedResults.map(result => [result.route.id, result]));
+            const readyPurposeRoutes = routes => (routes || []).filter(route => processedById.has(route.id));
+            const fastestTier = selectRoleByTier(selection.fastest, [], 'fastest', processedById);
+            const glareTier = selectRoleByTier(selection.fastest, readyPurposeRoutes(selection.glareCandidates), 'glare', processedById);
+            const shadeTier = selectRoleByTier(selection.fastest, readyPurposeRoutes(selection.shadeCandidates), 'shade', processedById);
+            applyExposureReductions(fastestTier.baseline, null, null, dateObj, start);
+            applyExposureReductions(glareTier.baseline, glareTier.selected, null, dateObj, start);
+            applyExposureReductions(shadeTier.baseline, null, shadeTier.selected, dateObj, start);
+            const roleModes = [fastestTier.mode, glareTier.mode, shadeTier.mode];
+            return {
+                timeOfDayAdjustment,
+                analysisMode: roleModes.every(mode => mode === 'scene') ? 'scene' :
+                    (roleModes.every(mode => mode === 'heuristic') ? 'heuristic' : 'mixed-by-role'),
+                analysisPhase: phase,
+                enrichmentPending,
+                backgroundRefinementComplete: !enrichmentPending,
+                refinedAt: Date.now(),
+                precisionCandidateIds: selection.precisionCandidates.map(route => route.id),
+                refinedCandidateIds: processedResults.map(result => result.route.id),
+                routeCandidates: analyzedRoutes.map(route => route.raw),
+                roleAnalysis: {
+                    fastest: { analysisMode: fastestTier.mode, sceneReady: fastestTier.allReady, fallbackReason: fastestTier.fallbackReason || null },
+                    glareFree: { analysisMode: glareTier.mode, sceneReady: glareTier.allReady, fallbackReason: glareTier.fallbackReason || null },
+                    shade: { analysisMode: shadeTier.mode, sceneReady: shadeTier.allReady, fallbackReason: shadeTier.fallbackReason || null }
+                },
+                routes: {
+                    fastest: fastestTier.baseline,
+                    glareFree: glareTier.selected,
+                    shade: shadeTier.selected,
+                    all: analyzedRoutes
+                }
+            };
+        }
+
+        // Fetch the active purpose first, then its fastest-route baseline.
+        // Remaining competitive alternatives may use a tiny bounded pool, but
+        // the default stays sequential to avoid mobile download/heap spikes.
+        const refinedResults = [];
+        const firstCandidate = selection.precisionCandidates[0] || null;
+        const priorityCount = Math.min(selection.precisionCandidates.length,
+            firstCandidate && selection.fastest && firstCandidate.id !== selection.fastest.id ? 2 : 1);
+        for (let index = 0; index < priorityCount; index++) {
+            refinedResults.push(await refineRoute(selection.precisionCandidates[index]));
+        }
+        if (refinedResults.length && typeof options.onProgress === 'function' &&
+            selection.precisionCandidates.length > refinedResults.length) {
+            if (options.signal && options.signal.aborted) throw createAbortError();
+            await options.onProgress(buildTieredProgress(refinedResults, 'precision-partial', true));
+        }
+        const remainingCandidates = selection.precisionCandidates.slice(priorityCount);
+        if (remainingCandidates.length) {
+            const remaining = await mapWithConcurrency(
+                remainingCandidates,
+                Math.min(2, Math.max(1, Number(options.sceneConcurrency) || 1)),
+                refineRoute,
+                options.signal
+            );
+            refinedResults.push(...remaining);
+        }
 
         // Keep successful scene results attached to their route, but select a
         // comparison tier per role. Precision is never compared directly with
@@ -1369,6 +1624,8 @@ window.ShadowRouter = (function () {
         buildStepTimeLookup: buildStepTimeLookup,
         createRouteIdentity: createRouteIdentity,
         sampleRouteGeometry: sampleRouteGeometry,
+        buildPrecisionAnalysisGeometry: buildPrecisionAnalysisGeometry,
+        mapPrecisionAnalysisToOriginalGeometry: mapPrecisionAnalysisToOriginalGeometry,
         geometryHausdorffDistanceMeters: geometryHausdorffDistanceMeters,
         geometryOverlapRatio: geometryOverlapRatio,
         areRoutesGeometricallySimilar: areRoutesGeometricallySimilar,

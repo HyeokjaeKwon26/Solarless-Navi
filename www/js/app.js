@@ -2626,6 +2626,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     candidates: reusableCandidates,
                     reuseOsrmCache: true,
                     reuseSceneCache: true,
+                    // Refine the role the user is actually viewing/driving
+                    // before lower-value alternatives. ShadowRouter still
+                    // includes the fastest baseline for same-tier comparison.
+                    preferredRouteRole: currentMode,
                     onProgress: async progress => {
                         if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
                         routeData = progress;
@@ -2638,7 +2642,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         const enrichedSelection = routeData.routes[currentMode] || routeData.routes.fastest;
                         const roleKey = currentMode === 'shade' ? 'shade' : (currentMode === 'glareFree' ? 'glareFree' : 'fastest');
                         const roleMeta = routeData.roleAnalysis && routeData.roleAnalysis[roleKey];
-                        const precisionReadyForRole = progress.analysisPhase === 'precision-final' &&
+                        const isPrecisionProgress = progress.analysisPhase === 'precision-partial' ||
+                            progress.analysisPhase === 'precision-final';
+                        const precisionReadyForRole = isPrecisionProgress &&
                             roleKey !== 'fastest' && roleMeta && roleMeta.analysisMode === 'scene' &&
                             enrichedSelection && enrichedSelection.analysisMode === 'scene';
                         const precisionStartsAtVehicle = precisionRouteStartsAtVehicle(enrichedSelection);
@@ -2670,7 +2676,14 @@ document.addEventListener('DOMContentLoaded', () => {
                                     ? (roleKey === 'shade' ? '건물·지형 그늘 우선 경로로 안내를 갱신합니다.' : '정밀 역광 회피 경로로 안내를 갱신합니다.')
                                     : (roleKey === 'shade' ? 'Guidance updated to the precision shade route.' : 'Guidance updated to the precision glare-free route.'), true, 'precision-route-update');
                             }
-                        } else if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId || progress.analysisPhase !== 'precision-final') {
+                        } else if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj ||
+                            enrichedSelection.id === navigationSessionRouteId ||
+                            (isMidDrive && progress.analysisPhase === 'heuristic-initial')) {
+                            // A partial precision callback is an enrichment
+                            // event, not permission to replace active guidance.
+                            // Live swaps must pass precisionRouteStartsAtVehicle
+                            // above; explicit reroutes may commit their first
+                            // verified heuristic route through the mid-drive path.
                             selectedRouteObj = enrichedSelection;
                         }
                         if (isMidDrive && isLiveNavActive && !liveRerouteCommitted && selectedRouteObj) {
