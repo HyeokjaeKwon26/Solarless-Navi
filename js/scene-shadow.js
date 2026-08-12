@@ -52,7 +52,7 @@
     ];
     const PRECOMPUTED_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
     const PRECOMPUTED_MANIFEST_REVALIDATE_MS = 24 * 60 * 60 * 1000;
-    const PRECOMPUTED_MANIFEST_TIMEOUT_MS = 5000;
+    const PRECOMPUTED_MANIFEST_TIMEOUT_MS = 10000;
     const PRECOMPUTED_PACK_TIMEOUT_MS = 15000;
     const PRECOMPUTED_PACK_RETRY_COUNT = 1;
     // Byte budget is the primary bound. This large cap is only a failsafe for
@@ -73,6 +73,27 @@
     const scenePackWorkerUrl = 'js/scene-pack-worker.js';
     const persistentTouchAt = new Map();
     let precomputedTileCacheBytes = 0;
+
+    function createSceneError(code, message, cause) {
+        const error = new Error(message || code);
+        error.name = code === 'SCENE_REQUEST_ABORTED' ? 'AbortError' : 'SceneDataError';
+        error.code = code;
+        if (cause !== undefined) error.cause = cause;
+        return error;
+    }
+
+    function sceneErrorCode(error, fallback = 'SCENE_DATA_UNAVAILABLE') {
+        if (error && error.code) return String(error.code);
+        const message = String(error && error.message || error || '').toLowerCase();
+        if (message.includes('abort') || message.includes('cancel')) return 'SCENE_REQUEST_ABORTED';
+        if (message.includes('checksum')) return 'SCENE_PACK_CHECKSUM_FAILURE';
+        if (message.includes('worker') && message.includes('timeout')) return 'SCENE_WORKER_TIMEOUT';
+        if (message.includes('decompress') || message.includes('inflate') || message.includes('fflate')) return 'SCENE_DECOMPRESS_FAILURE';
+        if (message.includes('json') || message.includes('parse')) return 'SCENE_JSON_PARSE_FAILURE';
+        if (message.includes('timeout')) return 'SCENE_PACK_DOWNLOAD_TIMEOUT';
+        if (message.includes('http')) return 'SCENE_PACK_HTTP_ERROR';
+        return fallback;
+    }
 
     function finite(value) {
         return value !== null && value !== '' && Number.isFinite(Number(value));
@@ -338,19 +359,53 @@
         return `${Math.floor(point.x / tileSize)}:${Math.floor(point.y / tileSize)}`;
     }
 
-    function routeSceneTileKeys(coordinates, manifest, paddingMeters) {
+    function routeSceneTileKeys(coordinates, manifest, options = {}) {
         const tileSize = Number(manifest && manifest.tileSizeM) || DEFAULT_SCENE_TILE_ROUTE_METERS;
-        const radius = Math.max(0, Math.ceil(Number(paddingMeters || manifest && manifest.tilePaddingMeters || MAX_SHADOW_RAY_DISTANCE_METERS) / tileSize));
-        const base = new Set();
-        for (const coordinate of coordinates || []) {
-            if (!Array.isArray(coordinate) || !finite(coordinate[0]) || !finite(coordinate[1])) continue;
-            base.add(sceneTileKeyForCoordinate(Number(coordinate[1]), Number(coordinate[0]), manifest));
-        }
+        const maxRayMeters = Math.min(MAX_SHADOW_RAY_DISTANCE_METERS,
+            Math.max(0, Number(options.precomputedPaddingMeters || manifest && manifest.tilePaddingMeters || MAX_SHADOW_RAY_DISTANCE_METERS)));
         const result = new Set();
-        for (const key of base) {
-            const [x, y] = key.split(':').map(Number);
-            for (let dx = -radius; dx <= radius; dx++) {
-                for (let dy = -radius; dy <= radius; dy++) result.add(`${x + dx}:${y + dy}`);
+        const addCoordinate = (lat, lng, includeBoundarySafety = false) => {
+            if (!finite(lat) || !finite(lng)) return;
+            const point = sceneTileGridPoint(Number(lat), Number(lng), manifest && manifest.grid);
+            const tileX = Math.floor(point.x / tileSize);
+            const tileY = Math.floor(point.y / tileSize);
+            result.add(`${tileX}:${tileY}`);
+            if (!includeBoundarySafety) return;
+            // Buildings are stored by centroid. Pull the immediate neighbour
+            // only when a ray runs close to a tile edge so a polygon crossing
+            // that edge is not lost, without restoring the old full 3x3 cost.
+            const margin = Math.min(200, tileSize * 0.04);
+            const localX = point.x - tileX * tileSize;
+            const localY = point.y - tileY * tileSize;
+            const dx = localX < margin ? -1 : (localX > tileSize - margin ? 1 : 0);
+            const dy = localY < margin ? -1 : (localY > tileSize - margin ? 1 : 0);
+            if (dx) result.add(`${tileX + dx}:${tileY}`);
+            if (dy) result.add(`${tileX}:${tileY + dy}`);
+            if (dx && dy) result.add(`${tileX + dx}:${tileY + dy}`);
+        };
+
+        // The old implementation expanded every centreline tile to a full
+        // 3x3 square. A short urban route consequently downloaded many tiles
+        // behind or beside the sun that could never block its rays. Keep all
+        // centreline tiles, then add only tiles crossed by the actual sun ray.
+        for (const coordinate of coordinates || []) {
+            if (Array.isArray(coordinate)) addCoordinate(coordinate[1], coordinate[0], true);
+        }
+        const plan = options.terrainPlan || makeTerrainPlan(coordinates, options);
+        const rayStepMeters = Math.max(500, Math.min(1000, tileSize / 5));
+        for (const profile of plan.profiles || []) {
+            const coordinate = coordinates[profile.coordinateIndex];
+            if (!coordinate) continue;
+            const lat = Number(coordinate[1]);
+            const lng = Number(coordinate[0]);
+            addCoordinate(lat, lng, true);
+            for (let distance = rayStepMeters; distance < maxRayMeters; distance += rayStepMeters) {
+                const probe = destinationPoint(lat, lng, Number(profile.direction), distance);
+                addCoordinate(probe.lat, probe.lng, true);
+            }
+            if (maxRayMeters > 0) {
+                const endpoint = destinationPoint(lat, lng, Number(profile.direction), maxRayMeters);
+                addCoordinate(endpoint.lat, endpoint.lng, true);
             }
         }
         return [...result];
@@ -523,16 +578,20 @@
                 debugScene('manifest-idb-hit', { manifestUrl });
                 return stored.value;
             }
+            let manifestTimedOut = false;
             try {
                 const fetchFn = root.fetch || (typeof fetch === 'function' ? fetch : null);
-                if (!fetchFn) return stored && stored.value || null;
+                if (!fetchFn) {
+                    if (stored && stored.value) return stored.value;
+                    throw createSceneError('SCENE_MANIFEST_UNAVAILABLE', 'scene manifest fetch unavailable');
+                }
                 const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
                 const timeoutMs = options.precomputedManifestTimeoutMs || PRECOMPUTED_MANIFEST_TIMEOUT_MS;
                 let timer = null;
                 let abortHandler = null;
                 try {
                     if (controller) {
-                        timer = setTimeout(() => controller.abort(), timeoutMs);
+                        timer = setTimeout(() => { manifestTimedOut = true; controller.abort(); }, timeoutMs);
                         if (options.signal) {
                             abortHandler = () => controller.abort();
                             if (options.signal.aborted) controller.abort();
@@ -548,8 +607,10 @@
                         debugScene('manifest-revalidate-304', { manifestUrl });
                         return stored.value;
                     }
-                    if (!response || !response.ok) throw new Error(`HTTP ${response && response.status || 0}`);
-                    const value = await response.json();
+                    if (!response || !response.ok) throw createSceneError('SCENE_MANIFEST_HTTP_ERROR', `scene manifest HTTP ${response && response.status || 0}`);
+                    let value;
+                    try { value = await response.json(); }
+                    catch (error) { throw createSceneError('SCENE_MANIFEST_PARSE_FAILURE', 'scene manifest JSON parse failure', error); }
                     const etag = response.headers && typeof response.headers.get === 'function' ? response.headers.get('etag') : null;
                     const record = { value, etag, revalidateAt: now + PRECOMPUTED_MANIFEST_REVALIDATE_MS, expiresAt: now + PRECOMPUTED_CACHE_TTL_MS };
                     precomputedManifestCache.set(manifestUrl, record);
@@ -561,9 +622,12 @@
                     if (options.signal && abortHandler) options.signal.removeEventListener('abort', abortHandler);
                 }
             } catch (error) {
-                if (options.signal && options.signal.aborted) throw error;
+                if (options.signal && options.signal.aborted) throw createSceneError('SCENE_REQUEST_ABORTED', 'scene request aborted', error);
+                if (manifestTimedOut) error = createSceneError('SCENE_MANIFEST_TIMEOUT', 'scene manifest request timed out', error);
                 debugScene('manifest-revalidate-failure', { manifestUrl, message: String(error && error.message || error) });
-                return stored && stored.value || null;
+                if (stored && stored.value) return stored.value;
+                if (error && error.code) throw error;
+                throw createSceneError(sceneErrorCode(error, 'SCENE_MANIFEST_UNAVAILABLE'), 'scene manifest unavailable', error);
             }
         })().finally(() => precomputedManifestInflight.delete(manifestUrl));
         precomputedManifestInflight.set(manifestUrl, promise);
@@ -662,9 +726,15 @@
                     finish(null, files);
                 };
                 worker.onerror = () => finish(new Error('scene pack worker failed'));
-                timer = setTimeout(() => finish(new Error('scene pack worker timeout')), options.workerTimeoutMs || 8000);
+                // Inflation/UTF-8 conversion scales with the downloaded ZIP.
+                // A fixed 8 second limit falsely marked healthy mobile
+                // workers as unavailable on multi-MiB packs.
+                const dynamicTimeoutMs = Math.min(30000, Math.max(8000,
+                    8000 + Math.ceil(bytes.byteLength / (1024 * 1024)) * 1500));
+                timer = setTimeout(() => finish(createSceneError('SCENE_WORKER_TIMEOUT', 'scene pack worker timed out')),
+                    options.workerTimeoutMs || dynamicTimeoutMs);
                 if (options.signal) {
-                    abortHandler = () => finish(new Error('scene request aborted'));
+                    abortHandler = () => finish(createSceneError('SCENE_REQUEST_ABORTED', 'scene request aborted'));
                     if (options.signal.aborted) { abortHandler(); return; }
                     options.signal.addEventListener('abort', abortHandler, { once: true });
                 }
@@ -677,8 +747,15 @@
         }).catch(error => {
             if (options.signal && options.signal.aborted) throw error;
             debugScene('scene-pack-unzip-failure', { message: String(error && error.message || error), fallback: true });
+            // A Worker that accepted the job but timed out is treated as
+            // unhealthy. Inflating the same multi-MiB pack synchronously on
+            // the UI thread would turn a recoverable scene miss into a frozen
+            // navigation screen.
+            if (error && error.code === 'SCENE_WORKER_TIMEOUT') throw error;
             if (!root.fflate || typeof root.fflate.unzipSync !== 'function') throw error;
-            const files = root.fflate.unzipSync(bytes, { filter: file => requested.size === 0 || requested.has(file.name) });
+            let files;
+            try { files = root.fflate.unzipSync(bytes, { filter: file => requested.size === 0 || requested.has(file.name) }); }
+            catch (fallbackError) { throw createSceneError('SCENE_DECOMPRESS_FAILURE', 'scene pack decompression failed', fallbackError); }
             const parsed = {};
             for (const [name, content] of Object.entries(files)) {
                 if (!name.endsWith('.json') || (requested.size > 0 && !requested.has(name))) continue;
@@ -700,16 +777,17 @@
         let downloadPromise = precomputedTileInflight.get(cacheKey);
         if (!downloadPromise) downloadPromise = (async () => {
             const fetchFn = root.fetch || (typeof fetch === 'function' ? fetch : null);
-            if (!fetchFn) return null;
+            if (!fetchFn) throw createSceneError('SCENE_PACK_FETCH_UNAVAILABLE', 'scene pack fetch unavailable');
             const retryCount = Math.max(0, Math.min(1, Number(options.precomputedPackRetryCount ?? PRECOMPUTED_PACK_RETRY_COUNT)));
             for (let attempt = 0; attempt <= retryCount; attempt++) {
-                if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
+                if (options.signal && options.signal.aborted) throw createSceneError('SCENE_REQUEST_ABORTED', 'scene request aborted');
                 const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
                 let timer = null;
                 let abortHandler = null;
+                let timedOut = false;
                 try {
                     if (controller) {
-                        timer = setTimeout(() => controller.abort(), options.precomputedPackTimeoutMs || PRECOMPUTED_PACK_TIMEOUT_MS);
+                        timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.precomputedPackTimeoutMs || PRECOMPUTED_PACK_TIMEOUT_MS);
                         if (options.signal) {
                             abortHandler = () => controller.abort();
                             if (options.signal.aborted) controller.abort();
@@ -717,18 +795,19 @@
                         }
                     }
                     const response = await fetchFn(url, controller ? { signal: controller.signal } : {});
-                    if (!response || !response.ok) throw new Error(`HTTP ${response && response.status || 0}`);
+                    if (!response || !response.ok) throw createSceneError('SCENE_PACK_HTTP_ERROR', `scene pack HTTP ${response && response.status || 0}`);
                     const bytes = new Uint8Array(await response.arrayBuffer());
                     debugScene('scene-pack-download-end', { pack, bytes: bytes.byteLength, attempt });
                     const expectedHash = manifest.packs && manifest.packs[pack] && manifest.packs[pack].sha256;
                     if (expectedHash && root.crypto && root.crypto.subtle && typeof root.crypto.subtle.digest === 'function') {
                         const digest = new Uint8Array(await root.crypto.subtle.digest('SHA-256', bytes));
                         const actualHash = [...digest].map(value => value.toString(16).padStart(2, '0')).join('');
-                        if (actualHash.toLowerCase() !== String(expectedHash).toLowerCase()) { debugScene('scene-pack-checksum-failure', { pack, attempt }); throw new Error('scene tile checksum mismatch'); }
+                        if (actualHash.toLowerCase() !== String(expectedHash).toLowerCase()) { debugScene('scene-pack-checksum-failure', { pack, attempt }); throw createSceneError('SCENE_PACK_CHECKSUM_FAILURE', 'scene tile checksum mismatch'); }
                     }
                     return bytes;
                 } catch (error) {
-                    if (options.signal && options.signal.aborted) throw error;
+                    if (options.signal && options.signal.aborted) throw createSceneError('SCENE_REQUEST_ABORTED', 'scene request aborted', error);
+                    if (timedOut) error = createSceneError('SCENE_PACK_DOWNLOAD_TIMEOUT', 'scene pack download timed out', error);
                     if (attempt >= retryCount) throw error;
                     debugScene('scene-pack-download-retry', { pack, attempt: attempt + 1, message: String(error && error.message || error) });
                 } finally {
@@ -778,9 +857,13 @@
         const identity = await manifestCacheIdentity(manifest);
         const missingByPack = new Map();
         let processed = 0;
+        const failedTileKeys = [];
+        const errors = [];
         const consume = async (tileKey, serialized) => {
-            if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
-            const tile = typeof serialized === 'string' ? JSON.parse(serialized) : serialized;
+            if (options.signal && options.signal.aborted) throw createSceneError('SCENE_REQUEST_ABORTED', 'scene request aborted');
+            let tile;
+            try { tile = typeof serialized === 'string' ? JSON.parse(serialized) : serialized; }
+            catch (error) { throw createSceneError('SCENE_JSON_PARSE_FAILURE', `scene tile ${tileKey} JSON parse failure`, error); }
             if (!tile) return;
             await onTile(tile, tileKey);
             processed++;
@@ -804,10 +887,22 @@
             missingByPack.get(meta.pack).push({ tileKey, file: meta.file });
         }
         await mapWithConcurrency([...missingByPack.entries()], options.scenePackConcurrency || 2, async ([pack, entries]) => {
-            const parsed = await loadPrecomputedPack(manifest, pack, entries.map(entry => entry.file), options);
-            for (const entry of entries) if (parsed && parsed[entry.file]) await consume(entry.tileKey, parsed[entry.file]);
+            try {
+                const parsed = await loadPrecomputedPack(manifest, pack, entries.map(entry => entry.file), options);
+                for (const entry of entries) {
+                    if (parsed && parsed[entry.file]) await consume(entry.tileKey, parsed[entry.file]);
+                    else failedTileKeys.push(entry.tileKey);
+                }
+            } catch (error) {
+                if (options.signal && options.signal.aborted) throw error;
+                failedTileKeys.push(...entries.map(entry => entry.tileKey));
+                errors.push(error);
+                debugScene('scene-pack-partial-failure', {
+                    pack, tileCount: entries.length, reason: sceneErrorCode(error)
+                });
+            }
         }, options.signal);
-        return processed;
+        return { processed, failedTileKeys: [...new Set(failedTileKeys)], errors };
     }
 
     function readOverpassGeometry(element, origin) {
@@ -1217,24 +1312,27 @@
             Math.max(...routeLatitudes) < Number(regionBounds.south) || Math.min(...routeLatitudes) > Number(regionBounds.north) ||
             Math.max(...routeLongitudes) < Number(regionBounds.west) || Math.min(...routeLongitudes) > Number(regionBounds.east)) return null;
         const manifest = await loadPrecomputedManifest(options);
-        if (!manifest || manifest.schema !== 2 || !manifest.tiles || !manifest.packs) return null;
-        const tileKeys = routeSceneTileKeys(coordinates, manifest, options.precomputedPaddingMeters);
+        if (!manifest || manifest.schema !== 2 || !manifest.tiles || !manifest.packs) {
+            throw createSceneError('SCENE_MANIFEST_INVALID', 'scene manifest has an unsupported schema');
+        }
+        const plan = makeTerrainPlan(coordinates, options);
+        const tileKeys = routeSceneTileKeys(coordinates, manifest, { ...options, terrainPlan: plan });
         // A 64-tile hard stop caused ordinary long routes to silently lose
         // all scene data. Keep a bounded safety cap, but allow chunked regional
         // archives to contribute partial/precision data first.
         const maxTiles = Number(options.maxPrecomputedTiles || 256);
-        if (!tileKeys.length || tileKeys.length > maxTiles) return null;
-        if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
+        if (!tileKeys.length) return null;
+        if (tileKeys.length > maxTiles) throw createSceneError('SCENE_TILE_LIMIT_EXCEEDED', `scene route requires ${tileKeys.length} tiles`);
+        if (options.signal && options.signal.aborted) throw createSceneError('SCENE_REQUEST_ABORTED', 'scene request aborted');
         const availableTileKeys = tileKeys.filter(key => manifest.tiles[key]);
         const missingTileKeys = tileKeys.filter(key => !manifest.tiles[key]);
         // Coastal cells, state boundaries and neighboring regional extracts
         // can leave a few padded tiles absent. Do not discard every usable
         // building/terrain tile; mark only affected route segments uncovered
         // so the router applies its common heuristic to those segments.
-        if (!availableTileKeys.length) return null;
+        if (!availableTileKeys.length) throw createSceneError('SCENE_TILE_MISSING', 'no precomputed scene tile covers this route');
         const originCoordinate = coordinates[Math.floor(coordinates.length / 2)];
         const origin = { lat: Number(originCoordinate[1]), lng: Number(originCoordinate[0]) };
-        const plan = makeTerrainPlan(coordinates, options);
         const selectionProfiles = plan.profiles.map(profile => {
             const coordinate = coordinates[profile.coordinateIndex];
             return {
@@ -1251,11 +1349,13 @@
         const tunnels = new Map();
         const terrain = new Map();
         let processedTiles = 0;
+        let failedTileKeys = [];
+        let streamErrors = [];
         try {
             // Consume one tile at a time. Raw tile objects and non-relevant
             // building geometry become collectible immediately after this
             // callback instead of accumulating for the entire route.
-            processedTiles = await streamPrecomputedTiles(manifest, availableTileKeys, tile => {
+            const streamResult = await streamPrecomputedTiles(manifest, availableTileKeys, tile => {
                 const tileBuildingCandidates = [];
                 for (const building of tile.buildings || []) {
                     const key = String(building.id || `building:${JSON.stringify(building.polygon)}`);
@@ -1304,11 +1404,19 @@
                     });
                 }
             }, options);
+            processedTiles = Number(streamResult && streamResult.processed) || 0;
+            failedTileKeys = Array.isArray(streamResult && streamResult.failedTileKeys) ? streamResult.failedTileKeys : [];
+            streamErrors = Array.isArray(streamResult && streamResult.errors) ? streamResult.errors : [];
         } catch (error) {
-            if (options.signal && options.signal.aborted) throw error;
-            return null;
+            if (options.signal && options.signal.aborted) throw createSceneError('SCENE_REQUEST_ABORTED', 'scene request aborted', error);
+            if (error && error.code) throw error;
+            throw createSceneError(sceneErrorCode(error), 'precomputed scene tile processing failed', error);
         }
-        if (processedTiles !== availableTileKeys.length) return null;
+        const loadedTileKeys = new Set(availableTileKeys.filter(key => !failedTileKeys.includes(key)));
+        if (!processedTiles || !loadedTileKeys.size) {
+            if (streamErrors[0]) throw streamErrors[0];
+            throw createSceneError('SCENE_TILE_INCOMPLETE', `processed ${processedTiles} of ${availableTileKeys.length} scene tiles`);
+        }
         const terrainSamples = [...terrain.values()];
         const terrainGrid = buildTerrainGrid(terrainSamples);
         const profiles = plan.profiles.map(profile => {
@@ -1341,7 +1449,7 @@
             // Missing padding reduces ray coverage but should not erase the
             // centerline's usable DEM/building data. A segment is uncovered
             // only when its actual road tile is absent.
-            const tilesComplete = segmentBaseTileKeys.length > 0 && segmentBaseTileKeys.every(key => !!manifest.tiles[key]);
+            const tilesComplete = segmentBaseTileKeys.length > 0 && segmentBaseTileKeys.every(key => loadedTileKeys.has(key));
             const nearbyProfile = profiles
                 .filter(profile => profile.anchor && profile.elevations.length > 0 && profile.elevations.every(finite))
                 .sort((a, b) => Math.abs(a.coordinateIndex - segmentIndex) - Math.abs(b.coordinateIndex - segmentIndex))[0];
@@ -1351,7 +1459,7 @@
                     ? { lat: Number(profileCoordinate[1]), lng: Number(profileCoordinate[0]) }
                     : destinationPoint(Number(profileCoordinate[1]), Number(profileCoordinate[0]), Number(nearbyProfile.direction), distance))
                 .map(point => sceneTileKeyForCoordinate(point.lat, point.lng, manifest))
-                .every(key => !!manifest.tiles[key]);
+                .every(key => loadedTileKeys.has(key));
             const profileSpacing = coordinates.length / Math.max(1, profiles.length - 1);
             const terrainCovered = !!nearbyProfile && Math.abs(nearbyProfile.coordinateIndex - segmentIndex) <= Math.max(2, profileSpacing * 1.5);
             const nearbyRelevantBuildings = relevantBuildings.filter(building =>
@@ -1371,7 +1479,7 @@
         const coveredSegments = segmentCoverage.filter(segment => segment.terrain && segment.buildingGround).length;
         const segmentCount = segmentCoverage.length;
         const precisionReady = terrainAvailable && buildingGroundAvailable && segmentCount > 0 &&
-            coveredSegments === segmentCount && missingTileKeys.length === 0;
+            coveredSegments === segmentCount;
         return {
             origin,
             baseElevation: terrainSamples[0] && finite(terrainSamples[0].elevation) ? terrainSamples[0].elevation : null,
@@ -1389,9 +1497,9 @@
                 buildingGround: buildingGroundAvailable,
                 relevantBuildings: relevantBuildings.length,
                 totalBuildings: totalBuildingIds.size,
-                precomputedTiles: availableTileKeys.length,
+                precomputedTiles: loadedTileKeys.size,
                 requestedTiles: tileKeys.length,
-                missingTiles: missingTileKeys.length,
+                missingTiles: missingTileKeys.length + failedTileKeys.length,
                 coveredSegments,
                 segmentCount,
                 segmentRatio: segmentCount ? coveredSegments / segmentCount : 0
@@ -1399,7 +1507,8 @@
             diagnostics: {
                 totalBuildings: totalBuildingIds.size,
                 relevantBuildings: relevantBuildings.length,
-                missingTileKeys: missingTileKeys.slice(0, 64)
+                missingTileKeys: [...new Set([...missingTileKeys, ...failedTileKeys])].slice(0, 64),
+                streamFailureReasons: streamErrors.map(sceneErrorCode)
             },
             precisionReady,
             partial: !precisionReady && coveredSegments > 0,
@@ -1408,16 +1517,16 @@
             profileResolution: manifest.profileResolution || null,
             sceneCoverage: {
                 ...((manifest.sceneCoverage && typeof manifest.sceneCoverage === 'object') ? manifest.sceneCoverage : {}),
-                precomputedTiles: availableTileKeys.length,
+                precomputedTiles: loadedTileKeys.size,
                 requestedTiles: tileKeys.length,
-                missingTiles: missingTileKeys.length,
+                missingTiles: missingTileKeys.length + failedTileKeys.length,
                 coveredSegments,
                 segmentCount,
                 segmentRatio: segmentCount ? coveredSegments / segmentCount : 0
             },
             sampleCount: terrainSamples.length,
-            tileKeys: availableTileKeys,
-            missingTileKeys
+            tileKeys: [...loadedTileKeys],
+            missingTileKeys: [...new Set([...missingTileKeys, ...failedTileKeys])]
         };
     }
 
@@ -1529,6 +1638,7 @@
             ? options.precomputedRegions
             : PRECOMPUTED_REGION_MANIFESTS);
         const parts = [];
+        const failures = [];
         for (const candidate of candidates) {
             if (!candidate || !candidate.url) continue;
             const bounds = candidate.bounds || options.precomputedRegionBounds;
@@ -1538,16 +1648,36 @@
                 : routeRunsInsideBounds(coordinates, bounds);
             for (const run of runs) {
                 const subset = coordinates.slice(run.start, run.end + 1);
-                const subsetScene = await fetchPrecomputedSceneForRouteSingle(subset, {
-                    ...options, precomputedManifestUrl: candidate.url, precomputedRegionBounds: bounds
-                });
+                let subsetScene = null;
+                try {
+                    subsetScene = await fetchPrecomputedSceneForRouteSingle(subset, {
+                        ...options, precomputedManifestUrl: candidate.url, precomputedRegionBounds: bounds
+                    });
+                } catch (error) {
+                    if (options.signal && options.signal.aborted) throw error;
+                    failures.push(error);
+                    debugScene('precomputed-region-failure', {
+                        region: candidate.id || 'custom', reason: sceneErrorCode(error),
+                        message: String(error && error.message || error)
+                    });
+                    continue;
+                }
                 if (!subsetScene) continue;
                 subsetScene.region = candidate.id || subsetScene.region || null;
                 subsetScene.segmentOffset = run.start;
                 parts.push(subsetScene);
             }
         }
-        return mergePrecomputedScenes(parts, coordinates);
+        const merged = mergePrecomputedScenes(parts, coordinates);
+        if (merged) {
+            merged.diagnostics = {
+                ...(merged.diagnostics || {}),
+                regionFailureReasons: failures.map(sceneErrorCode)
+            };
+            return merged;
+        }
+        if (failures.length) throw failures[0];
+        return null;
     }
 
     function findNearestTerrainSample(point, terrainSamples, maxDistance = Infinity, terrainGrid = null) {

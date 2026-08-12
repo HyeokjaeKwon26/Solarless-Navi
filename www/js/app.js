@@ -102,6 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastProcessedNavigationAccuracy = Infinity;
     const NAVIGATION_LOCATION_DEDUPE_WINDOW_MS = 1500;
     let routeAbortController = null;
+    let sceneRefinementAbortController = null;
     let pendingRouteRequestKey = null;
     let verifiedRouteRequestKey = null;
     let routeCandidateCacheKey = null;
@@ -2597,8 +2598,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (routeAbortController) {
             routeAbortController.abort();
         }
+        if (sceneRefinementAbortController) sceneRefinementAbortController.abort();
         const requestController = new AbortController();
+        const sceneController = new AbortController();
         routeAbortController = requestController;
+        sceneRefinementAbortController = sceneController;
 
         const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
         const requestKey = getCurrentRouteRequestKey(dateObj);
@@ -2618,6 +2622,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 isTollFreeOnly,
                 {
                     signal: requestController.signal,
+                    // Scene enrichment has its own cancellation lifecycle.
+                    // A completed OSRM route can remain usable while optional
+                    // building/terrain downloads finish in the background.
+                    sceneSignal: sceneController.signal,
                     // During a live reroute OSRM should start in the vehicle's
                     // current travel direction. It may still return a U-turn
                     // when that is the only connected option.
@@ -2752,6 +2760,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (rerouteReason === 'precision-refresh') precisionReroutePending = false;
             if (routeAbortController === requestController) {
                 routeAbortController = null;
+            }
+            if (sceneRefinementAbortController === sceneController) {
+                sceneRefinementAbortController = null;
             }
             if (requestGeneration === routeAnalysisGeneration) markRouteCalculationPending(false);
         }
@@ -2900,7 +2911,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (coverage && coverage.tunnels) return isKo ? '터널 데이터만 반영' : 'Tunnel data only';
                 return isKo ? '장면 데이터 반영' : 'Scene data applied';
             }
-            const reason = route && route.fallbackReason ? ` (${route.fallbackReason})` : '';
+            const failureLabels = {
+                SCENE_MANIFEST_TIMEOUT: isKo ? '\uc7a5\uba74 \ubaa9\ub85d \ub2e4\uc6b4\ub85c\ub4dc \uc2dc\uac04 \ucd08\uacfc' : 'scene manifest timeout',
+                SCENE_MANIFEST_UNAVAILABLE: isKo ? '\uc7a5\uba74 \ubaa9\ub85d \uc5f0\uacb0 \uc2e4\ud328' : 'scene manifest unavailable',
+                SCENE_MANIFEST_HTTP_ERROR: isKo ? '\uc7a5\uba74 \ubaa9\ub85d \uc11c\ubc84 \uc624\ub958' : 'scene manifest server error',
+                SCENE_MANIFEST_PARSE_FAILURE: isKo ? '\uc7a5\uba74 \ubaa9\ub85d \ud30c\uc2f1 \uc2e4\ud328' : 'scene manifest parse failure',
+                SCENE_PACK_DOWNLOAD_TIMEOUT: isKo ? '\uc7a5\uba74 \ud0c0\uc77c \ub2e4\uc6b4\ub85c\ub4dc \uc2dc\uac04 \ucd08\uacfc' : 'scene tile download timeout',
+                SCENE_PACK_HTTP_ERROR: isKo ? '\uc7a5\uba74 \ud0c0\uc77c \uc11c\ubc84 \uc624\ub958' : 'scene tile server error',
+                SCENE_PACK_CHECKSUM_FAILURE: isKo ? '\uc7a5\uba74 \ud0c0\uc77c \ubb34\uacb0\uc131 \uc624\ub958' : 'scene tile checksum failure',
+                SCENE_WORKER_TIMEOUT: isKo ? '\uc7a5\uba74 \uc555\ucd95 \ud574\uc81c \uc2dc\uac04 \ucd08\uacfc' : 'scene processing timeout',
+                SCENE_DECOMPRESS_FAILURE: isKo ? '\uc7a5\uba74 \uc555\ucd95 \ud574\uc81c \uc2e4\ud328' : 'scene decompression failure',
+                SCENE_JSON_PARSE_FAILURE: isKo ? '\uc7a5\uba74 \ud0c0\uc77c \ud30c\uc2f1 \uc2e4\ud328' : 'scene tile parse failure',
+                SCENE_TILE_MISSING: isKo ? '\ud574\ub2f9 \uad6c\uac04 \uc7a5\uba74 \ud0c0\uc77c \uc5c6\uc74c' : 'scene tile not available',
+                SCENE_DATA_UNAVAILABLE: isKo ? '\uc7a5\uba74 \ub370\uc774\ud130 \uc0ac\uc6a9 \ubd88\uac00' : 'scene data unavailable'
+            };
+            const failureReason = route && route.fallbackReason;
+            const reason = failureReason ? ` (${failureLabels[failureReason] || failureReason})` : '';
             return isKo ? `휴리스틱 추정${reason}` : `Heuristic estimate${reason}`;
         }
         [[fstDesc, fst], [glrDesc, glr], [shdDesc, shd]].forEach(([element, route]) => {
@@ -3009,6 +3035,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (routeAbortController) {
             routeAbortController.abort();
             routeAbortController = null;
+        }
+        if (sceneRefinementAbortController) {
+            sceneRefinementAbortController.abort();
+            sceneRefinementAbortController = null;
         }
         if (activeRoutePolylineGroup) {
             activeRoutePolylineGroup.clearLayers();

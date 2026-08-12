@@ -314,7 +314,8 @@ test('precomputed scene packs are loaded once, cached, and produce a precision s
         const first = await SceneShadow.fetchPrecomputedSceneForRoute(coordinates, options);
         assert.equal(first.source, 'GitHub precomputed US-NORTHEAST scene tiles');
         assert.equal(first.precisionReady, true);
-        assert.equal(first.tileKeys.length, 9);
+        assert.ok(first.tileKeys.length >= 1 && first.tileKeys.length <= 4,
+            'sun-ray selection should avoid the old unconditional 3x3 download');
         assert.equal(Object.hasOwn(first, 'allBuildings'), false);
         assert.equal(SceneShadow.getCacheStats().precomputedParsedEntries, 0);
         assert.ok(SceneShadow.getCacheStats().precomputedMaxBytes <= 12 * 1024 * 1024);
@@ -332,7 +333,7 @@ test('precomputed scene packs are loaded once, cached, and produce a precision s
     }
 });
 
-test('missing padded tiles retain covered segments as a hybrid scene', async () => {
+test('an irrelevant padded tile is not downloaded or counted as missing coverage', async () => {
     const originalFetch = sandbox.fetch;
     const manifestUrl = 'https://example.test/partial/manifest.json';
     const terrain = [];
@@ -366,14 +367,15 @@ test('missing padded tiles retain covered segments as a hybrid scene', async () 
             { precomputedManifestUrl: manifestUrl, precomputedRegionBounds: { south: 40, west: -75, north: 43, east: -69 }, dateObj: new Date('2026-06-21T12:00:00Z'), durationSec: 60 }
         );
         assert.ok(scene);
-        assert.equal(scene.precisionReady, false);
-        assert.equal(scene.partial, true);
-        assert.equal(scene.coverage.missingTiles, 1);
+        assert.equal(scene.precisionReady, true);
+        assert.notEqual(scene.partial, true);
+        assert.equal(scene.coverage.missingTiles, 0,
+            'a missing tile outside the centreline/sun-ray corridor is irrelevant');
         assert.ok(scene.coverage.coveredSegments > 0);
         const analyzed = ShadowRouter.analyzeRouteSegments(
             [[-73.999, 41.001], [-73.9985, 41.0015]], new Date('2026-06-21T12:00:00Z'), 60, null, scene
         );
-        assert.equal(analyzed.analysisMode, 'hybrid-scene');
+        assert.equal(analyzed.analysisMode, 'scene');
     } finally {
         sandbox.fetch = originalFetch;
         SceneShadow.clearCaches();
@@ -951,6 +953,126 @@ test('scene lookup prefers precomputed tiles before live Overpass fallback', asy
     } finally {
         sandbox.fetch = originalFetch;
         sandbox.window.SceneShadow = originalScene;
+    }
+});
+
+test('precomputed scene failure keeps its concrete reason after live fallback also fails', async () => {
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    const raw = { distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] };
+    SceneShadow.fetchPrecomputedSceneForRoute = async () => {
+        const error = new Error('scene pack download timed out');
+        error.code = 'SCENE_PACK_DOWNLOAD_TIMEOUT';
+        throw error;
+    };
+    SceneShadow.fetchSceneForRoute = async () => { throw new Error('mock Overpass outage'); };
+    try {
+        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 0.01 }, new Date('2026-06-21T12:00:00Z'), false,
+            { candidates: [raw] }
+        ));
+        assert.equal(result.routes.fastest.analysisMode, 'heuristic');
+        assert.equal(result.routes.fastest.fallbackReason, 'SCENE_PACK_DOWNLOAD_TIMEOUT');
+    } finally {
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
+    }
+});
+
+test('scene refinement accepts an independent abort signal', async () => {
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    const routeController = new AbortController();
+    const sceneController = new AbortController();
+    const raw = { distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] };
+    let observedSignal = null;
+    SceneShadow.fetchPrecomputedSceneForRoute = async (_coordinates, options) => {
+        observedSignal = options.signal;
+        return null;
+    };
+    SceneShadow.fetchSceneForRoute = async () => null;
+    try {
+        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 0.01 }, new Date('2026-06-21T12:00:00Z'), false,
+            { candidates: [raw], signal: routeController.signal, sceneSignal: sceneController.signal }
+        ));
+        assert.ok(result.routes.fastest);
+        assert.equal(observedSignal, sceneController.signal);
+        assert.notEqual(observedSignal, routeController.signal);
+    } finally {
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
+    }
+});
+
+test('partial pack failure retains successfully cached tiles as hybrid scene data', async () => {
+    const originalFetch = sandbox.fetch;
+    const manifestUrl = 'https://example.test/partial-pack/manifest.json';
+    const route = [[0.001, 0.001], [0.046, 0.001]];
+    const terrainFor = (lngMin, lngMax) => {
+        const values = [];
+        for (let lat = -0.01; lat <= 0.02; lat += 0.001) {
+            for (let lng = lngMin; lng <= lngMax; lng += 0.001) values.push([Number(lat.toFixed(5)), Number(lng.toFixed(5)), 10]);
+        }
+        return values;
+    };
+    const goodZip = require('fflate').zipSync({
+        '0_0.json': require('fflate').strToU8(JSON.stringify({ schema: 1, buildings: [], tunnels: [], terrain: terrainFor(-0.01, 0.05) }))
+    });
+    const badZip = require('fflate').zipSync({
+        '1_0.json': require('fflate').strToU8(JSON.stringify({ schema: 1, buildings: [], tunnels: [], terrain: terrainFor(0.04, 0.1) }))
+    });
+    const manifest = {
+        schema: 2, region: 'PARTIAL-PACK', releaseTag: 'partial-pack', baseUrl: 'https://example.test/partial-pack',
+        tileSizeM: 5000, tilePaddingMeters: 0, terrainSpacingM: 100,
+        grid: { latOrigin: 0, lngOrigin: 0, cosLat: 1 },
+        packs: { good: { path: 'good.zip' }, bad: { path: 'bad.zip' } },
+        tiles: {
+            '0:0': { pack: 'good', file: '0_0.json' },
+            '1:0': { pack: 'bad', file: '1_0.json' }
+        }
+    };
+    let goodFetches = 0;
+    let badFetches = 0;
+    sandbox.fetch = async url => {
+        if (String(url) === manifestUrl) return { ok: true, status: 200, headers: { get: () => null }, json: async () => manifest };
+        if (String(url).endsWith('good.zip')) {
+            goodFetches++;
+            return { ok: true, status: 200, arrayBuffer: async () => goodZip.buffer.slice(goodZip.byteOffset, goodZip.byteOffset + goodZip.byteLength) };
+        }
+        if (String(url).endsWith('bad.zip')) {
+            badFetches++;
+            return { ok: false, status: 503, arrayBuffer: async () => badZip.buffer.slice(badZip.byteOffset, badZip.byteOffset + badZip.byteLength) };
+        }
+        throw new Error(`unexpected URL ${url}`);
+    };
+    try {
+        SceneShadow.clearCaches();
+        const scene = await SceneShadow.fetchPrecomputedSceneForRoute(route, {
+            precomputedManifestUrl: manifestUrl,
+            precomputedRegionBounds: { south: -1, west: -1, north: 1, east: 1 },
+            dateObj: new Date('2026-06-21T12:00:00Z'), durationSec: 300,
+            precomputedPackRetryCount: 0
+        });
+        assert.ok(scene);
+        assert.equal(scene.precisionReady, false);
+        assert.equal(scene.partial, scene.coverage.coveredSegments > 0,
+            'partial is true only when the successfully loaded pack covers at least one segment');
+        assert.ok(scene.coverage.precomputedTiles >= 1);
+        assert.ok(scene.coverage.missingTiles >= 1);
+        assert.ok(scene.diagnostics.streamFailureReasons.includes('SCENE_PACK_HTTP_ERROR'));
+        const goodFetchesAfterFirst = goodFetches;
+        await SceneShadow.fetchPrecomputedSceneForRoute(route, {
+            precomputedManifestUrl: manifestUrl,
+            precomputedRegionBounds: { south: -1, west: -1, north: 1, east: 1 },
+            dateObj: new Date('2026-06-21T12:00:00Z'), durationSec: 300,
+            precomputedPackRetryCount: 0
+        });
+        assert.equal(goodFetches, goodFetchesAfterFirst, 'successful pack tiles should stay cached');
+        assert.ok(badFetches >= 2, 'only the failed pack should be retried');
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.clearCaches();
     }
 });
 
@@ -1800,6 +1922,14 @@ test('debug diagnostics are debug-only, collapsed, and bounded', () => {
     assert.ok(source.includes('data-debug-action'));
     assert.ok(source.includes('MAX_ENTRIES'));
     assert.ok(source.includes('password') && source.includes('token'));
+});
+
+test('scene fallback UI exposes actionable failure reasons instead of one generic label', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('SCENE_PACK_DOWNLOAD_TIMEOUT'));
+    assert.ok(appSource.includes('scene tile download timeout'));
+    assert.ok(appSource.includes('SCENE_WORKER_TIMEOUT'));
+    assert.ok(appSource.includes('scene processing timeout'));
 });
 
 test('scene pack worker and regional merge hooks are present', () => {

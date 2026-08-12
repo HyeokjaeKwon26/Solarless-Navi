@@ -1011,12 +1011,14 @@ window.ShadowRouter = (function () {
     }
 
     function sceneFallbackReason(error) {
-        const message = String(error && (error.code || error.message) || '').toLowerCase();
-        if (message.includes('abort') || message.includes('cancel')) return 'ABORTED';
-        if (message.includes('timeout')) return message.includes('dem') ? 'DEM_FAILURE' : 'MANIFEST_TIMEOUT';
+        const explicitCode = String(error && error.code || '').trim();
+        if (explicitCode) return explicitCode;
+        const message = String(error && error.message || '').toLowerCase();
+        if (message.includes('abort') || message.includes('cancel')) return 'SCENE_REQUEST_ABORTED';
+        if (message.includes('timeout')) return message.includes('dem') ? 'DEM_FAILURE' : 'SCENE_PACK_DOWNLOAD_TIMEOUT';
         if (message.includes('range') || message.includes('bbox') || message.includes('250')) return 'ROUTE_TOO_LONG';
-        if (message.includes('checksum')) return 'CHECKSUM_FAILURE';
-        if (message.includes('decompress') || message.includes('worker')) return 'DECOMPRESS_FAILURE';
+        if (message.includes('checksum')) return 'SCENE_PACK_CHECKSUM_FAILURE';
+        if (message.includes('decompress') || message.includes('worker')) return 'SCENE_DECOMPRESS_FAILURE';
         return 'SCENE_DATA_UNAVAILABLE';
     }
 
@@ -1312,14 +1314,15 @@ window.ShadowRouter = (function () {
                     fallbackReason = 'NIGHT_SCENE_NOT_NEEDED';
                     return { route, refinedAnalyzed: null, fallbackReason, ready: false };
                 }
+                const sceneSignal = options.sceneSignal || options.signal;
                 const sceneOptions = {
                     dateObj,
                     durationSec: route.durationSec,
                     timeLookup: buildStepTimeLookup(precisionCoordinates, route.routeSteps, route.durationSec),
-                    signal: options.signal,
+                    signal: sceneSignal,
                     timeoutMs: 12000,
                     terrainTimeoutMs: 10000,
-                    precomputedManifestTimeoutMs: options.precomputedManifestTimeoutMs || 5000,
+                    precomputedManifestTimeoutMs: options.precomputedManifestTimeoutMs || 10000,
                     precomputedPackTimeoutMs: options.precomputedPackTimeoutMs || 15000,
                     precomputedPackRetryCount: options.precomputedPackRetryCount ?? 1,
                     precomputedManifestUrl: options.precomputedManifestUrl,
@@ -1328,22 +1331,40 @@ window.ShadowRouter = (function () {
                 // Prefer immutable, precomputed regional scene tiles.  Only
                 // when a tile is missing or the manifest is unavailable do we
                 // fall back to the live Overpass/DEM scene request.
+                let precomputedError = null;
                 if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchPrecomputedSceneForRoute === 'function') {
-                    scene = await window.SceneShadow.fetchPrecomputedSceneForRoute(precisionCoordinates, sceneOptions);
+                    try {
+                        scene = await window.SceneShadow.fetchPrecomputedSceneForRoute(precisionCoordinates, sceneOptions);
+                    } catch (error) {
+                        if (sceneSignal && sceneSignal.aborted) throw error;
+                        precomputedError = error;
+                        if (window.DebugLogger) window.DebugLogger.log('precomputed-scene-failure', {
+                            reason: sceneFallbackReason(error), message: String(error && error.message || error)
+                        });
+                    }
                 }
                 if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
-                    scene = await window.SceneShadow.fetchSceneForRoute(precisionCoordinates, sceneOptions);
+                    try {
+                        scene = await window.SceneShadow.fetchSceneForRoute(precisionCoordinates, sceneOptions);
+                    } catch (liveError) {
+                        if (sceneSignal && sceneSignal.aborted) throw liveError;
+                        // The immutable regional archive is the primary source.
+                        // Preserve its concrete failure code when live public
+                        // APIs also fail instead of reducing both to a generic
+                        // SCENE_DATA_UNAVAILABLE label.
+                        throw precomputedError || liveError;
+                    }
                 }
                 if (isPrecisionScene(scene)) {
-                    const sampledAnalysis = await analyzeRouteSegmentsAsync(precisionCoordinates, dateObj, route.durationSec, route.routeSteps, scene, options.signal);
+                    const sampledAnalysis = await analyzeRouteSegmentsAsync(precisionCoordinates, dateObj, route.durationSec, route.routeSteps, scene, sceneSignal);
                     refinedAnalyzed = mapPrecisionAnalysisToOriginalGeometry(
                         sampledAnalysis, route.analyzed, rawCoordinates, precisionSampling
                     );
                 } else {
-                    fallbackReason = 'SCENE_DATA_UNAVAILABLE';
+                    fallbackReason = precomputedError ? sceneFallbackReason(precomputedError) : 'SCENE_DATA_UNAVAILABLE';
                 }
             } catch (sceneError) {
-                if (options.signal && options.signal.aborted) throw sceneError;
+                if ((options.sceneSignal && options.sceneSignal.aborted) || (options.signal && options.signal.aborted)) throw sceneError;
                 console.warn('Scene data unavailable; retaining common heuristic comparison.', sceneError);
                 fallbackReason = sceneFallbackReason(sceneError);
             }
