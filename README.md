@@ -1,352 +1,211 @@
-# ☀️ SolarLess Navi - 햇빛을 피하는 스마트 내비게이션 (Android)
+# ☀️ SolarLess Navi
 
-[🇰🇷 한국어](#-solarless-navi---햇빛을-피하는-스마트-내비게이션-android) | [🇺🇸 English](#-solarless-navi---sun-glare--shade-aware-smart-navigation-android)
+태양 위치, 도로 진행 방향, 건물·터널·지형 데이터를 이용해 **빠른 경로**, **눈부심 회피 경로**, **그늘 우선 경로**를 비교하는 Android용 실험적 내비게이션입니다.
 
-[![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-blue.svg?style=for-the-badge&logo=android)](https://developer.android.com)
-[![Author](https://img.shields.io/badge/Author-권혁재%20M.D.%2C%20Ph.D.-orange.svg?style=for-the-badge)](https://hyeokjaekwon26.github.io/)
+[![Platform](https://img.shields.io/badge/Platform-Android-blue.svg?style=for-the-badge&logo=android)](https://developer.android.com)
+[![Scene Data](https://img.shields.io/badge/Scene%20Data-USA-2ea44f.svg?style=for-the-badge)](#미국-사전계산-장면-데이터)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
 
-> **"운전 중 태양 방향과 도로 방향을 비교해 실험용 노출 지표를 확인하세요."**
-> 
-> **SolarLess Navi**는 현재 시각의 태양 위치(방위각/고도)와 OpenStreetMap/OSRM 도로 경로를 이용해 **① 그늘 가능성 추정이 높은 경로**와 **② 정면 태양 눈부심(역광) 가능성 추정이 낮은 경로**를 비교하는 Android 중심 실험용 내비게이션입니다. OSM 건물·터널 형상과 공개 DEM 표본이 제공될 때는 태양 광선과 2.5D 장애물을 추가로 교차 검사하지만, 건물 높이·등고선·수치 결과는 추정값이며 실시간 교통은 측정하지 않습니다.
+> SolarLess Navi의 그늘·눈부심·태양 노출 수치는 측정값이 아닌 **실험용 추정값**입니다. 실제 도로 상황, 교통법규와 운전자의 판단을 항상 우선하세요.
 
----
+## 주요 기능
 
-## 👨‍💻 개발자 정보 (Developer Information)
-* **저작자 / 개발자**: **권혁재 M.D., Ph.D. (Hyeokjae Kwon, M.D., Ph.D.)**
-* **공식 홈페이지**: [https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/)
+- **빠른 경로**: OSRM이 반환한 실제 도로 경로 중 예상 소요시간이 가장 짧은 경로를 기준으로 사용합니다.
+- **눈부심 회피 경로**: 각 도로 구간의 예상 통과 시각에 태양 방위각·고도각과 차량 진행 방향을 비교합니다.
+- **그늘 우선 경로**: 가능한 경우 OSM 건물·터널 형상과 DEM 지형 표본을 이용해 태양 광선 차단 가능성을 계산합니다.
+- **빠른 시작과 백그라운드 보정**: 공통 휴리스틱 결과를 먼저 표시하고, 장면 데이터가 준비되면 같은 분석 등급에서 경로를 다시 비교합니다.
+- **Android 주행 안내**: 음성 회전 안내, 경로 이탈 재탐색, heading-up 지도, 자동 재중앙 정렬, 선택형 Picture-in-Picture를 지원합니다.
+- **주행 보조 정보**: OSM 기반 제한속도·STOP·터널 정보와 시간대 보정 예상시간을 표시합니다.
 
----
+## 동작 방식
 
-## ✨ 핵심 듀얼 기능 (Core Dual Pillars)
+```text
+OSRM 실제 도로 경로 검색
+  → 모든 후보를 공통 휴리스틱으로 빠르게 비교
+  → 빠른 경로와 목적별 유력 후보 선정
+  → 경로 주변의 사전계산 장면 타일 다운로드·로컬 캐시
+  → 건물·터널·지형과 구간별 태양 위치로 후보를 순차 보정
+  → 확보된 공통 분석 등급 안에서 최종 경로와 노출 감소율 계산
+```
 
-### 🌲 1. 그늘 가능성 추정 경로 안내
-* **장면 데이터 보정**: 미국 경로에 사전계산 장면 타일이 있으면 먼저 GitHub Release에서 경로 주변 5km 타일 묶음을 받아 로컬 캐시하고, 없을 때만 OSM Overpass/OpenTopoData를 시도합니다. 현재 사전계산 릴리스는 Northeast, Midwest, South, West 권역으로 나뉘며, 두 경로가 모두 실패하거나 데이터가 없는 구간은 도로 방향 기반 휴리스틱 추정으로 표시됩니다.
-* **휴리스틱·실험용 추정**: 건물 높이가 없으면 층수 또는 보수적인 기본 높이를 사용하고, DEM은 제한된 방향 표본만 조회합니다. 실제 차광률·UV 선량·온도를 측정하지 않습니다.
-* **실험용 비교 지표**: 실제 차광률이나 실내 온도를 측정하지 않고 경로 간 상대적인 태양 노출 가능성만 비교합니다.
+경로 구간 `i`의 예상 통과 시각 `T_i`에서 태양 위치를 다시 계산합니다.
 
-### 🕶️ 2. 역광(눈부심) 회피 및 직사광선 차단 경로
-* **NOAA AA+ 천문학 연산 기반**: 운전자의 GPS 위치와 주행 시각에 따른 태양 방위각(Azimuth) 및 고도각(Elevation)을 실시간 연산합니다.
-* **전면 유리창 직사광선 차단**: 태양이 운전자의 정면 전면유리로 찌르는 서쪽 저녁 노을/아침 동쪽 태양 구간을 우회하는 안전 경로를 추천합니다.
+$$T_i = T_{start} + \left(\frac{d_{0 \rightarrow i}}{D_{total}}\right)T_{route}$$
 
-### ☀️ 3. 태양 노출 추정 감소율(%) 표시 & 4D 시공간 주행 예측
-* **4D 시공간(Spatio-Temporal) 동적 태양광 연산**: 출발 시각 스냅샷이 아닌, 차량이 각 도로 세그먼트($i$)를 통과할 것으로 예상되는 시각($T_i = T_{\text{start}} + \Delta t_i$)의 태양 방위각/고도각을 구간별로 계산합니다. 시간대 보정 예상시간과 OSRM step geometry를 사용한 실험용 모델입니다.
-* **실험용 추정값 표기**: 특정 경로를 과학적으로 보증하지 않으며, 모든 경로 카드에 역광 가능성 추정과 태양 노출 추정 감소율을 상대 지표로 표시합니다.
-* **단일 경로/야간 자동 분기**: 대안 우회로가 없으면 동일 경로를 각 역할에 재사용하며, 그늘·역광은 추정 지표로 표시합니다. 일몰 후에는 야간 추정으로 전환됩니다.
-* **💡 직사 태양 노출 추정 감소율(%)**: 차량 유리나 썬팅을 측정하지 않습니다. 정밀 또는 공통 휴리스틱 계층 안에서 최단 경로를 기준으로 계산하는 상대적 실험 지표이며 의학적 보호 효과를 의미하지 않습니다.
+- 태양이 지평선 아래인 야간에는 불필요한 장면 다운로드와 차광 계산을 생략합니다.
+- 비교 대상의 분석 등급이 다르면 정밀값과 휴리스틱값을 직접 섞지 않습니다.
+- 대안 경로의 태양 노출 추정 감소율은 같은 분석 등급의 빠른 경로를 기준으로 계산합니다.
+- 시간은 OSRM 소요시간에 시간대 보정을 적용한 예상값이며 **실시간 교통정보가 아닙니다**.
 
-### 🚥 4. OSM 조회 기반 제한속도 & 표지판 (한국/글로벌 🔴 / 미국 ⬜)
-* OpenStreetMap `Overpass API`에서 주변 도로 태그를 조회해 제한속도·STOP·터널·톨게이트 정보를 표시합니다. 데이터가 없거나 오래되었을 수 있습니다.
-* **지역 단위 표시**: 명시적인 `mph`/`km/h` OSM 태그와 reverse-geocoding ISO 코드를 우선하며, 국가를 확정할 수 없으면 안전한 국제 기본값(km/h)을 사용합니다.
-* **미국 도로 (MUTCD 규격 표준)**: 흰색 사각형 표지판 (mph) & 8각 STOP 표지판 지원
+## 분석 등급
 
-### 🗣️ 5. 스마트 맞춤형 음성 안내 (TTS & 경고음)
-* 경로 시작 시 **태양 노출 추정치**를 참고 정보로 음성 안내합니다. 이 수치는 측정값이나 의학적 보호 효과가 아닙니다.
-* 과속 및 200m 앞 강한 역광 위험 구간 진입 시 자동차 전용 2톤 경고음(Dong-Dong)을 재생합니다.
-
-### ⚙️ 6. 스마트 주행 편의 기능 (Smart Convenience Features)
-* **근처 쉼터/주차장 검색**: 장소 검색 결과를 경유지 후보로 제시합니다. 실제 그늘 여부를 검증하지 않습니다.
-* **사용자 선호 경로 자동 기억 (Smart Preference Memory)**: 마지막 주행에서 선택한 경로 모드(최단/역광회피/그늘)를 기억하여 다음 주행 시 해당 모드를 기본 안내 경로로 자동 지정.
-* **25초 자동 복귀 링 HUD (Auto-Recenter HUD)**: 주행 중 지도를 탐색하더라도 조작 중단 25초 후 차량 중심 위치로 부드럽게 자동 복귀.
-* **로컬 정적 자산 번들링**: 폰트·아이콘·지도 렌더러 일부는 앱에 포함되지만 지도 타일·검색·경로 계산은 외부 네트워크가 필요합니다.
-* **고화질 항공 위성 지도 뷰**: ESRI World Imagery 고화질 항공 위성 사진 레이어 1-터치 전환 지원.
-* **야간/터널 자동 다크모드**: 일몰 후 및 터널 진입 시 어두운 야간 내비게이션 테마로 자동 전환.
-* **무료 도로 우선 (통행료 회피)**: 고속도로 통행료를 회피하는 국도/일반도로 우선 탐색 옵션.
-* **OLED 발열 & 배터리 절전 모드**: 장시간 내비게이션 구동 시 기기 발열 방지 및 배터리 절약 모드.
-
----
-
-## 🔬 핵심 연산 원리 (How it Works)
-
-### 1. 4차원 시공간(4D Spatio-Temporal) 세그먼트별 미래 태양 위치 연산
-각 도로 구간 $i$마다 차량의 예상 진입 시각 $T_i$를 구하여 해당 시점의 태양 고도($\theta_{s, i}$) 및 방위각($\phi_{\text{sun}, i}$)을 개별 산출합니다.
-
-$$T_i = T_{\text{start}} + \left( \frac{\sum_{k=1}^{i-1} d_k + \frac{d_i}{2}}{D_{\text{total}}} \right) \times T_{\text{total}}$$
-
-* $(\theta_{s, i}, \phi_{\text{sun}, i}) = \text{SunCalc}(T_i, \text{lat}_i, \text{lng}_i)$
-
-### 2. 태양 노출 추정 감소율 연산 ($\Delta E_{\text{solar}}$)
-최단 경로 대비 대안 경로의 상대적인 태양 노출 추정 감소율입니다. 실제 UV 선량이 아닙니다:
-
-$$\Delta E_{\text{solar}} = \left( 1 - \frac{\sum_{i \in \text{Alternative}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{Fastest}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100$$
-
-* $\text{Alternative}$ / $\text{Fastest}$: 추천 우회 경로 / 최단 기본 경로
-* $\theta_{s, i}$: 구간 $i$ 통과 시점의 실시간 태양 고도각 (Solar Elevation Angle at $T_i$)
-* $S_i$: 도로 방향과 태양각으로 추정한 그늘 가능성 (Shade Possibility Estimate, $0.0 \sim 1.0$)
-* $\Delta t_i$: 해당 도로 구간 주행 소요 시간 (초)
-
-### 3. 전면 유리창 역광 위험도 연산 수식 ($\text{GlareRisk}_i$)
-$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right)$$
-
-* **적용 조건**: 주행 방향과 태양 방위각 차이 $|\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ$ 및 태양 고도 $0^\circ < \theta_{s, i} < 25^\circ$ (조건 미충족 시 $\text{GlareRisk}_i = 0$)
-* $\phi_{\text{road}, i}$: 차량 주행 도로 방위각 / $\phi_{\text{sun}, i}$: $T_i$ 시점의 실시간 태양 방위각 (Sun Azimuth)
-
----
-
-## 🛠️ 기술 스택 & 오픈 API (Tech Stack)
-
-| 구분 | 기술 / 오픈 API 명세 |
+| 앱 표시 | 의미 |
 | :--- | :--- |
-| **Framework** | Ionic Capacitor 6 (Native Android Wrapper) |
-| **Map Rendering** | Leaflet.js 1.9.4 (100% Local Bundled) |
-| **Icons & Fonts** | FontAwesome 6 (Local WebFonts Asset Packaging) |
-| **Routing Engine** | Open Source Routing Machine (`OSRM Driving API`) |
-| **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
-| **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
-| **Solar Calculations** | Astronomical AA+ Julian Day Formulas (`SunCalc.js`) |
-| **Building / Terrain Occlusion** | GitHub precomputed 5 km scene tiles for the United States (currently Northeast, Midwest, South, and West releases) → Overpass + OpenTopoData fallback (bounded ray probes) |
-| **Scene Tile Archive** | fflate (MIT) for local ZIP tile extraction |
-| **Audio & TTS** | Capacitor Native TextToSpeech & Web Audio Synth |
+| **정밀 장면** | 비교에 필요한 건물·터널·지형 데이터를 확보해 2.5D 태양 광선 교차를 계산한 결과 |
+| **부분 장면** | 확보된 구간에는 장면 계산을 적용하고, 데이터가 부족한 구간에는 공통 휴리스틱을 적용한 결과 |
+| **휴리스틱** | 장면 데이터를 사용할 수 없어 태양 위치와 도로 방향을 중심으로 계산한 결과 |
+| **야간** | 태양 고도가 충분히 낮아 장면 차광 분석이 필요하지 않은 상태 |
 
----
+건물 높이 태그가 없으면 층수 또는 보수적인 기본 높이를 사용할 수 있고, DEM은 유한한 해상도의 표본입니다. 따라서 정밀 장면도 실제 건축물의 완전한 3D 모델이나 측정된 차광률을 의미하지 않습니다.
 
-## 사전계산 장면 Release / Precomputed Scene Releases
+## 미국 사전계산 장면 데이터
 
-앱은 경로 주변의 5km 장면 타일을 GitHub Release에서 먼저 내려받아 로컬에 캐시합니다. 타일이 없거나 오래되었거나 다운로드에 실패하면 Overpass/OpenTopoData를 시도하고, 외부 장면 데이터도 사용할 수 없을 때 공통 휴리스틱으로 fallback합니다.
+미국 내 경로에서는 필요한 **5km 장면 타일만** GitHub Release에서 내려받아 기기에 캐시합니다. 앱 시작 시 미국 전체 데이터를 받지 않으며, 다음 주행부터 캐시된 타일을 재사용합니다.
 
-| 권역 | Tile 수 | Release asset |
-| :--- | ---: | ---: |
-| [Northeast hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v1) | 7,221 | ZIP 333개 |
-| [Midwest hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v1) | 43,668 | ZIP 376개 |
-| [South hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v1) | 47,524 | ZIP 388개 |
-| [West hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v1) | 42,575 | ZIP 539개 |
+경로가 둘 이상의 데이터 권역을 통과하면 각 권역의 필요한 타일을 함께 사용합니다. 특정 타일이 없거나 다운로드에 실패하면 사용 가능한 구간은 부분 장면으로 유지하고, 나머지 구간은 휴리스틱으로 전환합니다. 사전계산 타일을 사용할 수 없는 경우에는 제한된 Overpass/OpenTopoData 조회를 시도할 수 있습니다.
 
-원본 PBF/HGT, 중간 인덱스, Release ZIP, APK 바이너리는 Git에 커밋하지 않습니다.
-장면 manifest에는 `schemaVersion`, `dataVersion`, `generatedAt`, OSM extract 시각/URL/SHA-256, DEM 데이터셋 버전이 기록됩니다. 값을 확인할 수 없는 기존 아카이브는 추측하지 않고 `null`로 둡니다. 장면을 갱신할 때는 새 PBF/HGT를 준비한 뒤 `npm run scene:build`와 `npm run scene:package`를 지역별 환경변수로 실행하고, 새 `scene-us-<region>-hybrid-vN` Release를 발행한 후 manifest의 `releaseTag`와 `baseUrl`을 함께 갱신합니다.
+<details>
+<summary>장면 데이터 Release 및 버전 정보</summary>
 
----
+| 데이터 권역 | 5km 타일 | v2 ZIP 자산 | Release |
+| :--- | ---: | ---: | :--- |
+| Northeast | 7,221 | 478 | [scene-us-northeast-hybrid-v2](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v2) |
+| Midwest | 43,668 | 899 | [scene-us-midwest-hybrid-v2](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v2) |
+| South | 47,524 | 899 | [scene-us-south-hybrid-v2](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v2) |
+| West | 42,575 | 899 | [scene-us-west-hybrid-v2](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v2) |
 
-## 💻 소스코드 안드로이드 빌드 방법 (How to Build)
+각 manifest에는 타일과 ZIP의 대응 관계, 파일 크기, SHA-256, 생성 시각과 데이터 출처 메타데이터가 기록됩니다. ZIP 전체를 메모리에 펼치지 않고 경로에 필요한 JSON 항목만 Worker에서 선택적으로 해제·파싱합니다.
 
-개발자가 소스코드를 직접 수정하여 APK를 빌드하려면 아래 명령어를 순서대로 실행하세요.
+</details>
 
-### 1. 의존성 설치 및 씽크
+## 설치와 실행
+
+현재 제품 지원과 검증의 중심은 Android입니다. 위치 권한을 허용하지 않아도 장소 검색은 사용할 수 있지만, 현재 위치 출발과 실시간 주행 안내에는 위치 권한과 GPS 신호가 필요합니다.
+
+앱의 지도, 주소 검색, 경로 계산과 처음 사용하는 장면 타일 다운로드에는 인터넷 연결이 필요합니다. 다운로드한 장면 타일은 로컬 캐시에 보관되지만, 실제 도로 경로는 오프라인에서 새로 계산하지 않습니다.
+
+## 알아두어야 할 점
+
+- 그늘·눈부심·태양 노출 감소율은 실제 UV 선량, 차량 내부 온도, 의학적 보호 효과 또는 안전을 보장하지 않습니다.
+- 경로 계산은 무료 공개 OSRM 서비스에 의존하므로 장애나 rate limit으로 실패할 수 있습니다.
+- 주소 검색과 역지오딩은 Nominatim·Photon 상태와 데이터 품질에 영향을 받습니다.
+- 제한속도와 도로 규칙은 OSM 태그 기반이며 실제 표지판과 다르거나 오래되었을 수 있습니다.
+- 무료도로 옵션은 가능한 후보에서 통행료 태그를 회피하지만 모든 지역의 통행료 정보를 보증하지 않습니다.
+- 지도 타일, 검색, 경로와 일부 장면 fallback은 외부 네트워크가 필요합니다.
+- Android 기종과 OS의 절전 정책에 따라 백그라운드 위치 및 PiP 동작이 달라질 수 있습니다.
+
+## 외부 서비스와 개인정보
+
+기능 사용 시 위치, 경로 좌표 또는 검색어가 아래 외부 서비스로 전송될 수 있습니다.
+
+| 목적 | 서비스 |
+| :--- | :--- |
+| 도로 경로 계산 | OSRM |
+| 장소·주소 검색 및 국가 판별 | OSM Nominatim, Photon by Komoot |
+| 도로 규칙·장면 fallback | OSM Overpass API |
+| 지형 fallback | OpenTopoData ASTER30m |
+| 지도 표시 | Esri, CARTO, OpenStreetMap 기반 타일 |
+| 사전계산 장면 다운로드 | GitHub Releases |
+
+공개 서비스는 이용 제한, 장애 또는 정책 변경이 발생할 수 있습니다. 앱은 외부 장면 데이터 실패 시 실제 OSRM 경로 자체를 버리지 않고, 가능한 범위에서 휴리스틱 분석으로 전환합니다.
+
+## 개발 환경과 빌드
+
+필요한 환경:
+
+- Node.js 20+
+- JDK 17
+- Android Studio 또는 Android SDK
+- 저장소에 포함된 Gradle Wrapper
+
 ```bash
 npm ci
+npm test
 npx @capacitor/cli sync android
 ```
 
-### 2. 안드로이드 APK 빌드 실행
+개발용 debug APK:
+
 ```cmd
-cmd /c "build_apk.bat"
+android\gradlew.bat assembleDebug
 ```
-빌드가 완료되면 루트 디렉토리에 **`SolarLessNavi_v1.0.apk`**가 생성됩니다.
 
-릴리스 빌드에는 JDK 17, Android SDK/Gradle 및 서명 키스토어가 필요합니다. 키스토어와 비밀번호는 저장소에 넣지 말고 사용자 Gradle properties 또는 다음 환경변수로만 제공합니다: `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`. 값이 없으면 스크립트는 실패하며 debug APK를 release APK로 복사하지 않습니다. 서명 없이 기능만 확인하려면 `android\gradlew.bat assembleDebug`를 사용하세요. `npm test`도 빌드 전 실행하세요.
+서명된 release APK:
 
-### 실행 범위와 한계
-* 경로 계산은 무료 공개 OSRM 서비스에 의존하며, 네트워크 장애나 이용 제한이 발생할 수 있습니다.
-* Nominatim, Photon, Overpass 및 지도 타일(Esri/CARTO)을 사용할 때 검색어와 위치 정보가 해당 외부 서비스로 전송될 수 있습니다.
-* 지역별 장면 타일은 앱 시작 시 전체를 받지 않습니다. 경로 주변 5km 타일만 필요할 때 다운로드하고 IndexedDB에 캐시합니다. 해당 지역의 hybrid manifest를 먼저 확인하며, 타일이 없거나 GitHub 다운로드가 실패하면 기존 Overpass → 휴리스틱 순서로 안전하게 fallback합니다.
-* 시간은 OSRM geometry/step을 재사용하면서 시간대별 고정 보정을 적용한 **예상시간**이며 실시간 교통 정보가 아닙니다. 시간 슬라이더 변경은 OSRM을 다시 호출하지 않고 태양 분석을 갱신합니다.
-* 건물·터널·지형 데이터가 조회되면 제한된 2.5D 광선 교차 결과를 반영하지만, 데이터 범위·높이 태그·DEM 해상도에 따라 **휴리스틱, 부분 장면, 정밀 장면** 계층으로 표시됩니다. 역할별로 같은 계층의 최단 기준과만 비교하며, 장면 API 실패 시 해당 역할은 휴리스틱으로 fallback합니다. 실제 차광률, UV 선량, 온도 또는 안전을 보장하지 않습니다.
-* 공개 OSRM, Overpass, OpenTopoData, Nominatim/Photon 및 Esri/CARTO 타일은 rate limit·장애·정책 변경이 있을 수 있습니다. 지도 출처 표시는 라이선스 조건상 제거할 수 없습니다.
+```cmd
+build_apk.bat
+```
 
----
+릴리즈 서명 정보는 저장소 밖에서 다음 환경변수 또는 사용자 Gradle properties로 제공해야 합니다.
 
-## 📜 오픈소스 및 데이터 출처 고지 (Open Source Credits)
+- `RELEASE_STORE_FILE`
+- `RELEASE_STORE_PASSWORD`
+- `RELEASE_KEY_ALIAS`
+- `RELEASE_KEY_PASSWORD`
+- `EXPECTED_SIGNING_CERT_SHA256` — 선택적 인증서 고정 검증
 
-본 프로젝트는 아래의 오픈소스 프로젝트 및 오픈 API를 활용하여 개발되었습니다.
+`build_apk.bat`는 JDK와 서명 설정을 확인하고, 빌드 결과를 `apksigner`로 검증한 후 루트에 `SolarLessNavi_v1.0.apk`를 만듭니다.
 
-* **지도 데이터 및 경로 검색:** Map data © [OpenStreetMap](https://openstreetmap.org) contributors ([ODbL 라이선스](https://opendatacommons.org/licenses/odbl/) 준수)
-* **지도 타일 제공자:** [Esri World Street/Imagery](https://www.esri.com/en-us/arcgis/products/arcgis-online/overview) 및 [CARTO](https://carto.com/attributions) (각 제공자의 이용 조건과 attribution 준수 필요)
-* **지도 렌더링 엔진:** [Leaflet.js](https://leafletjs.com/) (BSD 2-Clause 라이선스)
-* **하이브리드 앱 프레임워크:** [Ionic Capacitor](https://capacitorjs.com/) (MIT 라이선스)
-* **아이콘 및 폰트:** [FontAwesome 6](https://fontawesome.com/) (CC BY 4.0 / SIL OFL 1.1 / MIT 라이선스)
-* **위치 검색 API:** [Photon Komoot API](https://photon.komoot.io/) (Apache 2.0 라이선스) & OSM Nominatim
-* **건물·터널 데이터:** [OpenStreetMap Overpass API](https://overpass-api.de/) (OSM 데이터 및 ODbL 조건 준수)
-* **지형 표본:** [OpenTopoData ASTER30m](https://www.opentopodata.org/datasets/aster/) 공개 DEM API (서비스 이용 제한 및 데이터 해상도 적용)
-* **태양 고도/방위각 계산:** [SunCalc.js](https://github.com/mourner/suncalc) (BSD 2-Clause 라이선스)
+### 장면 데이터 도구
 
----
+지역 장면 데이터를 유지보수할 때 사용합니다. 일반 앱 빌드에는 필요하지 않습니다.
 
-## ⚖️ 라이선스 (License)
+```bash
+npm run scene:build
+npm run scene:package
+node tools/validate-scene-release.mjs
+```
 
-본 프로젝트는 **[GNU Affero General Public License v3.0 (GNU AGPL-3.0)](https://www.gnu.org/licenses/agpl-3.0)** 라이선스를 적용합니다.
+상세 설정은 [`data/scene`](data/scene) 아래의 지역별 manifest와 README를 참고하세요.
 
-* **저작자 (Author)**: **권혁재 M.D., Ph.D. (Hyeokjae Kwon, M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
-* **자유로운 사용 및 공유**: 소스코드 조회, 실행, 수정, 연구 및 학술적 재배포가 자유롭게 보장됩니다.
-* **강력한 카피레프트 (Strong Copyleft)**: 본 프로젝트의 소스코드를 수정하거나 이를 기반으로 파생된 소프트웨어 및 네트워크/클라우드 서비스(SaaS)를 운영할 경우, 동일하게 **AGPL-3.0 라이선스 하에 전체 소스코드를 의무적으로 공개**해야 합니다. (특정 기업/단체의 독점 폐쇄 상용화 방지)
+## 기술 스택과 데이터 출처
 
-<br><hr><br>
-
-# ☀️ SolarLess Navi - Sun Glare & Shade-Aware Smart Navigation (Android)
-
-[🇰🇷 한국어](#-solarless-navi---햇빛을-피하는-스마트-내비게이션-android) | [🇺🇸 English](#-solarless-navi---sun-glare--shade-aware-smart-navigation-android)
-
-[![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-blue.svg?style=for-the-badge&logo=android)](https://developer.android.com)
-[![Author](https://img.shields.io/badge/Author-Hyeokjae%20Kwon%2C%20M.D.%2C%20Ph.D.-orange.svg?style=for-the-badge)](https://hyeokjaekwon26.github.io/)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
-
-> **"Compare sun direction and road direction with experimental exposure indicators."**
-> 
-> **SolarLess Navi** is an Android-focused experimental navigation application that uses current solar position (azimuth/elevation) and real OSRM/OpenStreetMap routes to compare **① higher estimated shade-possibility routes** and **② lower estimated glare-possibility routes**. When available, OSM building/tunnel geometry and public DEM samples are used for bounded 2.5D sun-ray obstruction checks; this is not live traffic or a full 3D survey.
-
----
-
-## 👨‍💻 Developer Information
-* **Author / Developer**: **Hyeokjae Kwon, M.D., Ph.D. (권혁재 M.D., Ph.D.)**
-* **Official Website**: [https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/)
-
----
-
-## ✨ Core Dual Pillars
-
-### 🌲 1. Estimated Shade-Possibility Route Guidance
-* **Scene-assisted estimate**: Uses a precomputed 5 km tile for the United States where available (currently published through Northeast, Midwest, South, and West releases), then falls back to OSM Overpass building/tunnel geometry and OpenTopoData ASTER30m elevation samples for bounded 2.5D sun-ray checks. Missing or failed data falls back to the road-direction heuristic and is labeled accordingly.
-* **Heuristic estimate**: Building heights without tags use a level-based or conservative default height, while terrain is sampled along a few sun-facing probes; this is not a complete 3D building/terrain model.
-* **Experimental comparison only**: It does not measure actual shade coverage, cabin temperature, or UV dose.
-
-### 🕶️ 2. Glare-Free Avoidance Route Guidance
-* **Astronomical calculations**: Computes solar azimuth and elevation estimates in real time based on driver GPS coordinates.
-* **Windshield Glare Protection**: Re-routes around roads heading directly into low-angle morning/evening sun glare.
-
-### ☀️ 3. Estimated Solar Exposure Reduction (%) & 4D Spatio-Temporal Simulation
-* **4D Spatio-Temporal Solar Estimate**: Recomputes solar azimuth/elevation for each segment at its projected arrival time ($T_i = T_{\text{start}} + \Delta t_i$), using the OSRM geometry and time-of-day adjusted expected duration. It is an experimental estimate, not a full physical simulation.
-* **Experimental estimate labels**: Displays estimated glare possibility and relative solar-exposure reduction on every route card; these are not measured or medically validated values.
-* **Single Route & Night Mode**: Reuses the same route when no meaningful alternative exists and labels shade/glare values as estimates. Night handling is an estimate after sunset.
-* **💡 Estimated direct-sun exposure reduction (%)**: The app does not measure vehicle glass, tinting, skin dose, or medical protection. The percentage is a relative experimental indicator calculated against the fastest route within the same analysis tier.
-
-### 🚥 4. OSM Tag Lookup for Speed Limits & Road Signs
-* Queries nearby OpenStreetMap `Overpass API` tags for speed limits, STOP signs, tunnels, and toll information. Coverage and freshness depend on OSM data.
-* **Regional units**: Explicit `mph`/`km/h` tags and reverse-geocoded ISO country codes take priority; uncertain locations use the international km/h default.
-* **USA (MUTCD Standard)**: White Rectangular Speed Limit Sign (mph) & 8-sided STOP sign.
-
-### 🗣️ 5. Smart Adaptive Voice Guidance (TTS & Warnings)
-* Announces solar-exposure estimates as informational guidance only; they are not measured UV protection claims.
-* Alerts driver with two-tone automotive chimes when approaching severe glare zones or exceeding speed limits.
-
-### ⚙️ 6. Smart Convenience Features
-* **Nearby rest/parking search**: Uses place-search results as waypoint candidates; it does not verify that a place is actually shaded.
-* **Smart Route Mode Memory**: Memorizes the driver's last selected route mode (Fastest, Glare-Free, Shade) and automatically sets it as the default for subsequent trips.
-* **25s Auto-Recenter Ring HUD**: Automatically recenters the map to the vehicle position after 25 seconds of inactivity.
-* **Local static asset bundling**: Fonts, icons, and the map renderer are bundled, but map tiles, place search, road rules, and routing still require external network services.
-* **High-Resolution Aerial Satellite Map View**: ESRI World Imagery high-resolution aerial satellite layer toggle.
-* **Night & Tunnel Auto Dark Mode**: Automatically shifts to dark navigation theme after sunset or in tunnels.
-* **Toll-Free Preference**: Avoid toll roads and highways with dedicated routing filters.
-* **OLED Thermal & Battery Saver**: Reduces power consumption and device heat during long navigation sessions.
-
----
-
-## 🔬 How It Works (Physics & Math Model)
-
-### 1. 4D Spatio-Temporal Future Solar Position per Segment
-For each road segment $i$, the vehicle's projected arrival timestamp $T_i$ is computed:
-
-$$T_i = T_{\text{start}} + \left( \frac{\sum_{k=1}^{i-1} d_k + \frac{d_i}{2}}{D_{\text{total}}} \right) \times T_{\text{total}}$$
-
-* $(\theta_{s, i}, \phi_{\text{sun}, i}) = \text{SunCalc}(T_i, \text{lat}_i, \text{lng}_i)$
-
-### 2. Relative Solar-Exposure Estimate ($\Delta E_{\text{solar}}$)
-$$\Delta E_{\text{solar}} = \left( 1 - \frac{\sum_{i \in \text{Alternative}} \sin(\theta_{s, i}) \cdot (1 - S_i \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_i) \cdot \Delta t_i}{\sum_{j \in \text{Fastest}} \sin(\theta_{s, j}) \cdot (1 - S_j \cdot 0.85) \cdot (0.35 + 0.65 \cdot \text{GlareRisk}_j) \cdot \Delta t_j} \right) \times 100$$
-
-* $\text{Alternative}$ / $\text{Fastest}$: Recommended Alternative Route / Baseline Fastest Route
-* $\theta_{s, i}$: Real-time Solar Elevation Angle at $T_i$
-* $S_i$: Heuristic road-segment shade-possibility estimate ($0.0 \sim 1.0$), not measured building/terrain coverage
-* $\Delta t_i$: Travel duration on segment $i$ (seconds)
-
-### 3. Front Windshield Glare Risk Formula ($\text{GlareRisk}_i$)
-$$\text{GlareRisk}_i = \left( 1 - \frac{|\phi_{\text{road}, i} - \phi_{\text{sun}, i}|}{45^\circ} \right) \times \left( 1 - \frac{\theta_{s, i}}{25^\circ} \right)$$
-
-* **Conditions**: Evaluated when $|\phi_{\text{road}, i} - \phi_{\text{sun}, i}| \le 45^\circ$ and $0^\circ < \theta_{s, i} < 25^\circ$ (otherwise $\text{GlareRisk}_i = 0$)
-* $\phi_{\text{road}, i}$: Vehicle Road Bearing / $\phi_{\text{sun}, i}$: Solar Azimuth Angle at $T_i$
-
----
-
-## 🛠️ Tech Stack & Open APIs
-
-| Category | Specifications |
+| 구분 | 기술·데이터 |
 | :--- | :--- |
-| **Framework** | Ionic Capacitor 6 (Native Android Wrapper) |
-| **Map Rendering** | Leaflet.js 1.9.4 (100% Local Bundled) |
-| **Icons & Fonts** | FontAwesome 6 (Local WebFonts Asset Packaging) |
-| **Routing Engine** | Open Source Routing Machine (`OSRM Driving API`) |
-| **Speed Limit & Rules** | OpenStreetMap `Overpass API` (`maxspeed`, `highway=stop`) |
-| **Place Search** | OSM `Nominatim` & `Photon Komoot API` |
-| **Solar Calculations** | Astronomical AA+ Julian Day Formulas (`SunCalc.js`) |
-| **Building / Terrain Occlusion** | GitHub precomputed 5 km scene tiles for the United States (currently Northeast, Midwest, South, and West releases) → Overpass + OpenTopoData fallback (bounded ray probes) |
-| **Scene Tile Archive** | fflate (MIT) for local ZIP tile extraction |
-| **Audio & TTS** | Capacitor Native TextToSpeech & Web Audio Synth |
+| Android wrapper | [Capacitor 6](https://capacitorjs.com/) — MIT |
+| 지도 렌더링 | [Leaflet 1.9.4](https://leafletjs.com/) — BSD-2-Clause |
+| 도로·건물·터널 데이터 | [OpenStreetMap](https://www.openstreetmap.org/) contributors — [ODbL](https://opendatacommons.org/licenses/odbl/) |
+| 경로 계산 | [OSRM](https://project-osrm.org/) |
+| 장소 검색 | [Nominatim](https://nominatim.org/), [Photon](https://photon.komoot.io/) |
+| 지도 타일 | [Esri](https://www.esri.com/en-us/arcgis/products/arcgis-online/overview), [CARTO](https://carto.com/attributions) |
+| 지형 표본 | [OpenTopoData ASTER30m](https://www.opentopodata.org/datasets/aster/) |
+| 태양 위치 | [SunCalc](https://github.com/mourner/suncalc) — BSD-2-Clause |
+| ZIP 처리 | [fflate](https://github.com/101arrowz/fflate) — MIT |
+| 아이콘·글꼴 | [Font Awesome 6](https://fontawesome.com/) — CC BY 4.0 / SIL OFL 1.1 / MIT |
+
+지도 화면의 출처 표시는 각 데이터·타일 제공자의 라이선스 조건에 따라 유지됩니다.
+
+## 라이선스
+
+이 프로젝트는 [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0)으로 배포됩니다. 수정·재배포하거나 이 코드를 기반으로 네트워크 서비스를 운영할 때는 AGPL-3.0의 소스 공개 의무를 확인하세요.
+
+## 개발자
+
+**Hyeokjae Kwon, M.D., Ph.D. (권혁재)**
+
+[https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/)
 
 ---
 
-## Current precomputed scene releases / 현재 사전계산 장면 Release
+<details>
+<summary><strong>English summary</strong></summary>
 
-The app checks regional 5 km scene tile releases first, downloads only route-corridor tiles, and caches them locally. If a tile is missing or stale, it falls back to Overpass/OpenTopoData and then to the common heuristic tier.
+### SolarLess Navi
 
-| Region | Tiles | Release assets |
-| :--- | ---: | ---: |
-| [Northeast hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v1) | 7,221 | 333 ZIPs |
-| [Midwest hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v1) | 43,668 | 376 ZIPs |
-| [South hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v1) | 47,524 | 388 ZIPs |
-| [West hybrid v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v1) | 42,575 | 539 ZIPs |
+SolarLess Navi is an experimental Android navigation app that compares the fastest, lower-glare, and shade-preferred routes using solar position, road direction, and—when available—precomputed U.S. building, tunnel, and terrain scene tiles.
 
-Release ZIPs, source PBF/HGT files, intermediate indexes, and APK binaries are not committed to Git.
-Scene manifests record `schemaVersion`, `dataVersion`, `generatedAt`, OSM extract timestamp/URL/SHA-256, and the DEM dataset version. Unknown values remain `null` rather than being guessed. To refresh a region, prepare a new PBF/HGT source, run `npm run scene:build` and `npm run scene:package` with that region's environment variables, publish a new `scene-us-<region>-hybrid-vN` Release, and update `releaseTag`/`baseUrl` together.
+The app displays an initial common-heuristic result quickly and refines competitive routes as scene data becomes available. It downloads only the 5 km tiles required around the route, caches them locally, and can combine multiple regional releases for boundary-crossing trips. Missing coverage is explicitly reported as partial scene analysis and falls back to the same heuristic model for uncovered segments.
 
----
+#### Important limitations
 
-## 💻 How to Build (Android APK)
+- Shade, glare, and exposure-reduction values are experimental estimates, not measured UV dose, temperature, medical protection, or a safety guarantee.
+- Travel duration is an OSRM duration with a time-of-day adjustment, not live traffic.
+- A network connection is required for new road routes, map tiles, search, and uncached scene data.
+- Location, route coordinates, or search terms may be sent to OSRM, Nominatim, Photon, Overpass, OpenTopoData, GitHub Releases, Esri, or CARTO.
+- Public services can be unavailable or rate-limited; scene failure falls back to heuristic analysis without inventing a road route.
 
-To build the APK from source:
+#### Build
+
+Node.js 20+, JDK 17, and the Android SDK are required.
 
 ```bash
 npm ci
+npm test
 npx @capacitor/cli sync android
-cmd /c "build_apk.bat"
 ```
 
-The compiled APK will be generated at **`SolarLessNavi_v1.0.apk`**.
+Use `android\gradlew.bat assembleDebug` for a debug build or `build_apk.bat` with an external signing keystore for a verified release APK.
 
-Release builds require JDK 17, Android SDK/Gradle, and a signing keystore. Keep the keystore and passwords outside the repository and provide `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD` as user Gradle properties or environment variables. Without them the script fails; it never copies a debug APK as a release APK. For an unsigned functional check use `android\gradlew.bat assembleDebug`. Run `npm test` before building.
+This project is licensed under GNU AGPL-3.0.
 
-### Scope and limitations
-* Routing depends on the free public OSRM service and may fail or be rate-limited.
-* Search terms and location data may be sent to Nominatim, Photon, Overpass, and the selected map-tile providers (Esri/CARTO).
-* United States scene tiles are downloaded only for the route corridor and cached locally; the app does not download the entire country at startup. The current precomputed releases are split into Northeast, Midwest, South, and West archives. If a GitHub tile is unavailable, it tries Overpass/OpenTopoData and then uses the heuristic tier.
-* Durations are OSRM geometry/step durations with a fixed time-of-day adjustment, not live traffic information. Moving the time slider reuses the geometry and refreshes solar analysis without another OSRM request.
-* Buildings, tunnels, and terrain can adjust shade scores when optional OSM/DEM requests succeed. Routes expose heuristic, partial-scene, or precision-scene metadata; each role compares only within the same tier and falls back to heuristic when its scene data fails. These estimates do not guarantee shade, direct-sun reduction, temperature, or safety.
-* Public OSRM, Overpass, OpenTopoData, Nominatim/Photon, and Esri/CARTO tile services can be rate-limited or unavailable. Attribution links are required by the providers' licenses and cannot be removed.
-* On Android, navigation starts a visible location foreground service and may enter Picture-in-Picture when enabled. PiP and location behavior still require validation on physical Android API 26/30/31/34 devices. Debug builds expose a bounded diagnostic panel; release builds do not create it and do not include full GPS coordinates in logs.
-* The precomputed tiles store fixed OSM building/tunnel geometry and DEM samples. The app performs the time-dependent solar ray check at runtime; they are not a complete precomputed 3D horizon model.
-* Browser GPS and the native foreground service use one timestamp/accuracy-aware navigation pipeline. A recent native fix is restored on app resume, and explicit rerouting is the only operation allowed to replace the route frozen when guidance starts.
-* Scene ZIP inflation and JSON parsing use a bounded Worker fallback when available. Regional manifests can be combined for a boundary-crossing route; incomplete coverage is reported as partial and is never labelled precision.
-* To record a trustworthy source date during scene generation, set `SCENE_OSM_EXTRACT_TIMESTAMP` (or provide `SCENE_OSM_SOURCE_METADATA`). The local PBF file mtime is stored only as `localFileModifiedAt`, never as the extract date.
-
----
-
-## 📜 Open Source & Data Credits
-
-This project is built using the following open-source libraries and open data APIs:
-
-* **Map Data & Road Network:** Map data © [OpenStreetMap](https://openstreetmap.org) contributors ([ODbL License](https://opendatacommons.org/licenses/odbl/))
-* **Map Tile Providers:** [Esri World Street/Imagery](https://www.esri.com/en-us/arcgis/products/arcgis-online/overview) and [CARTO](https://carto.com/attributions) (follow each provider's attribution and usage terms)
-* **Map Rendering Engine:** [Leaflet.js](https://leafletjs.com/) (BSD 2-Clause License)
-* **Hybrid App Framework:** [Ionic Capacitor](https://capacitorjs.com/) (MIT License)
-* **Icons & Web Fonts:** [FontAwesome 6](https://fontawesome.com/) (CC BY 4.0 / SIL OFL 1.1 / MIT License)
-* **Place Search & Geocoding:** [Photon by Komoot](https://photon.komoot.io/) (Apache 2.0 License) & OSM Nominatim
-* **Building / Tunnel Data:** [OpenStreetMap Overpass API](https://overpass-api.de/) (OSM data and ODbL terms apply)
-* **Terrain Samples:** [OpenTopoData ASTER30m](https://www.opentopodata.org/datasets/aster/) public DEM API (subject to service limits and dataset resolution)
-* **Solar Astronomical Calculations:** [SunCalc.js](https://github.com/mourner/suncalc) (BSD 2-Clause License)
-
----
-
-## ⚖️ License (GNU AGPL-3.0)
-
-This project is licensed under the **[GNU Affero General Public License v3.0 (GNU AGPL-3.0)](https://www.gnu.org/licenses/agpl-3.0)**.
-
-* **Author**: **Hyeokjae Kwon, M.D., Ph.D. (권혁재 M.D., Ph.D.)** ([https://hyeokjaekwon26.github.io/](https://hyeokjaekwon26.github.io/))
-* **Freedom to Use & Share**: You are free to run, study, modify, and distribute this software under the terms of the AGPL-3.0.
-* **Strong Copyleft Requirement**: Any modifications, derivative works, or network/cloud-hosted services based on this project must also make their complete source code publicly available under the AGPL-3.0 license.
-
-## Runtime and Android limitations
-
-The route duration is an OSRM duration with a time-of-day adjustment, not live traffic. Shade, glare and exposure percentages are experimental estimates; they are not measured UV dose or medical protection. A real road route is not calculated offline: when OSRM fails, navigation remains disabled instead of using a synthetic curve.
-
-Location, search, road-rule and scene data may be sent to OSRM, Nominatim, Photon, Overpass, OpenTopoData and map tile providers. Public services can rate-limit or fail. The Android build declares optional Picture-in-Picture support on Android 8.0+ but does not request overlay or background-location permission. The current web GPS watcher is not a foreground service, so continuous background tracking is not promised. First-run onboarding explains the location request and permits continuing without GPS.
-
-## Build and release safety
-
-Node.js 20+, Android Studio/SDK, JDK 17 and the Gradle wrapper are required. `android\\gradlew.bat assembleDebug` creates a debug-signed APK for local testing. A release APK requires a private keystore supplied through Gradle properties or `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD`. `build_apk.bat` verifies the release with `apksigner` and will not copy a debug or unsigned APK. Keep the keystore, passwords, certificate fingerprint and mapping files outside the repository; set `EXPECTED_SIGNING_CERT_SHA256` when a certificate pin is required.
-
-The supported product target remains Android-focused. Runtime dependencies have no known audit findings in the production-only install; the development Capacitor CLI currently reports a transitive `tar` advisory that needs a separately tested Capacitor major upgrade.
+</details>
