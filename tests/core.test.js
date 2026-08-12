@@ -332,6 +332,140 @@ test('precomputed scene packs are loaded once, cached, and produce a precision s
     }
 });
 
+test('missing padded tiles retain covered segments as a hybrid scene', async () => {
+    const originalFetch = sandbox.fetch;
+    const manifestUrl = 'https://example.test/partial/manifest.json';
+    const terrain = [];
+    for (let lat = 40.98; lat <= 41.06; lat += 0.0009) {
+        for (let lng = -74.02; lng <= -73.92; lng += 0.0011) terrain.push([Number(lat.toFixed(6)), Number(lng.toFixed(6)), 20]);
+    }
+    const tilePayload = { schema: 1, buildings: [], tunnels: [], terrain };
+    const files = {};
+    const tiles = {};
+    for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) {
+        if (x === 1 && y === 1) continue;
+        const key = `${x}:${y}`;
+        const file = `${x}_${y}.json`;
+        files[file] = require('fflate').strToU8(JSON.stringify(tilePayload));
+        tiles[key] = { pack: 'partial', file };
+    }
+    const zipBytes = require('fflate').zipSync(files, { level: 6 });
+    const manifest = {
+        schema: 2, region: 'PARTIAL', releaseTag: 'partial', baseUrl: 'https://example.test/partial',
+        tileSizeM: 5000, tilePaddingMeters: 4500, terrainSpacingM: 100,
+        grid: { latOrigin: 41, lngOrigin: -74, cosLat: Math.cos(42 * Math.PI / 180) },
+        packs: { partial: { path: 'partial.zip', bytes: zipBytes.length } }, tiles
+    };
+    sandbox.fetch = async url => String(url) === manifestUrl
+        ? { ok: true, status: 200, headers: { get: () => null }, json: async () => manifest }
+        : { ok: true, status: 200, arrayBuffer: async () => zipBytes.buffer.slice(zipBytes.byteOffset, zipBytes.byteOffset + zipBytes.byteLength) };
+    try {
+        SceneShadow.clearCaches();
+        const scene = await SceneShadow.fetchPrecomputedSceneForRoute(
+            [[-73.999, 41.001], [-73.9985, 41.0015]],
+            { precomputedManifestUrl: manifestUrl, precomputedRegionBounds: { south: 40, west: -75, north: 43, east: -69 }, dateObj: new Date('2026-06-21T12:00:00Z'), durationSec: 60 }
+        );
+        assert.ok(scene);
+        assert.equal(scene.precisionReady, false);
+        assert.equal(scene.partial, true);
+        assert.equal(scene.coverage.missingTiles, 1);
+        assert.ok(scene.coverage.coveredSegments > 0);
+        const analyzed = ShadowRouter.analyzeRouteSegments(
+            [[-73.999, 41.001], [-73.9985, 41.0015]], new Date('2026-06-21T12:00:00Z'), 60, null, scene
+        );
+        assert.equal(analyzed.analysisMode, 'hybrid-scene');
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.clearCaches();
+    }
+});
+
+test('precision sampling never exceeds the original OSRM point count', () => {
+    const coordinates = Array.from({ length: 80 }, (_, index) => [index * 0.01, Math.sin(index / 5) * 0.001]);
+    const sampling = ShadowRouter.buildPrecisionAnalysisGeometry({ geometry: { coordinates }, legs: [{ steps: [] }] });
+    assert.ok(sampling.analysisCoordinateCount <= coordinates.length);
+    assert.ok(sampling.analysisCoordinateCount <= 800);
+    assert.deepEqual(Array.from(sampling.coordinates[0]), coordinates[0]);
+    assert.deepEqual(Array.from(sampling.coordinates.at(-1)), coordinates.at(-1));
+});
+
+test('fully astronomical-night routes skip scene network work', async () => {
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    let calls = 0;
+    SceneShadow.fetchPrecomputedSceneForRoute = async () => { calls++; return null; };
+    SceneShadow.fetchSceneForRoute = async () => { calls++; return null; };
+    try {
+        const raw = { distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] };
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 0.01 }, new Date('2026-06-21T00:00:00Z'), false,
+            { candidates: [raw], preferredRouteRole: 'shade' }
+        );
+        assert.equal(calls, 0);
+        assert.equal(result.routes.fastest.isNight, true);
+    } finally {
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
+    }
+});
+
+test('boundary-crossing routes merge two regional releases with aligned profiles', async () => {
+    const originalFetch = sandbox.fetch;
+    const coordinates = [[-0.012, 0], [-0.004, 0], [0.004, 0], [0.012, 0]];
+    const terrain = [];
+    for (let lat = -0.05; lat <= 0.05; lat += 0.001) {
+        for (let lng = -0.08; lng <= 0.08; lng += 0.001) terrain.push([Number(lat.toFixed(5)), Number(lng.toFixed(5)), 15]);
+    }
+    function makeRegion(id, bounds) {
+        const files = {};
+        const tiles = {};
+        for (let x = -3; x <= 2; x++) for (let y = -2; y <= 1; y++) {
+            const key = `${x}:${y}`;
+            const file = `${id}-${x}_${y}.json`;
+            files[file] = require('fflate').strToU8(JSON.stringify({ schema: 1, buildings: [], tunnels: [], terrain }));
+            tiles[key] = { pack: id, file };
+        }
+        const zip = require('fflate').zipSync(files, { level: 1 });
+        return {
+            id, url: `https://example.test/${id}/manifest.json`, bounds, zip,
+            manifest: {
+                schema: 2, region: id, releaseTag: id, baseUrl: `https://example.test/${id}`,
+                tileSizeM: 5000, tilePaddingMeters: 4500, terrainSpacingM: 100,
+                grid: { latOrigin: 0, lngOrigin: 0, cosLat: 1 },
+                packs: { [id]: { path: `${id}.zip`, bytes: zip.length } }, tiles
+            }
+        };
+    }
+    const west = makeRegion('west-test', { south: -1, west: -1, north: 1, east: 0 });
+    const east = makeRegion('east-test', { south: -1, west: 0, north: 1, east: 1 });
+    const regions = [west, east];
+    const fetches = [];
+    sandbox.fetch = async url => {
+        fetches.push(String(url));
+        const region = regions.find(item => String(url).includes(`/${item.id}/`));
+        if (!region) throw new Error(`unexpected regional URL ${url}`);
+        if (String(url).endsWith('manifest.json')) return { ok: true, status: 200, headers: { get: () => null }, json: async () => region.manifest };
+        return { ok: true, status: 200, arrayBuffer: async () => region.zip.buffer.slice(region.zip.byteOffset, region.zip.byteOffset + region.zip.byteLength) };
+    };
+    try {
+        SceneShadow.clearCaches();
+        const scene = await SceneShadow.fetchPrecomputedSceneForRoute(coordinates, {
+            precomputedRegions: regions.map(({ id, url, bounds }) => ({ id, url, bounds })),
+            dateObj: new Date('2026-06-21T12:00:00Z'), durationSec: 180
+        });
+        assert.ok(scene);
+        assert.deepEqual(Array.from(scene.sceneCoverage.regions).sort(), ['east-test', 'west-test']);
+        assert.equal(scene.segmentCoverage.length, coordinates.length - 1);
+        assert.ok(scene.terrainProfiles.some(profile => profile.coordinateIndex <= 1));
+        assert.ok(scene.terrainProfiles.some(profile => profile.coordinateIndex >= 2));
+        assert.ok(fetches.some(url => url.includes('/west-test/')));
+        assert.ok(fetches.some(url => url.includes('/east-test/')));
+    } finally {
+        sandbox.fetch = originalFetch;
+        SceneShadow.clearCaches();
+    }
+});
+
 test('scene pack worker inflates and parses only requested JSON entries', () => {
     const valid = require('fflate').strToU8(JSON.stringify({ id: 'wanted' }));
     const invalid = require('fflate').strToU8('{not-json');
@@ -810,7 +944,7 @@ test('scene lookup prefers precomputed tiles before live Overpass fallback', asy
         fetchSceneForRoute: async () => { calls.push('overpass'); return null; }
     };
     try {
-        await ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false);
+        await ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date('2026-06-21T12:00:00Z'), false);
         assert.ok(calls.length >= 2);
         assert.equal(calls[0], 'precomputed');
         assert.equal(calls[1], 'overpass');
@@ -849,7 +983,7 @@ test('identical route groups invoke scene analysis once and return scene-tier re
         };
     };
     try {
-        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false));
+        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date('2026-06-21T12:00:00Z'), false));
         assert.equal(sceneCalls, 1);
         assert.equal(result.analysisMode, 'scene');
         assert.equal(result.routes.fastest.analysisMode, 'scene');
@@ -896,6 +1030,38 @@ test('partial scene failure falls back only the affected role comparison tier', 
         sandbox.fetch = originalFetch;
         SceneShadow.fetchSceneForRoute = originalSceneFetch;
         SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
+    }
+});
+
+test('uniform partial scenes remain a common hybrid comparison tier', async () => {
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    const rawRoutes = [
+        { distance: 1000, duration: 100, geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] },
+        { distance: 1100, duration: 110, geometry: { coordinates: [[0, 0], [0.005, 0.006], [0.01, 0]] }, legs: [{ steps: [] }] }
+    ];
+    SceneShadow.fetchPrecomputedSceneForRoute = async coordinates => ({
+        precisionReady: false,
+        partial: true,
+        origin: { lat: 0, lng: 0 },
+        coverage: { buildings: true, terrain: true, tunnels: true, coveredSegments: Math.max(1, coordinates.length - 1), segmentCount: coordinates.length - 1, segmentRatio: 1 },
+        segmentCoverage: Array.from({ length: Math.max(1, coordinates.length - 1) }, () => ({ buildings: true, terrain: true, tunnels: true, buildingGround: true })),
+        buildings: [], tunnels: [], terrainSamples: [], terrainProfiles: [],
+        source: 'mock partial regional scene'
+    });
+    SceneShadow.fetchSceneForRoute = async () => { throw new Error('live fallback should not be called'); };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 0.01 }, new Date('2026-06-21T12:00:00Z'), false,
+            { candidates: rawRoutes, preferredRouteRole: 'shade' }
+        );
+        assert.equal(result.analysisMode, 'hybrid-scene');
+        assert.ok(['hybrid-scene'].includes(result.routes.fastest.analysisMode));
+        assert.ok(['hybrid-scene'].includes(result.routes.shade.analysisMode));
+        assert.equal(result.routes.fastest.analyzed.analysisMode, 'hybrid-scene');
+    } finally {
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
     }
 });
 
@@ -1379,7 +1545,7 @@ test('time-only route analysis reuses OSRM geometry and makes no network request
     };
     try {
         const result = await ShadowRouter.fetchAndAnalyzeRoutes(
-            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false,
+            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date('2026-06-21T12:00:00Z'), false,
             { candidates: [candidate] }
         );
         assert.equal(fetchCalls, 0);
@@ -1529,7 +1695,7 @@ test('route analysis emits heuristic progress before non-blocking scene refineme
     };
     try {
         const result = await ShadowRouter.fetchAndAnalyzeRoutes(
-            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date(0), false,
+            { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, new Date('2026-06-21T12:00:00Z'), false,
             { onProgress: async progress => {
                 const first = phases.length === 0;
                 phases.push({

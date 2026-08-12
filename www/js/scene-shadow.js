@@ -1225,7 +1225,13 @@
         const maxTiles = Number(options.maxPrecomputedTiles || 256);
         if (!tileKeys.length || tileKeys.length > maxTiles) return null;
         if (options.signal && options.signal.aborted) throw new Error('scene request aborted');
-        if (tileKeys.some(key => !manifest.tiles[key])) return null;
+        const availableTileKeys = tileKeys.filter(key => manifest.tiles[key]);
+        const missingTileKeys = tileKeys.filter(key => !manifest.tiles[key]);
+        // Coastal cells, state boundaries and neighboring regional extracts
+        // can leave a few padded tiles absent. Do not discard every usable
+        // building/terrain tile; mark only affected route segments uncovered
+        // so the router applies its common heuristic to those segments.
+        if (!availableTileKeys.length) return null;
         const originCoordinate = coordinates[Math.floor(coordinates.length / 2)];
         const origin = { lat: Number(originCoordinate[1]), lng: Number(originCoordinate[0]) };
         const plan = makeTerrainPlan(coordinates, options);
@@ -1249,7 +1255,7 @@
             // Consume one tile at a time. Raw tile objects and non-relevant
             // building geometry become collectible immediately after this
             // callback instead of accumulating for the entire route.
-            processedTiles = await streamPrecomputedTiles(manifest, tileKeys, tile => {
+            processedTiles = await streamPrecomputedTiles(manifest, availableTileKeys, tile => {
                 const tileBuildingCandidates = [];
                 for (const building of tile.buildings || []) {
                     const key = String(building.id || `building:${JSON.stringify(building.polygon)}`);
@@ -1302,7 +1308,7 @@
             if (options.signal && options.signal.aborted) throw error;
             return null;
         }
-        if (processedTiles !== tileKeys.length) return null;
+        if (processedTiles !== availableTileKeys.length) return null;
         const terrainSamples = [...terrain.values()];
         const terrainGrid = buildTerrainGrid(terrainSamples);
         const profiles = plan.profiles.map(profile => {
@@ -1328,23 +1334,44 @@
         const relevantBuildings = [...buildings.values()];
         const buildingGrid = buildBuildingGrid(relevantBuildings);
         const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, (_, segmentIndex) => {
+            const segmentBaseTileKeys = [
+                sceneTileKeyForCoordinate(Number(coordinates[segmentIndex][1]), Number(coordinates[segmentIndex][0]), manifest),
+                sceneTileKeyForCoordinate(Number(coordinates[segmentIndex + 1][1]), Number(coordinates[segmentIndex + 1][0]), manifest)
+            ];
+            // Missing padding reduces ray coverage but should not erase the
+            // centerline's usable DEM/building data. A segment is uncovered
+            // only when its actual road tile is absent.
+            const tilesComplete = segmentBaseTileKeys.length > 0 && segmentBaseTileKeys.every(key => !!manifest.tiles[key]);
             const nearbyProfile = profiles
                 .filter(profile => profile.anchor && profile.elevations.length > 0 && profile.elevations.every(finite))
                 .sort((a, b) => Math.abs(a.coordinateIndex - segmentIndex) - Math.abs(b.coordinateIndex - segmentIndex))[0];
+            const profileCoordinate = nearbyProfile && coordinates[nearbyProfile.coordinateIndex];
+            const rayTilesComplete = !!profileCoordinate && [0, 250, 600, 1200, 2400, MAX_SHADOW_RAY_DISTANCE_METERS]
+                .map(distance => distance === 0
+                    ? { lat: Number(profileCoordinate[1]), lng: Number(profileCoordinate[0]) }
+                    : destinationPoint(Number(profileCoordinate[1]), Number(profileCoordinate[0]), Number(nearbyProfile.direction), distance))
+                .map(point => sceneTileKeyForCoordinate(point.lat, point.lng, manifest))
+                .every(key => !!manifest.tiles[key]);
             const profileSpacing = coordinates.length / Math.max(1, profiles.length - 1);
             const terrainCovered = !!nearbyProfile && Math.abs(nearbyProfile.coordinateIndex - segmentIndex) <= Math.max(2, profileSpacing * 1.5);
             const nearbyRelevantBuildings = relevantBuildings.filter(building =>
                 (building.relevantProfileIndices || []).some(index =>
                     Math.abs(Number(index) - segmentIndex) <= Math.max(2, profileSpacing * 1.5)));
             return {
-                buildings: true,
-                tunnels: true,
-                terrain: terrainCovered,
-                buildingGround: nearbyRelevantBuildings.every(building => finite(building.ground))
+                buildings: tilesComplete && rayTilesComplete,
+                tunnels: tilesComplete,
+                terrain: tilesComplete && rayTilesComplete && terrainCovered,
+                buildingGround: tilesComplete && rayTilesComplete && nearbyRelevantBuildings.every(building => finite(building.ground)),
+                tiles: tilesComplete,
+                sunRayTiles: rayTilesComplete
             };
         });
         const terrainAvailable = terrainSamples.length > 0 && profiles.some(profile => profile.elevations.some(finite));
         const buildingGroundAvailable = relevantBuildings.every(building => finite(building.ground));
+        const coveredSegments = segmentCoverage.filter(segment => segment.terrain && segment.buildingGround).length;
+        const segmentCount = segmentCoverage.length;
+        const precisionReady = terrainAvailable && buildingGroundAvailable && segmentCount > 0 &&
+            coveredSegments === segmentCount && missingTileKeys.length === 0;
         return {
             origin,
             baseElevation: terrainSamples[0] && finite(terrainSamples[0].elevation) ? terrainSamples[0].elevation : null,
@@ -1362,20 +1389,35 @@
                 buildingGround: buildingGroundAvailable,
                 relevantBuildings: relevantBuildings.length,
                 totalBuildings: totalBuildingIds.size,
-                precomputedTiles: tileKeys.length
+                precomputedTiles: availableTileKeys.length,
+                requestedTiles: tileKeys.length,
+                missingTiles: missingTileKeys.length,
+                coveredSegments,
+                segmentCount,
+                segmentRatio: segmentCount ? coveredSegments / segmentCount : 0
             },
-            diagnostics: { totalBuildings: totalBuildingIds.size, relevantBuildings: relevantBuildings.length },
-            precisionReady: terrainAvailable && buildingGroundAvailable &&
-                segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround),
+            diagnostics: {
+                totalBuildings: totalBuildingIds.size,
+                relevantBuildings: relevantBuildings.length,
+                missingTileKeys: missingTileKeys.slice(0, 64)
+            },
+            precisionReady,
+            partial: !precisionReady && coveredSegments > 0,
             source: precomputedSourceLabel(manifest),
             dataVersion: manifest.dataVersion || null,
             profileResolution: manifest.profileResolution || null,
             sceneCoverage: {
                 ...((manifest.sceneCoverage && typeof manifest.sceneCoverage === 'object') ? manifest.sceneCoverage : {}),
-                precomputedTiles: tileKeys.length
+                precomputedTiles: availableTileKeys.length,
+                requestedTiles: tileKeys.length,
+                missingTiles: missingTileKeys.length,
+                coveredSegments,
+                segmentCount,
+                segmentRatio: segmentCount ? coveredSegments / segmentCount : 0
             },
             sampleCount: terrainSamples.length,
-            tileKeys
+            tileKeys: availableTileKeys,
+            missingTileKeys
         };
     }
 
@@ -1387,12 +1429,16 @@
 
     function mergePrecomputedScenes(parts, coordinates) {
         if (!parts.length) return null;
-        if (parts.length === 1) return parts[0];
+        if (parts.length === 1 && Number(parts[0].segmentOffset || 0) === 0 &&
+            Array.isArray(parts[0].segmentCoverage) && parts[0].segmentCoverage.length === coordinates.length - 1) {
+            return parts[0];
+        }
         const center = coordinates[Math.floor(coordinates.length / 2)] || coordinates[0];
         const origin = { lat: Number(center[1]), lng: Number(center[0]) };
         const buildings = new Map();
         const tunnels = new Map();
         const terrain = new Map();
+        const terrainProfiles = [];
         const segmentCoverage = Array.from({ length: Math.max(0, coordinates.length - 1) }, () => ({ buildings: false, tunnels: false, terrain: false, buildingGround: false }));
         const regions = [];
         for (const scene of parts) {
@@ -1414,24 +1460,66 @@
                 if (!terrain.has(key)) terrain.set(key, { ...sample, ...reprojectScenePoint(sample, scene.origin, origin) });
             }
             const segmentOffset = Number(scene.segmentOffset) || 0;
+            for (const profile of scene.terrainProfiles || []) {
+                terrainProfiles.push({
+                    ...profile,
+                    coordinateIndex: segmentOffset + Number(profile.coordinateIndex || 0),
+                    anchor: profile.anchor ? { ...profile.anchor, ...reprojectScenePoint(profile.anchor, scene.origin, origin) } : null
+                });
+            }
             (scene.segmentCoverage || []).forEach((coverage, index) => {
                 const targetIndex = segmentOffset + index;
                 if (!segmentCoverage[targetIndex]) return;
                 Object.keys(segmentCoverage[targetIndex]).forEach(key => { segmentCoverage[targetIndex][key] = segmentCoverage[targetIndex][key] || coverage[key] === true; });
             });
         }
-        const complete = parts.every(scene => scene.precisionReady) && segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround);
+        const coveredSegments = segmentCoverage.filter(segment => segment.terrain && segment.buildingGround).length;
+        const complete = parts.every(scene => scene.precisionReady) && segmentCoverage.length > 0 && coveredSegments === segmentCoverage.length;
         const mergedBuildings = [...buildings.values()];
         const mergedTerrain = [...terrain.values()];
         const totalBuildings = parts.reduce((sum, scene) => sum + Number(scene.coverage && scene.coverage.totalBuildings || 0), 0);
+        const missingTiles = parts.reduce((sum, scene) => sum + Number(scene.coverage && scene.coverage.missingTiles || 0), 0);
+        const requestedTiles = parts.reduce((sum, scene) => sum + Number(scene.coverage && scene.coverage.requestedTiles || 0), 0);
+        const precomputedTiles = parts.reduce((sum, scene) => sum + Number(scene.coverage && scene.coverage.precomputedTiles || 0), 0);
         return {
             ...parts[0], origin, buildings: mergedBuildings, tunnels: [...tunnels.values()], terrainSamples: mergedTerrain,
+            terrainProfiles,
             terrainGrid: buildTerrainGrid(mergedTerrain), buildingGrid: buildBuildingGrid(mergedBuildings),
-            segmentCoverage, coverage: { ...(parts[0].coverage || {}), regions: regions.length, relevantBuildings: buildings.size, totalBuildings },
+            segmentCoverage, coverage: {
+                ...(parts[0].coverage || {}), regions: regions.length, relevantBuildings: buildings.size, totalBuildings,
+                missingTiles, requestedTiles, precomputedTiles,
+                coveredSegments, segmentCount: segmentCoverage.length,
+                segmentRatio: segmentCoverage.length ? coveredSegments / segmentCoverage.length : 0
+            },
             diagnostics: { totalBuildings, relevantBuildings: buildings.size },
-            sceneRegions: regions, precisionReady: complete, partial: !complete, source: regions.map(region => region.source).filter(Boolean).join(' + ') || 'GitHub precomputed scene tiles',
-            sceneCoverage: { regions: regions.map(region => region.region).filter(Boolean), partial: !complete }
+            sceneRegions: regions, precisionReady: complete, partial: !complete && coveredSegments > 0, source: regions.map(region => region.source).filter(Boolean).join(' + ') || 'GitHub precomputed scene tiles',
+            sceneCoverage: { regions: regions.map(region => region.region).filter(Boolean), partial: !complete, coveredSegments, segmentCount: segmentCoverage.length }
         };
+    }
+
+    function coordinateInsideBounds(coordinate, bounds) {
+        if (!bounds || !Array.isArray(coordinate)) return false;
+        const lat = Number(coordinate[1]);
+        const lng = Number(coordinate[0]);
+        return lat >= Number(bounds.south) && lat <= Number(bounds.north) &&
+            lng >= Number(bounds.west) && lng <= Number(bounds.east);
+    }
+
+    function routeRunsInsideBounds(coordinates, bounds) {
+        const runs = [];
+        let start = null;
+        for (let index = 0; index < coordinates.length; index++) {
+            const inside = coordinateInsideBounds(coordinates[index], bounds);
+            if (inside && start === null) start = index;
+            if ((!inside || index === coordinates.length - 1) && start !== null) {
+                const insideEnd = inside && index === coordinates.length - 1 ? index : index - 1;
+                const runStart = Math.max(0, start - 1);
+                const runEnd = Math.min(coordinates.length - 1, insideEnd + 1);
+                if (runEnd > runStart) runs.push({ start: runStart, end: runEnd });
+                start = null;
+            }
+        }
+        return runs;
     }
 
     async function fetchPrecomputedSceneForRoute(coordinates, options = {}) {
@@ -1443,29 +1531,21 @@
         const parts = [];
         for (const candidate of candidates) {
             if (!candidate || !candidate.url) continue;
-            const scene = await fetchPrecomputedSceneForRouteSingle(coordinates, {
-                ...options,
-                precomputedManifestUrl: candidate.url,
-                precomputedRegionBounds: candidate.bounds || options.precomputedRegionBounds
-            });
-            if (scene) {
-                scene.region = candidate.id || scene.region || null;
-                parts.push(scene);
-                continue;
-            }
             const bounds = candidate.bounds || options.precomputedRegionBounds;
-            if (!bounds) continue;
-            const inside = coordinates.map((coordinate, index) => ({ coordinate, index })).filter(item => {
-                const lat = Number(item.coordinate[1]);
-                const lng = Number(item.coordinate[0]);
-                return lat >= Number(bounds.south) && lat <= Number(bounds.north) && lng >= Number(bounds.west) && lng <= Number(bounds.east);
-            });
-            if (inside.length < 2) continue;
-            const start = Math.max(0, inside[0].index - 1);
-            const end = Math.min(coordinates.length - 1, inside[inside.length - 1].index + 1);
-            const subset = coordinates.slice(start, end + 1);
-            const subsetScene = await fetchPrecomputedSceneForRouteSingle(subset, { ...options, precomputedManifestUrl: candidate.url, precomputedRegionBounds: bounds });
-            if (subsetScene) { subsetScene.region = candidate.id || subsetScene.region || null; subsetScene.segmentOffset = start; parts.push(subsetScene); }
+            const explicitSingleManifest = !!options.precomputedManifestUrl;
+            const runs = explicitSingleManifest || !bounds
+                ? [{ start: 0, end: coordinates.length - 1 }]
+                : routeRunsInsideBounds(coordinates, bounds);
+            for (const run of runs) {
+                const subset = coordinates.slice(run.start, run.end + 1);
+                const subsetScene = await fetchPrecomputedSceneForRouteSingle(subset, {
+                    ...options, precomputedManifestUrl: candidate.url, precomputedRegionBounds: bounds
+                });
+                if (!subsetScene) continue;
+                subsetScene.region = candidate.id || subsetScene.region || null;
+                subsetScene.segmentOffset = run.start;
+                parts.push(subsetScene);
+            }
         }
         return mergePrecomputedScenes(parts, coordinates);
     }

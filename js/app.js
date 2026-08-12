@@ -2644,9 +2644,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         const roleMeta = routeData.roleAnalysis && routeData.roleAnalysis[roleKey];
                         const isPrecisionProgress = progress.analysisPhase === 'precision-partial' ||
                             progress.analysisPhase === 'precision-final';
-                        const precisionReadyForRole = isPrecisionProgress &&
-                            roleKey !== 'fastest' && roleMeta && roleMeta.analysisMode === 'scene' &&
-                            enrichedSelection && enrichedSelection.analysisMode === 'scene';
+                        const precisionReadyForRole = isPrecisionProgress && roleKey !== 'fastest' && roleMeta &&
+                            ['scene', 'hybrid-scene'].includes(roleMeta.analysisMode) && enrichedSelection &&
+                            ['scene', 'hybrid-scene'].includes(enrichedSelection.analysisMode);
                         const precisionStartsAtVehicle = precisionRouteStartsAtVehicle(enrichedSelection);
                         if (isLiveNavActive && precisionReadyForRole && !precisionStartsAtVehicle &&
                             !precisionReroutePending && Date.now() >= precisionRerouteCooldownUntil) {
@@ -2661,7 +2661,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         const canSwitchActiveGuidance = isLiveNavActive && precisionReadyForRole &&
                             precisionStartsAtVehicle &&
-                            (!selectedRouteObj || selectedRouteObj.analysisMode !== 'scene' || selectedRouteObj.id !== enrichedSelection.id);
+                            (!selectedRouteObj || !['scene', 'hybrid-scene'].includes(selectedRouteObj.analysisMode) ||
+                                selectedRouteObj.id !== enrichedSelection.id);
                         if (canSwitchActiveGuidance) {
                             precisionReroutePending = false;
                             selectedRouteObj = enrichedSelection;
@@ -2880,8 +2881,18 @@ document.addEventListener('DOMContentLoaded', () => {
         function sceneLabel(route) {
             const coverage = route && route.analyzed && route.analyzed.sceneCoverage;
             const mode = route && (route.analysisMode || (route.analyzed && route.analyzed.analysisMode));
-            if (routeData && routeData.enrichmentPending && mode !== 'scene') {
+            if (route && route.fallbackReason === 'NIGHT_SCENE_NOT_NEEDED') {
+                return isKo ? '야간 · 장면 분석 불필요' : 'Night · scene analysis not needed';
+            }
+            if (routeData && routeData.enrichmentPending && !['scene', 'hybrid-scene'].includes(mode)) {
                 return isKo ? '휴리스틱 초기값 · 건물·지형 정밀 계산 중' : 'Heuristic first pass · scene refinement running';
+            }
+            if (mode === 'hybrid-scene') {
+                const ratio = coverage && Number.isFinite(Number(coverage.segmentRatio))
+                    ? Math.round(Number(coverage.segmentRatio) * 100) : null;
+                return isKo
+                    ? `부분 장면 분석${ratio === null ? '' : ` (${ratio}% 구간)`}`
+                    : `Partial scene analysis${ratio === null ? '' : ` (${ratio}% of segments)`}`;
             }
             if (mode === 'scene') {
                 if (coverage && coverage.buildings && coverage.terrain) return isKo ? '건물·지형 정밀 분석' : 'Building/terrain precision analysis';

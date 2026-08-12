@@ -433,13 +433,20 @@ window.ShadowRouter = (function () {
         return timeLookup;
     }
 
-    function isPrecisionScene(scene) {
+    function sceneAnalysisMode(scene) {
         // SceneShadow marks incomplete Overpass/DEM coverage explicitly. A
         // missing flag remains compatible with small hand-built test scenes,
         // but scene metadata alone must never claim precision when the
         // occlusion implementation is unavailable.
-        return !!scene && scene.precisionReady !== false &&
-            !!window.SceneShadow && typeof window.SceneShadow.getSegmentOcclusion === 'function';
+        if (!scene || !window.SceneShadow || typeof window.SceneShadow.getSegmentOcclusion !== 'function') return 'heuristic';
+        if (scene.precisionReady !== false) return 'scene';
+        const coverage = scene.coverage || {};
+        return scene.partial === true && Number(coverage.coveredSegments || 0) > 0
+            ? 'hybrid-scene' : 'heuristic';
+    }
+
+    function isPrecisionScene(scene) {
+        return sceneAnalysisMode(scene) !== 'heuristic';
     }
 
     function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null, scene = null) {
@@ -450,7 +457,8 @@ window.ShadowRouter = (function () {
         let totalPathMeters = 0;
 
         const segmentDistances = [];
-        const useScene = isPrecisionScene(scene);
+        const analysisMode = sceneAnalysisMode(scene);
+        const useScene = analysisMode !== 'heuristic';
         for (let i = 0; i < coordinates.length - 1; i++) {
             const d = calculateDistanceMeters(coordinates[i][1], coordinates[i][0], coordinates[i + 1][1], coordinates[i + 1][0]);
             segmentDistances.push(d);
@@ -524,7 +532,7 @@ window.ShadowRouter = (function () {
             sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
             segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
             sceneSource: useScene && scene.source ? scene.source : 'heuristic fallback',
-            analysisMode: useScene ? 'scene' : 'heuristic'
+            analysisMode
         };
     }
 
@@ -542,6 +550,7 @@ window.ShadowRouter = (function () {
     const PRECISION_SAMPLE_INTERVAL_METERS = 50;
     const PRECISION_DETAIL_INTERVAL_METERS = 25;
     const PRECISION_TURN_THRESHOLD_DEG = 18;
+    const PRECISION_MAX_POINTS = 800;
 
     function angularDifferenceDegrees(a, b) {
         const delta = Math.abs((((Number(a) - Number(b)) % 360) + 540) % 360 - 180);
@@ -630,6 +639,7 @@ window.ShadowRouter = (function () {
         }
 
         const targetDistances = new Set([0, total]);
+        const requiredDistances = new Set([0, total]);
         for (let distance = normalInterval; distance < total; distance += normalInterval) targetDistances.add(distance);
 
         // Preserve original vertices that materially change road direction and
@@ -641,6 +651,7 @@ window.ShadowRouter = (function () {
                 targetDistances.add(cumulative[i]);
                 targetDistances.add(Math.max(0, cumulative[i] - detailInterval));
                 targetDistances.add(Math.min(total, cumulative[i] + detailInterval));
+                requiredDistances.add(cumulative[i]);
             }
         }
 
@@ -653,7 +664,7 @@ window.ShadowRouter = (function () {
             if (stepCoordinates.length) anchors.push(stepCoordinates[0], stepCoordinates[stepCoordinates.length - 1]);
             const anchorDistances = anchors.map(point => nearestRouteDistanceForPoint(point, coordinates, cumulative))
                 .filter(Number.isFinite);
-            anchorDistances.forEach(distance => targetDistances.add(distance));
+            anchorDistances.forEach(distance => { targetDistances.add(distance); requiredDistances.add(distance); });
             if (stepLooksLikeTunnel(step) && anchorDistances.length >= 2) {
                 const start = Math.min(...anchorDistances);
                 const end = Math.max(...anchorDistances);
@@ -661,8 +672,27 @@ window.ShadowRouter = (function () {
             }
         });
 
-        const distances = Array.from(targetDistances).filter(Number.isFinite).sort((a, b) => a - b)
+        let distances = Array.from(targetDistances).filter(Number.isFinite).sort((a, b) => a - b)
             .filter((distance, index, values) => index === 0 || distance - values[index - 1] >= 0.25);
+        const maxPoints = Math.max(2, Math.min(
+            coordinates.length,
+            Math.max(2, Number(options.maxPoints) || PRECISION_MAX_POINTS)
+        ));
+        if (distances.length > maxPoints) {
+            let required = [...requiredDistances].filter(Number.isFinite).sort((a, b) => a - b)
+                .filter((distance, index, values) => index === 0 || distance - values[index - 1] >= 0.25);
+            if (required.length > maxPoints) {
+                required = Array.from({ length: maxPoints }, (_, index) =>
+                    required[Math.round(index * (required.length - 1) / Math.max(1, maxPoints - 1))]);
+            }
+            const selected = new Set(required);
+            const optional = distances.filter(distance => !selected.has(distance));
+            const remaining = maxPoints - selected.size;
+            for (let index = 0; index < remaining && optional.length; index++) {
+                selected.add(optional[Math.round(index * (optional.length - 1) / Math.max(1, remaining - 1))]);
+            }
+            distances = [...selected].sort((a, b) => a - b);
+        }
         const sampled = distances.map(distance => interpolateRoutePointAtDistance(coordinates, cumulative, distance));
         return {
             coordinates: sampled,
@@ -1032,7 +1062,13 @@ window.ShadowRouter = (function () {
             const refined = refinedById.get(route.id);
             return !!(refined && refined.ready);
         });
-        const mode = allReady ? 'scene' : 'heuristic';
+        const readyModes = unique.map(route => {
+            const refined = refinedById.get(route.id);
+            return refined && refined.refinedAnalyzed && refined.refinedAnalyzed.analysisMode;
+        }).filter(Boolean);
+        const mode = allReady
+            ? (readyModes.every(value => value === 'scene') ? 'scene' : 'hybrid-scene')
+            : 'heuristic';
         const failedResult = unique.map(route => refinedById.get(route.id)).find(result => result && !result.ready);
         const roleFallbackReason = failedResult && failedResult.fallbackReason ? failedResult.fallbackReason : null;
         const views = unique.map(route => {
@@ -1257,16 +1293,25 @@ window.ShadowRouter = (function () {
             analyzeRawRoute(route, idx, dateObj, timeOfDayAdjustment, options.signal)));
 
         const selection = selectPrecisionCandidates(analyzedRoutes, 5, options.preferredRouteRole);
+        function routeIsEntirelyNight(route) {
+            const segments = route && route.analyzed && route.analyzed.segments;
+            return Array.isArray(segments) && segments.length > 0 && segments.every(segment =>
+                segment && segment.passTime instanceof Date &&
+                SunCalc.getPosition(segment.passTime, segment.p1[0], segment.p1[1]).altitude <= -6);
+        }
         const refineRoute = async route => {
             if (options.signal && options.signal.aborted) throw createAbortError();
-            const useSceneCache = options.reuseSceneCache === true;
-            let scene = useSceneCache ? getCachedScene(route.id) : null;
+            let scene = null;
             let refinedAnalyzed = null;
             let fallbackReason = null;
             const rawCoordinates = route.raw.geometry.coordinates;
             const precisionSampling = buildPrecisionAnalysisGeometry(route.raw, { steps: route.routeSteps });
             const precisionCoordinates = precisionSampling.coordinates;
             try {
+                if (routeIsEntirelyNight(route)) {
+                    fallbackReason = 'NIGHT_SCENE_NOT_NEEDED';
+                    return { route, refinedAnalyzed: null, fallbackReason, ready: false };
+                }
                 const sceneOptions = {
                     dateObj,
                     durationSec: route.durationSec,
@@ -1289,9 +1334,6 @@ window.ShadowRouter = (function () {
                 if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
                     scene = await window.SceneShadow.fetchSceneForRoute(precisionCoordinates, sceneOptions);
                 }
-                if (scene && useSceneCache) {
-                    cacheScene(route.id, scene);
-                }
                 if (isPrecisionScene(scene)) {
                     const sampledAnalysis = await analyzeRouteSegmentsAsync(precisionCoordinates, dateObj, route.durationSec, route.routeSteps, scene, options.signal);
                     refinedAnalyzed = mapPrecisionAnalysisToOriginalGeometry(
@@ -1305,11 +1347,15 @@ window.ShadowRouter = (function () {
                 console.warn('Scene data unavailable; retaining common heuristic comparison.', sceneError);
                 fallbackReason = sceneFallbackReason(sceneError);
             }
-            const result = { route, scene, refinedAnalyzed, fallbackReason, ready: !!refinedAnalyzed && refinedAnalyzed.analysisMode === 'scene' };
+            const result = {
+                route, refinedAnalyzed, fallbackReason,
+                ready: !!refinedAnalyzed && ['scene', 'hybrid-scene'].includes(refinedAnalyzed.analysisMode)
+            };
             if (refinedAnalyzed) route.sceneAnalysis = refinedAnalyzed;
-            route.sceneCoverage = scene && scene.coverage ? scene.coverage : route.analyzed.sceneCoverage;
+            route.sceneCoverage = scene && scene.coverage ? { ...scene.coverage } : route.analyzed.sceneCoverage;
             route.sceneSource = scene && scene.source ? scene.source : route.analyzed.sceneSource;
             route.fallbackReason = fallbackReason || null;
+            scene = null;
             return result;
         };
 
@@ -1326,7 +1372,8 @@ window.ShadowRouter = (function () {
             return {
                 timeOfDayAdjustment,
                 analysisMode: roleModes.every(mode => mode === 'scene') ? 'scene' :
-                    (roleModes.every(mode => mode === 'heuristic') ? 'heuristic' : 'mixed-by-role'),
+                    (roleModes.every(mode => mode === 'hybrid-scene') ? 'hybrid-scene' :
+                        (roleModes.every(mode => mode === 'heuristic') ? 'heuristic' : 'mixed-by-role')),
                 analysisPhase: phase,
                 enrichmentPending,
                 backgroundRefinementComplete: !enrichmentPending,
@@ -1378,10 +1425,12 @@ window.ShadowRouter = (function () {
         // comparison tier per role. Precision is never compared directly with
         // a heuristic baseline.
         const refinedById = new Map(refinedResults.map(result => [result.route.id, result]));
-        refinedResults.forEach(({ route, scene, refinedAnalyzed, fallbackReason }) => {
+        refinedResults.forEach(({ route, refinedAnalyzed, fallbackReason }) => {
             if (refinedAnalyzed) route.sceneAnalysis = refinedAnalyzed;
-            route.sceneCoverage = scene && scene.coverage ? scene.coverage : route.analyzed.sceneCoverage;
-            route.sceneSource = scene && scene.source ? scene.source : route.analyzed.sceneSource;
+            route.sceneCoverage = refinedAnalyzed && refinedAnalyzed.sceneCoverage
+                ? refinedAnalyzed.sceneCoverage : route.sceneCoverage;
+            route.sceneSource = refinedAnalyzed && refinedAnalyzed.sceneSource
+                ? refinedAnalyzed.sceneSource : route.sceneSource;
             route.fallbackReason = fallbackReason || null;
         });
 
@@ -1404,7 +1453,8 @@ window.ShadowRouter = (function () {
         const roleModes = [fastestTier.mode, glareTier.mode, shadeTier.mode];
         const finalAnalysisMode = roleModes.every(mode => mode === 'scene')
             ? 'scene'
-            : (roleModes.every(mode => mode === 'heuristic') ? 'heuristic' : 'mixed-by-role');
+            : (roleModes.every(mode => mode === 'hybrid-scene') ? 'hybrid-scene'
+                : (roleModes.every(mode => mode === 'heuristic') ? 'heuristic' : 'mixed-by-role'));
                 // True Astronomical Night (altitude < -6.0°): No solar UV radiation
 
         const finalResult = {
