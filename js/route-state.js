@@ -32,6 +32,17 @@
         return !!key && key === createRouteRequestKey(start, end, mode, tollFree, timeToken);
     }
 
+    function inverseRotateScreenDelta(dx, dy, angleDeg) {
+        const x = Number(dx);
+        const y = Number(dy);
+        const radians = (Number(angleDeg) || 0) * Math.PI / 180;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: 0, y: 0 };
+        return {
+            x: x * Math.cos(radians) - y * Math.sin(radians),
+            y: x * Math.sin(radians) + y * Math.cos(radians)
+        };
+    }
+
     function rectsOverlap(a, b, gap = 0) {
         if (!a || !b) return false;
         const clearance = Math.max(0, Number(gap) || 0);
@@ -136,6 +147,7 @@
     return {
         createRouteRequestKey,
         isRouteRequestKeyCurrent,
+        inverseRotateScreenDelta,
         normalizeTimeToken,
         rectsOverlap,
         findRectIntersections,

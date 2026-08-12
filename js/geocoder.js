@@ -493,10 +493,28 @@ window.Geocoder = (function () {
         const results = [];
         let attemptedServices = 0;
         let failedServices = 0;
+        const normalizedQuery = cleanQ.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+        const queryParts = normalizedQuery.split(/\s+/).filter(Boolean);
+        const queryHouseNumber = /^\d+[a-z]?$/i.test(queryParts[0] || '') ? queryParts[0] : null;
+        const looksLikeStreetAddress = /^\s*\d+[A-Za-z]?\s+\S+/.test(cleanQ);
+        const addressMatchScore = result => {
+            const normalizedText = [result.shortTitle, result.displayName, result.houseNumber, result.road]
+                .filter(Boolean).join(' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+            if (!normalizedText) return 0;
+            const words = normalizedText.split(/\s+/);
+            let score = normalizedQuery && normalizedText.includes(normalizedQuery) ? 100 : 0;
+            score += queryParts.length ? queryParts.filter(token => words.includes(token)).length / queryParts.length * 40 : 0;
+            if (queryHouseNumber && String(result.houseNumber || '').toLowerCase() === queryHouseNumber) score += 80;
+            if (queryHouseNumber && !words.includes(queryHouseNumber)) score -= 100;
+            return score + Math.max(0, Number(result.importance) || 0);
+        };
         const addResult = (result) => {
             if (!Number.isFinite(result.lat) || !Number.isFinite(result.lng)) return;
-            if (!results.some(r => Math.abs(r.lat - result.lat) < 0.0005 && Math.abs(r.lng - result.lng) < 0.0005)) {
-                results.push(result);
+            const duplicateIndex = results.findIndex(existing =>
+                Math.abs(existing.lat - result.lat) < 0.0005 && Math.abs(existing.lng - result.lng) < 0.0005);
+            if (duplicateIndex < 0) results.push(result);
+            else if (looksLikeStreetAddress && addressMatchScore(result) > addressMatchScore(results[duplicateIndex])) {
+                results[duplicateIndex] = result;
             }
         };
 
@@ -534,7 +552,10 @@ window.Geocoder = (function () {
                             lat: itemLat,
                             lng: itemLng,
                             distKm: hasCoords ? getDistanceKm(userCoords.lat, userCoords.lng, itemLat, itemLng) : null,
-                            source: 'nominatim'
+                            source: 'nominatim',
+                            houseNumber: String(item.address && item.address.house_number || ''),
+                            road: String(item.address && item.address.road || ''),
+                            importance: Number(item.importance) || 0
                         });
                     });
                 }
@@ -571,7 +592,10 @@ window.Geocoder = (function () {
                         lat: itemLat,
                         lng: itemLng,
                         distKm: hasCoords ? getDistanceKm(userCoords.lat, userCoords.lng, itemLat, itemLng) : null,
-                        source: 'photon'
+                        source: 'photon',
+                        houseNumber: String(props.housenumber || ''),
+                        road: String(props.street || ''),
+                        importance: Number(props.importance) || 0
                     });
                 });
             }
@@ -588,7 +612,6 @@ window.Geocoder = (function () {
         // no result (or when the caller explicitly requests it).  This keeps
         // Nominatim out of every keystroke while still making address search
         // reliable on the mobile WebView.
-        const looksLikeStreetAddress = /^\s*\d+[A-Za-z]?\s+\S+/.test(cleanQ);
         const shouldFallbackToNominatim = options.fallbackNominatim === true &&
             (results.length === 0 || looksLikeStreetAddress);
         if (!includeNominatim && shouldFallbackToNominatim) {
@@ -620,7 +643,10 @@ window.Geocoder = (function () {
                             lat: itemLat,
                             lng: itemLng,
                             distKm: hasCoords ? getDistanceKm(userCoords.lat, userCoords.lng, itemLat, itemLng) : null,
-                            source: 'nominatim'
+                            source: 'nominatim',
+                            houseNumber: String(item.address && item.address.house_number || ''),
+                            road: String(item.address && item.address.road || ''),
+                            importance: Number(item.importance) || 0
                         });
                     });
                     photonResults.forEach(addResult);
@@ -644,10 +670,14 @@ window.Geocoder = (function () {
                     if (a.source === 'nominatim') return -1;
                     if (b.source === 'nominatim') return 1;
                 }
+                if (looksLikeStreetAddress) {
+                    const scoreDifference = addressMatchScore(b) - addressMatchScore(a);
+                    if (Math.abs(scoreDifference) > 0.001) return scoreDifference;
+                }
                 if (a.distKm !== null && b.distKm !== null) return a.distKm - b.distKm;
                 return 0;
             });
-        }
+        } else if (looksLikeStreetAddress) results.sort((a, b) => addressMatchScore(b) - addressMatchScore(a));
 
         const finalResults = results.slice(0, 7);
         cacheSearchResults(cacheKey, finalResults);

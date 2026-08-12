@@ -152,6 +152,15 @@ test('offline route fallback never returns a synthetic navigation route', () => 
     assert.equal(OfflineMap.generateStandaloneRoute({ lat: 0, lng: 0 }, { lat: 1, lng: 1 }, new Date()), null);
 });
 
+test('screen drag deltas are inverse-rotated exactly once for heading-up maps', () => {
+    const eastAt90 = RouteState.inverseRotateScreenDelta(100, 0, 90);
+    assert.ok(Math.abs(eastAt90.x) < 1e-9);
+    assert.ok(Math.abs(eastAt90.y - 100) < 1e-9);
+    const eastAt180 = RouteState.inverseRotateScreenDelta(100, 0, 180);
+    assert.ok(Math.abs(eastAt180.x + 100) < 1e-9);
+    assert.ok(Math.abs(eastAt180.y) < 1e-9);
+});
+
 test('APK update checks ignore scene releases and compare SemVer without parseFloat', () => {
     assert.equal(VersionUtils.compareSemver('v1.10.0', '1.9.9') > 0, true);
     assert.equal(VersionUtils.compareSemver('app-v1.0', '1.0.0'), 0);
@@ -1535,6 +1544,27 @@ test('street-address autocomplete prefers exact Nominatim fallback over Photon f
     }
 });
 
+test('submitted address ranking keeps an exact house and road ahead of a nearer fuzzy address', async () => {
+    const originalFetch = sandbox.fetch;
+    sandbox.fetch = async url => {
+        if (String(url).includes('nominatim')) return { ok: true, status: 200, json: async () => ([
+            { lat: '42.35', lon: '-71.12', importance: 0.2, display_name: '94 Gerry Road, Brookline, MA', address: { house_number: '94', road: 'Gerry Road' } },
+            { lat: '42.31', lon: '-71.08', importance: 0.9, display_name: 'Gerry Park, Brookline, MA', address: { road: 'Gerry Park' } }
+        ]) };
+        return { ok: true, status: 200, json: async () => ({ features: [] }) };
+    };
+    try {
+        const results = await Geocoder.searchPlaces('94 Gerry Road', { lat: 42.31, lng: -71.08 }, { includeNominatim: true });
+        assert.equal(results[0].shortTitle, '94 Gerry Road');
+    } finally { sandbox.fetch = originalFetch; }
+});
+
+test('car destination is the final OSRM road coordinate, not the POI centroid', () => {
+    const route = { analyzed: { coordinates: [[-71.1, 42.3], [-71.11, 42.31]] } };
+    assert.equal(JSON.stringify(ShadowRouter.getRouteEndpoint(route)), JSON.stringify({ lat: 42.31, lng: -71.11 }));
+    assert.equal(ShadowRouter.getRouteEndpoint({ analyzed: { coordinates: [] } }), null);
+});
+
 test('turn voice does not append a generic straight prompt when a maneuver is pending', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     const guardedHazardCalls = appSource.match(/if \(!nextManeuver\) TTSVoice\.announceNavHazard/g) || [];
@@ -1768,10 +1798,18 @@ test('heading-up gestures compensate CSS rotation and route preview frames both 
     assert.ok(appSource.includes("wrapper.classList.remove('user-map-panning', 'manual-rotation-gesture')"));
 });
 
-test('heading-up oversized map is limited to live navigation', () => {
+test('heading-up map covers rotated corners in preview and live navigation', () => {
     const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
-    assert.ok(css.includes('.map-container.heading-up-active.live-navigation #map'));
-    assert.equal(css.includes('.map-container.heading-up-active #map {'), false);
+    assert.ok(css.includes('.map-container.heading-up-active #map'));
+    assert.ok(css.includes('width: 150vmax'));
+    assert.equal(/width:\s*250vmax/.test(css), false);
+});
+
+test('route cancellation clears destination identity and stale option-card content', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes("destinationName = '';"));
+    assert.ok(appSource.includes('resetRouteOptionCards();'));
+    assert.ok(appSource.includes('function resetRouteOptionCards()'));
 });
 
 test('initial search overlay cannot cover the global header controls', () => {

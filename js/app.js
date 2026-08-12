@@ -570,13 +570,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // Leaflet's own rect subtraction produces the right local point.
             const layoutWidth = container.clientWidth || rect.width;
             const layoutHeight = container.clientHeight || rect.height;
-            const radians = angleDeg * Math.PI / 180;
-            const cos = Math.cos(radians);
-            const sin = Math.sin(radians);
             const dx = x - cx;
             const dy = y - cy;
-            const localX = layoutWidth / 2 + dx * cos - dy * sin;
-            const localY = layoutHeight / 2 + dx * sin + dy * cos;
+            const logicalDelta = window.RouteState && typeof window.RouteState.inverseRotateScreenDelta === 'function'
+                ? window.RouteState.inverseRotateScreenDelta(dx, dy, angleDeg)
+                : { x: dx, y: dy };
+            const localX = layoutWidth / 2 + logicalDelta.x;
+            const localY = layoutHeight / 2 + logicalDelta.y;
             return {
                 clientX: rect.left + (container.clientLeft || 0) + localX,
                 clientY: rect.top + (container.clientTop || 0) + localY
@@ -595,6 +595,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         const patchedEvents = new WeakSet();
+        let nativeCoordinatePatchActive = false;
         let mouseGestureActive = false;
         const activePointerIds = new Set();
         let touchGestureActive = false;
@@ -647,7 +648,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!patchedTouchList) patchPoint(event, angleDeg, restore);
             if (restore.length) {
                 patchedEvents.add(event);
-                restoreAfterDispatch(restore);
+                nativeCoordinatePatchActive = true;
+                restoreAfterDispatch([
+                    ...restore,
+                    () => { nativeCoordinatePatchActive = false; }
+                ]);
             }
         };
 
@@ -693,15 +698,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Draggable already computed a logical delta. Only apply this
                 // seam correction for sealed/native events that could not be
                 // patched, avoiding a double rotation.
-                if (event && patchedEvents.has(event)) return;
+                if (nativeCoordinatePatchActive) return;
                 if (!isRotationActive() || !draggable._startPos || !draggable._newPos) return;
-                const angle = (Number(lastAppliedMapRotation) || 0) * Math.PI / 180;
                 const dx = draggable._newPos.x - draggable._startPos.x;
                 const dy = draggable._newPos.y - draggable._startPos.y;
-                const logicalX = dx * Math.cos(angle) - dy * Math.sin(angle);
-                const logicalY = dx * Math.sin(angle) + dy * Math.cos(angle);
-                draggable._newPos = draggable._startPos.add(L.point(logicalX, logicalY));
-                if (draggable._absPos) draggable._absPos = draggable._startPos.add(L.point(logicalX, logicalY));
+                const logical = window.RouteState.inverseRotateScreenDelta(dx, dy, Number(lastAppliedMapRotation) || 0);
+                draggable._newPos = draggable._startPos.add(L.point(logical.x, logical.y));
+                if (draggable._absPos) draggable._absPos = draggable._startPos.add(L.point(logical.x, logical.y));
             });
         }
     }
@@ -2555,6 +2558,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function getActiveRoadDestination() {
+        return (selectedRouteObj && ShadowRouter.getRouteEndpoint(selectedRouteObj)) || currentEnd;
+    }
+
     function markRouteCalculationPending(isPending) {
         const summary = document.getElementById('route-summary-box');
         if (summary) {
@@ -2990,8 +2997,9 @@ document.addEventListener('DOMContentLoaded', () => {
             iconAnchor: [17, 17]
         });
 
+        const routedEnd = ShadowRouter.getRouteEndpoint(selectedRouteObj) || currentEnd;
         if (endMarker) map.removeLayer(endMarker);
-        endMarker = L.marker([currentEnd.lat, currentEnd.lng], { icon: endIcon }).addTo(map);
+        endMarker = L.marker([routedEnd.lat, routedEnd.lng], { icon: endIcon }).addTo(map);
 
         updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
 
@@ -3067,7 +3075,12 @@ document.addEventListener('DOMContentLoaded', () => {
             endMarker = null;
         }
 
-        if (!keepDestination) currentEnd = null;
+        if (!keepDestination) {
+            currentEnd = null;
+            destinationName = '';
+            const destinationInput = document.getElementById('destination-input');
+            if (destinationInput) destinationInput.value = '';
+        }
         routeData = null;
         selectedRouteObj = null;
         pendingRouteRequestKey = null;
@@ -3084,7 +3097,27 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('sum-destination').innerText = "--";
         document.getElementById('sum-duration').innerText = "--";
         document.getElementById('sum-dist').innerText = "-- km";
+        resetRouteOptionCards();
         setNavigationButtonsEnabled(false);
+    }
+
+    function resetRouteOptionCards() {
+        const isKo = I18n.getLanguage().startsWith('ko');
+        const defaults = {
+            fastest: isKo ? 'OSRM 기준 일반 경로' : 'OSRM baseline route',
+            glare: isKo ? '목적지를 설정하면 계산합니다' : 'Set a destination to calculate',
+            shade: isKo ? '목적지를 설정하면 계산합니다' : 'Set a destination to calculate'
+        };
+        const etaPlaceholder = isKo ? '⏱️ --분' : '⏱️ --m';
+        [['eta-fastest', etaPlaceholder], ['eta-glare', etaPlaceholder], ['eta-shade', etaPlaceholder]].forEach(([id, value]) => {
+            const element = document.getElementById(id); if (element) element.innerText = value;
+        });
+        [['desc-fastest', defaults.fastest], ['desc-glare', defaults.glare], ['desc-shade', defaults.shade]].forEach(([id, value]) => {
+            const element = document.getElementById(id); if (element) element.innerText = value;
+        });
+        const chip = document.getElementById('traffic-fastest');
+        if (chip) { chip.innerText = ''; chip.classList.add('hidden'); }
+        document.querySelectorAll('.mode-btn, .route-option-card').forEach(card => card.classList.remove('calculating'));
     }
 
     function updateSummaryBox(selectedRouteObj) {
@@ -3803,8 +3836,9 @@ document.addEventListener('DOMContentLoaded', () => {
             lastProcessedNavigationPosition = { lat, lng };
             lastProcessedNavigationAccuracy = incomingAccuracy;
 
-            if (currentEnd) {
-                const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, currentEnd.lat, currentEnd.lng);
+            const roadDestination = getActiveRoadDestination();
+            if (roadDestination) {
+                const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, roadDestination.lat, roadDestination.lng);
                 const routeCoords = selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates
                     ? selectedRouteObj.analyzed.coordinates : navigationSessionRouteGeometry;
                 let nearEnd = false;
@@ -3898,8 +3932,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 lastGpsTimestamp = pos.timestamp;
 
                 // 1. Destination Arrival Multi-Tier Proximity Check
-                if (isLiveNavActive && currentEnd && !isArrived) {
-                    const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, currentEnd.lat, currentEnd.lng);
+                const roadDestination = getActiveRoadDestination();
+                if (isLiveNavActive && roadDestination && !isArrived) {
+                    const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, roadDestination.lat, roadDestination.lng);
                     let isNearEndSegment = false;
                     if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
                         const coords = selectedRouteObj.analyzed.coordinates;

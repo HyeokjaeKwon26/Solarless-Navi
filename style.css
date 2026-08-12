@@ -601,15 +601,17 @@ body.pip-mode .map-attribution {
     transition: transform 0.12s linear;
 }
 
-/* Expanded Map Container when Heading-Up mode is active so tile edges/corners are never cut off */
-.map-container.heading-up-active.live-navigation #map {
-    width: 250vmax;
-    height: 250vmax;
+/* Rotation needs enough off-screen map area to cover every corner. The
+   viewport diagonal is <= 142vmax, so 150vmax avoids clipping without the
+   former 250vmax tile/memory cost. This applies to preview and live driving. */
+.map-container.heading-up-active #map {
+    width: 150vmax;
+    height: 150vmax;
     position: absolute;
     top: 50%;
     left: 50%;
-    margin-top: -125vmax;
-    margin-left: -125vmax;
+    margin-top: -75vmax;
+    margin-left: -75vmax;
     transform-origin: 50% 50%;
 }
 

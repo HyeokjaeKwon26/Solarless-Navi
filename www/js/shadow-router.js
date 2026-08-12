@@ -547,6 +547,15 @@ window.ShadowRouter = (function () {
             Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
     }
 
+    function getRouteEndpoint(route) {
+        const coordinates = route && route.analyzed && Array.isArray(route.analyzed.coordinates)
+            ? route.analyzed.coordinates
+            : getRouteCoordinates(route && route.raw ? route.raw : route);
+        const last = coordinates && coordinates.length ? coordinates[coordinates.length - 1] : null;
+        return Array.isArray(last) && Number.isFinite(Number(last[0])) && Number.isFinite(Number(last[1]))
+            ? { lat: Number(last[1]), lng: Number(last[0]) } : null;
+    }
+
     const PRECISION_SAMPLE_INTERVAL_METERS = 50;
     const PRECISION_DETAIL_INTERVAL_METERS = 25;
     const PRECISION_TURN_THRESHOLD_DEG = 18;
@@ -1722,6 +1731,7 @@ window.ShadowRouter = (function () {
         calculateRouteTradeoff: calculateRouteTradeoff,
         applyExposureReductions: applyExposureReductions,
         routeContainsToll: routeContainsToll,
+        getRouteEndpoint: getRouteEndpoint,
         areValidRouteCoordinates: areValidRouteCoordinates,
         analyzeRouteSegments: analyzeRouteSegments,
         analyzeRouteSegmentsAsync: analyzeRouteSegmentsAsync,

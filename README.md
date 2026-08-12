@@ -15,6 +15,9 @@
 - **그늘 우선 경로**: 가능한 경우 OSM 건물·터널 형상과 DEM 지형 표본을 이용해 태양 광선 차단 가능성을 계산합니다.
 - **빠른 시작과 백그라운드 보정**: 공통 휴리스틱 결과를 먼저 표시하고, 장면 데이터가 준비되면 같은 분석 등급에서 경로를 다시 비교합니다.
 - **Android 주행 안내**: 음성 회전 안내, 경로 이탈 재탐색, heading-up 지도, 자동 재중앙 정렬, 선택형 Picture-in-Picture를 지원합니다.
+- **회전 지도 조작**: heading-up 또는 수동 회전 상태에서도 터치·드래그 좌표를 지도 회전에 맞게 보정하고, 회전된 지도 모서리가 화면에서 잘리지 않도록 여유 영역을 유지합니다.
+- **자동차용 목적지 처리**: 장소·학교·건물의 중심 좌표로 검색하더라도 실제 안내 마커와 도착 판정은 OSRM이 연결한 자동차 도로의 경로 끝을 사용합니다.
+- **주소 우선 검색**: 번지와 도로명이 포함된 입력은 구조화된 주소 일치도를 우선하며, 가까운 유사 상호나 장소가 정확한 주소를 밀어내지 않도록 정렬합니다.
 - **주행 보조 정보**: OSM 기반 제한속도·STOP·터널 정보와 시간대 보정 예상시간을 표시합니다.
 
 ## 동작 방식
@@ -183,6 +186,8 @@ node tools/validate-scene-release.mjs
 ### SolarLess Navi
 
 SolarLess Navi is an experimental Android navigation app that compares the fastest, lower-glare, and shade-preferred routes using solar position, road direction, and—when available—precomputed U.S. building, tunnel, and terrain scene tiles.
+
+The Android map compensates touch and drag coordinates while heading-up or manually rotated. Address searches prioritize structured house-number and road matches, and navigation uses the final OSRM road coordinate for its destination marker and arrival check rather than a building centroid. Cancelling guidance clears the previous destination and route-card state.
 
 The app displays an initial common-heuristic result quickly and refines competitive routes as scene data becomes available. It downloads only the 5 km tiles required around the route, caches them locally, and can combine multiple regional releases for boundary-crossing trips. Missing coverage is explicitly reported as partial scene analysis and falls back to the same heuristic model for uncovered segments.
 
