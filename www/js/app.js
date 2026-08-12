@@ -183,6 +183,26 @@ document.addEventListener('DOMContentLoaded', () => {
         return !Number.isFinite(Number(currentHeading)) || headingDiff <= 120;
     }
 
+    function setSidebarOpen(open) {
+        const sidebar = document.getElementById('sidebar-panel');
+        const mapWrapper = document.getElementById('map-perspective-wrapper');
+        const toggle = document.getElementById('mobile-toggle-panel');
+        const nextOpen = !!open;
+        if (sidebar) {
+            sidebar.classList.toggle('active', nextOpen);
+            if (!nextOpen) sidebar.style.transform = '';
+        }
+        if (mapWrapper) mapWrapper.classList.toggle('bottom-sheet-open', nextOpen);
+        if (toggle) toggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+        if (nextOpen) {
+            clearTimeout(recenterWaitTimer);
+            clearInterval(recenterCountdownInterval);
+            hideRecenterToast();
+        } else if (isUserMapPanning && isLiveNavActive) {
+            resetRecenterInactivityTimer();
+        }
+    }
+
     /* Free Map Panning & 8-Second Auto Recenter Toast Variables */
     let isUserMapPanning = false;
     let recenterWaitTimer = null;
@@ -799,10 +819,7 @@ document.addEventListener('DOMContentLoaded', () => {
         lastAppliedMapRotation = null;
 
         // Close sidebar drawer when recentering so driver returns to clear navigation view
-        const sidebar = document.getElementById('sidebar-panel');
-        if (sidebar) sidebar.classList.remove('active');
-        const mapWrapper = document.getElementById('map-perspective-wrapper');
-        if (mapWrapper) mapWrapper.classList.remove('bottom-sheet-open');
+        setSidebarOpen(false);
 
         const btnGps = document.getElementById('btn-recenter-gps');
         if (btnGps) btnGps.classList.remove('panned');
@@ -828,26 +845,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const toggleSidebar = (e) => {
             if (e) { e.preventDefault(); e.stopPropagation(); }
             const sidebar = document.getElementById('sidebar-panel');
-            if (sidebar) {
-                const isOpening = !sidebar.classList.contains('active');
-                sidebar.classList.toggle('active');
-                const mapWrapper = document.getElementById('map-perspective-wrapper');
-                if (mapWrapper) mapWrapper.classList.toggle('bottom-sheet-open', isOpening);
-                if (isOpening) {
-                    clearTimeout(recenterWaitTimer);
-                    clearInterval(recenterCountdownInterval);
-                    hideRecenterToast();
-                } else {
-                    if (isUserMapPanning && isLiveNavActive) {
-                        resetRecenterInactivityTimer();
-                    }
-                }
-            }
+            setSidebarOpen(!(sidebar && sidebar.classList.contains('active')));
         };
 
         if (btnMobileToggle) {
             btnMobileToggle.addEventListener('click', toggleSidebar);
-            btnMobileToggle.addEventListener('touchstart', toggleSidebar, { passive: false });
         }
 
         if (btnHeaderHome) {
@@ -1489,8 +1491,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const deltaY = currentY - startY;
             if (deltaY > 45) {
-                sidebar.classList.remove('active');
-                sidebar.style.transform = '';
+                setSidebarOpen(false);
             } else {
                 sidebar.style.transform = '';
             }
@@ -1850,7 +1851,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const sidebar = document.getElementById('sidebar-panel');
         if (sidebar && sidebar.classList.contains('active')) {
-            sidebar.classList.remove('active');
+            setSidebarOpen(false);
             return;
         }
 
@@ -2210,11 +2211,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(snap.lat, snap.lng, coords, segIdx);
             const totalDist = selectedRouteObj.distanceMeters || 1;
             const remSec = Math.max(30, Math.round((remDistMeters / totalDist) * selectedRouteObj.durationSec));
-            const isKo = I18n.getLanguage().startsWith('ko');
-            const sumTimeEl = document.getElementById('sum-time');
-            const sumDistEl = document.getElementById('sum-dist');
-            if (sumTimeEl) sumTimeEl.innerText = `${Math.max(1, Math.round(remSec / 60))}${isKo ? 'm' : 'm'}`;
-            if (sumDistEl) sumDistEl.innerText = `${(remDistMeters / 1000).toFixed(1)} km`;
+            updateRemainingSummary(remSec, remDistMeters);
             return;
         }
         for (let i = 0; i < segments.length; i++) {
@@ -2237,14 +2234,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(snap.lat, snap.lng, coords, segIdx);
         const totalDist = selectedRouteObj.distanceMeters || 1;
         const remSec = Math.max(30, Math.round((remDistMeters / totalDist) * selectedRouteObj.durationSec));
-        const isKo = I18n.getLanguage().startsWith('ko');
-        const durMin = Math.max(1, Math.round(remSec / 60));
-        const distKm = (remDistMeters / 1000).toFixed(1);
-
-        const sumTimeEl = document.getElementById('sum-time');
-        const sumDistEl = document.getElementById('sum-dist');
-        if (sumTimeEl) sumTimeEl.innerText = `${durMin}${isKo ? '분' : 'm'}`;
-        if (sumDistEl) sumDistEl.innerText = `${distKm} km`;
+        updateRemainingSummary(remSec, remDistMeters);
     }
 
     function updateVehicleMarkerPosition(lat, lng, heading = 0) {
@@ -2437,7 +2427,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderFavorites();
         renderRecentDestinationHistory();
         document.getElementById('start-search-modal').classList.remove('hidden');
-        document.getElementById('sidebar-panel').classList.remove('active');
+        setSidebarOpen(false);
     }
 
     function getDateFromMinutes(mins) {
@@ -2544,6 +2534,27 @@ document.addEventListener('DOMContentLoaded', () => {
         ].join('|');
     }
 
+    function formatArrivalTime(remainingSec) {
+        const arrival = new Date(Date.now() + Math.max(0, Number(remainingSec) || 0) * 1000);
+        return arrival.toLocaleTimeString(I18n.getLanguage(), { hour: 'numeric', minute: '2-digit' });
+    }
+
+    function updateRemainingSummary(remainingSec, remainingMeters) {
+        const isKo = I18n.getLanguage().startsWith('ko');
+        const seconds = Math.max(30, Number(remainingSec) || 0);
+        const arrivalEl = document.getElementById('sum-time');
+        const durationEl = document.getElementById('sum-duration');
+        const distanceEl = document.getElementById('sum-dist');
+        const destinationEl = document.getElementById('sum-destination');
+        if (arrivalEl) arrivalEl.innerText = formatArrivalTime(seconds);
+        if (durationEl) durationEl.innerText = `${Math.max(1, Math.round(seconds / 60))}${isKo ? '분' : 'm'}`;
+        if (distanceEl) distanceEl.innerText = `${(Math.max(0, Number(remainingMeters) || 0) / 1000).toFixed(1)} km`;
+        if (destinationEl) {
+            destinationEl.innerText = destinationName || (isKo ? '목적지' : 'Destination');
+            destinationEl.title = destinationName || '';
+        }
+    }
+
     function markRouteCalculationPending(isPending) {
         const summary = document.getElementById('route-summary-box');
         if (summary) {
@@ -2640,12 +2651,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     preferredRouteRole: currentMode,
                     onProgress: async progress => {
                         if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
+                        const progressRequestKey = getCurrentRouteRequestKey(dateObj);
                         routeData = progress;
                         routeData.calculatedAt = Date.now();
-                        routeData.requestKey = requestKey;
+                        routeData.requestKey = progressRequestKey;
                         routeData.routeCandidateKey = candidateCacheKey;
                         pendingRouteRequestKey = null;
-                        verifiedRouteRequestKey = requestKey;
+                        verifiedRouteRequestKey = progressRequestKey;
                         updateRouteOptionButtons(routeData);
                         const enrichedSelection = routeData.routes[currentMode] || routeData.routes.fastest;
                         const roleKey = currentMode === 'shade' ? 'shade' : (currentMode === 'glareFree' ? 'glareFree' : 'fastest');
@@ -2664,7 +2676,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             // forward route from the current GPS position.
                             precisionReroutePending = true;
                             precisionRerouteCooldownUntil = Date.now() + PRECISION_REROUTE_COOLDOWN_MS;
-                            updateRoute(true, { reason: 'precision-refresh' }).catch(() => { precisionReroutePending = false; });
+                            updateRoute(true, { reason: 'precision-refresh', reuseCachedCandidates: true })
+                                .catch(() => { precisionReroutePending = false; });
                             return;
                         }
                         const canSwitchActiveGuidance = isLiveNavActive && precisionReadyForRole &&
@@ -2725,17 +2738,18 @@ document.addEventListener('DOMContentLoaded', () => {
             );
 
             if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
+            const completedRequestKey = getCurrentRouteRequestKey(dateObj);
             routeData = nextRouteData;
             routeData.calculatedAt = Date.now();
-            routeData.requestKey = requestKey;
+            routeData.requestKey = completedRequestKey;
             routeData.routeCandidateKey = candidateCacheKey;
             routeCandidateCacheKey = candidateCacheKey;
             if (routeData.routes) {
                 Object.values(routeData.routes).forEach(route => {
-                    if (route && typeof route === 'object') route.requestKey = requestKey;
+                    if (route && typeof route === 'object') route.requestKey = completedRequestKey;
                 });
             }
-            verifiedRouteRequestKey = requestKey;
+            verifiedRouteRequestKey = completedRequestKey;
             pendingRouteRequestKey = null;
             if (window.DebugLogger) window.DebugLogger.log('route-enrichment-complete', { elapsedMs: Date.now() - routeStartedAt, routeCount: routeData.routes && routeData.routes.all ? routeData.routes.all.length : 0 });
         } catch (e) {
@@ -3066,24 +3080,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const turnBanner = document.getElementById('mobile-turn-banner');
         if (turnBanner) turnBanner.classList.remove('active', 'hazard');
 
-        document.getElementById('sum-time').innerText = "--";
+        document.getElementById('sum-time').innerText = "--:--";
+        document.getElementById('sum-destination').innerText = "--";
+        document.getElementById('sum-duration').innerText = "--";
         document.getElementById('sum-dist').innerText = "-- km";
-        document.getElementById('sum-glare').innerText = "--%";
-        document.getElementById('sum-shade').innerText = "--%";
         setNavigationButtonsEnabled(false);
     }
 
     function updateSummaryBox(selectedRouteObj) {
-        const isKo = I18n.getLanguage().startsWith('ko');
-        const durMin = Math.round(selectedRouteObj.durationSec / 60);
-        const distKm = (selectedRouteObj.distanceMeters / 1000).toFixed(1);
-        const glarePct = selectedRouteObj.analyzed ? Math.round(selectedRouteObj.analyzed.avgGlareRisk * 100) : 0;
-        const shadePct = selectedRouteObj.analyzed ? Math.round(selectedRouteObj.analyzed.avgShadeCoverage * 100) : 0;
-
-        document.getElementById('sum-time').innerText = `${durMin}${isKo ? '분' : 'm'}`;
-        document.getElementById('sum-dist').innerText = `${distKm} km`;
-        document.getElementById('sum-glare').innerText = `${glarePct}%`;
-        document.getElementById('sum-shade').innerText = `${shadePct}%`;
+        updateRemainingSummary(selectedRouteObj.durationSec, selectedRouteObj.distanceMeters);
     }
 
     function updateHUDWithRoute(selectedRouteObj, sunPos) {
@@ -3275,9 +3280,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-open-search-modal').addEventListener('click', openSearchModal);
     document.getElementById('btn-top-bar-change').addEventListener('click', openSearchModal);
     document.getElementById('btn-close-drawer').addEventListener('click', () => {
-        document.getElementById('sidebar-panel').classList.remove('active');
-        const mapWrapper = document.getElementById('map-perspective-wrapper');
-        if (mapWrapper) mapWrapper.classList.remove('bottom-sheet-open');
+        setSidebarOpen(false);
     });
 
     const clearHistBtn = document.getElementById('btn-clear-history');
@@ -3735,7 +3738,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         enableKeepAwake();
 
-        document.getElementById('sidebar-panel').classList.remove('active');
+        setSidebarOpen(false);
 
         // Dynamically announce exact selected route mode ("최단 시간 경로", "눈부심 방지 역광 회피 경로", "그늘 우선 경로")
         TTSVoice.speak(getRouteAnnouncementText(currentMode, false));
@@ -4008,7 +4011,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     liveBtn.innerHTML = `<i class="fa-solid fa-square"></i> ${I18n.getText('liveNavStop')}`;
                 }
 
-                document.getElementById('sidebar-panel').classList.remove('active');
+                setSidebarOpen(false);
                 TTSVoice.speak(getRouteAnnouncementText(currentMode, true));
             } else {
                 toggleLiveGpsNavigation();
@@ -4124,8 +4127,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     currentMode = targetMode;
                     saveRouteModePreference(currentMode);
                     updateModeButtonsHighlight();
-                    updateRoute();
-                    document.getElementById('sidebar-panel').classList.remove('active');
+                    updateRoute(true, { reason: 'manual-route-change', reuseCachedCandidates: true });
+                    setSidebarOpen(false);
                     TTSVoice.speak(getRouteAnnouncementText(currentMode, true));
                 } else {
                     // User pressed CANCEL: REVERT highlight back to currently active guidance mode!
@@ -4135,7 +4138,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentMode = targetMode;
                 saveRouteModePreference(currentMode);
                 updateModeButtonsHighlight();
-                if (currentEnd) updateRoute();
+                // Switching cards while planning must not abort a running ZIP
+                // download/refinement. Reuse the latest verified result and
+                // let the existing background session finish normally.
+                if (routeData && routeData.routes) {
+                    selectedRouteObj = routeData.routes[currentMode] || routeData.routes.fastest;
+                    const currentRequestKey = getCurrentRouteRequestKey(
+                        isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes)
+                    );
+                    routeData.requestKey = currentRequestKey;
+                    pendingRouteRequestKey = null;
+                    verifiedRouteRequestKey = currentRequestKey;
+                    updateRouteOptionButtons(routeData);
+                    renderMapMarkersAndPolyline(selectedRouteObj, false);
+                    updateSummaryBox(selectedRouteObj);
+                    updateHUDWithRoute(selectedRouteObj, updateSunInfo());
+                    setNavigationButtonsEnabled(isCurrentRouteReady());
+                } else if (currentEnd) {
+                    updateRoute();
+                }
             }
         });
     });
@@ -4154,7 +4175,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 directMapBtn.innerHTML = `<i class="fa-solid fa-square"></i> ${I18n.getText('mapStopNav')}`;
             }
 
-            document.getElementById('sidebar-panel').classList.remove('active');
+            setSidebarOpen(false);
             TTSVoice.speak(getRouteAnnouncementText(currentMode, true));
         } else {
             toggleLiveGpsNavigation();

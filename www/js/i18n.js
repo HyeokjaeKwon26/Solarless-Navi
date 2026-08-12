@@ -72,8 +72,10 @@ window.I18n = (function () {
             origChip: "🎯 내 위치",
             barDestDefault: "목적지를 설정하세요",
             btnTopBarChange: "변경",
-            sumTimeLbl: "소요 시간",
-            sumDistLbl: "거리",
+            sumTimeLbl: "도착 예정",
+            sumDestinationLbl: "목적지",
+            sumDurationLbl: "남은 시간",
+            sumDistLbl: "남은 거리",
             sumGlareLbl: "역광 위험 추정",
             sumShadeLbl: "그늘 가능성 추정",
             mapStartNav: "안내 시작",
@@ -211,8 +213,10 @@ window.I18n = (function () {
             origChip: "🎯 My Location",
             barDestDefault: "Set Destination",
             btnTopBarChange: "Change",
-            sumTimeLbl: "Duration",
-            sumDistLbl: "Distance",
+            sumTimeLbl: "Arrival",
+            sumDestinationLbl: "Destination",
+            sumDurationLbl: "Remaining",
+            sumDistLbl: "Distance left",
             sumGlareLbl: "Estimated Glare Risk",
             sumShadeLbl: "Estimated Shade Possibility",
             mapStartNav: "Start Nav",
@@ -414,9 +418,9 @@ window.I18n = (function () {
         setElemHtml('btn-top-bar-change', `<i class="fa-solid fa-magnifying-glass"></i> ${dict.btnTopBarChange}`);
 
         setElemText('sum-time-lbl', dict.sumTimeLbl);
+        setElemText('sum-destination-lbl', dict.sumDestinationLbl);
+        setElemText('sum-duration-lbl', dict.sumDurationLbl);
         setElemText('sum-dist-lbl', dict.sumDistLbl);
-        setElemText('sum-glare-lbl', dict.sumGlareLbl);
-        setElemText('sum-shade-lbl', dict.sumShadeLbl);
 
         setElemText('recenter-toast-title', dict.recenterToastTitle);
         setElemText('recenter-toast-sub', dict.recenterToastSub);

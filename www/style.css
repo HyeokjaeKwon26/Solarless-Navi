@@ -868,6 +868,7 @@ body.pip-mode .map-attribution {
 .stat-icon.hazard { color: #fbbf24; }
 .stat-icon.shade { color: #a78bfa; }
 .stat-val { font-family: var(--font-heading); font-size: 13px; font-weight: 700; color: #fff; white-space: nowrap; }
+.summary-destination { max-width: min(30vw, 210px); overflow: hidden; text-overflow: ellipsis; }
 .stat-val.hazard { color: #fbbf24; }
 .stat-val.shade { color: #a78bfa; }
 .stat-lbl { font-size: 8px; color: var(--text-secondary); white-space: nowrap; }

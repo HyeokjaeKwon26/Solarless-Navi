@@ -854,6 +854,19 @@ test('route roles reject long detours with noise-level improvements', () => {
     assert.equal(routes[1].tradeoff.detourRatio, 1.5);
 });
 
+test('initial heuristic progress rejects a detour with rounded baseline benefit', () => {
+    const routes = [
+        { id: 'fast', durationSec: 2160, candidateIndex: 0, analyzed: { avgGlareRisk: 0.01, totalUvExposureUnits: 100, avgShadeCoverage: 0.20 }, raw: {} },
+        { id: 'shade-noise', durationSec: 2340, candidateIndex: 1, analyzed: { avgGlareRisk: 0.02, totalUvExposureUnits: 99.9, avgShadeCoverage: 0.201 }, raw: {} }
+    ];
+    const progress = ShadowRouter.buildHeuristicProgressResult(
+        routes, 1, new Date('2026-08-12T10:00:00Z'), { lat: 42.3, lng: -71.1 }
+    );
+    assert.equal(progress.routes.fastest.id, 'fast');
+    assert.equal(progress.routes.glareFree.id, 'fast');
+    assert.equal(progress.routes.shade.id, 'fast');
+});
+
 test('route roles accept a modest detour with meaningful glare or shade improvement', () => {
     const routes = [
         { id: 'fast', durationSec: 100, candidateIndex: 0, analyzed: { avgGlareRisk: 0.80, totalUvExposureUnits: 1, avgShadeCoverage: 0.20 } },
@@ -1115,7 +1128,7 @@ test('identical route groups invoke scene analysis once and return scene-tier re
     }
 });
 
-test('partial scene failure falls back only the affected role comparison tier', async () => {
+test('partial scene failure keeps a valid precision baseline and excludes failed alternatives', async () => {
     const originalFetch = sandbox.fetch;
     const originalSceneFetch = SceneShadow.fetchSceneForRoute;
     const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
@@ -1144,9 +1157,12 @@ test('partial scene failure falls back only the affected role comparison tier', 
             { candidates: rawRoutes, preferredRouteRole: 'fastest' }
         ));
         assert.ok(sceneCalls > 1);
-        assert.equal(result.analysisMode, 'mixed-by-role');
+        assert.equal(result.analysisMode, 'scene');
         assert.equal(result.routes.fastest.analysisMode, 'scene');
-        assert.ok([result.routes.glareFree, result.routes.shade].some(route => route.analysisMode === 'heuristic'));
+        assert.equal(result.routes.glareFree.analysisMode, 'scene');
+        assert.equal(result.routes.shade.analysisMode, 'scene');
+        assert.equal(result.routes.glareFree.id, result.routes.fastest.id);
+        assert.equal(result.routes.shade.id, result.routes.fastest.id);
         assert.ok(result.routes.all.some(route => route.sceneAnalysis));
     } finally {
         sandbox.fetch = originalFetch;
@@ -1686,6 +1702,40 @@ test('heading-up panning no longer resets the map DOM transform', () => {
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     assert.ok(html.includes('map-bottom-overlay-stack'));
     assert.ok(html.includes('openstreetmap.org/copyright'));
+});
+
+test('sidebar closing always restores map overlays and avoids duplicate touch toggles', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('function setSidebarOpen(open)'));
+    assert.ok(appSource.includes("mapWrapper.classList.toggle('bottom-sheet-open', nextOpen)"));
+    assert.equal(appSource.includes("btnMobileToggle.addEventListener('touchstart', toggleSidebar"), false);
+    assert.equal(/sidebar\.classList\.remove\('active'\)/.test(appSource), false);
+});
+
+test('Android release enables native HTTP for GitHub scene assets', () => {
+    const config = JSON.parse(fs.readFileSync(path.join(root, 'capacitor.config.json'), 'utf8'));
+    const build = fs.readFileSync(path.join(root, 'build_apk.bat'), 'utf8');
+    assert.equal(config.plugins.CapacitorHttp.enabled, true);
+    assert.ok(build.includes('capacitor.config.json'));
+    assert.ok(build.includes('assets\\capacitor.config.json'));
+});
+
+test('map summary exposes destination, arrival clock, remaining time, and distance', () => {
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(html.includes('id="sum-destination"'));
+    assert.ok(html.includes('id="sum-duration"'));
+    assert.ok(appSource.includes('function formatArrivalTime(remainingSec)'));
+    assert.ok(appSource.includes('function updateRemainingSummary(remainingSec, remainingMeters)'));
+});
+
+test('planning mode changes reuse the current analysis without aborting scene downloads', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const modeStart = appSource.lastIndexOf("document.querySelectorAll('.mode-btn')");
+    const modeSection = appSource.slice(modeStart, appSource.indexOf("document.getElementById('live-gps-nav-btn')", modeStart));
+    assert.ok(modeSection.includes('if (routeData && routeData.routes)'));
+    assert.ok(modeSection.includes('verifiedRouteRequestKey = currentRequestKey'));
+    assert.ok(modeSection.includes('setNavigationButtonsEnabled(isCurrentRouteReady())'));
 });
 
 test('vehicle animation and remaining path use cancellable/reusable renderers', () => {

@@ -45,6 +45,8 @@ copy /y "%ROOT_DIR%index.html" "%PUBLIC_DIR%\index.html" >nul
 if errorlevel 1 (echo [ERROR] Failed to copy index.html to Android assets.& exit /b 2)
 copy /y "%ROOT_DIR%style.css" "%PUBLIC_DIR%\style.css" >nul
 if errorlevel 1 (echo [ERROR] Failed to copy style.css to Android assets.& exit /b 2)
+copy /y "%ROOT_DIR%capacitor.config.json" "%ANDROID_DIR%\app\src\main\assets\capacitor.config.json" >nul
+if errorlevel 1 (echo [ERROR] Failed to copy Capacitor configuration to Android assets.& exit /b 2)
 xcopy /y /e /i "%ROOT_DIR%js\*" "%PUBLIC_DIR%\js\" >nul
 if errorlevel 1 (echo [ERROR] Failed to copy JavaScript assets to Android assets.& exit /b 2)
 xcopy /y /e /i "%ROOT_DIR%css\*" "%PUBLIC_DIR%\css\" >nul

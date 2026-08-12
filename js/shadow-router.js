@@ -1060,22 +1060,27 @@ window.ShadowRouter = (function () {
         [fastest, ...(purposeCandidates || [])].forEach(route => {
             if (route && !seen.has(route.id)) { seen.add(route.id); unique.push(route); }
         });
-        const allReady = unique.length > 0 && unique.every(route => {
-            const refined = refinedById.get(route.id);
-            return !!(refined && refined.ready);
-        });
-        const readyModes = unique.map(route => {
-            const refined = refinedById.get(route.id);
-            return refined && refined.refinedAnalyzed && refined.refinedAnalyzed.analysisMode;
-        }).filter(Boolean);
-        const mode = allReady
-            ? (readyModes.every(value => value === 'scene') ? 'scene' : 'hybrid-scene')
-            : 'heuristic';
+        const baselineResult = fastest ? refinedById.get(fastest.id) : null;
+        const baselineReady = !!(baselineResult && baselineResult.ready && baselineResult.refinedAnalyzed);
+        const baselineMode = baselineReady ? baselineResult.refinedAnalyzed.analysisMode : 'heuristic';
+        // A failed, unrelated alternative must not discard a valid precision
+        // baseline. Compare only candidates that completed with the exact same
+        // analysis tier as the fastest baseline; failed/mismatched candidates
+        // remain diagnostic metadata and are never mixed into the ranking.
+        const comparable = baselineReady
+            ? unique.filter(route => {
+                const refined = refinedById.get(route.id);
+                return !!(refined && refined.ready && refined.refinedAnalyzed &&
+                    refined.refinedAnalyzed.analysisMode === baselineMode);
+            })
+            : unique;
+        const allReady = baselineReady;
+        const mode = baselineReady ? baselineMode : 'heuristic';
         const failedResult = unique.map(route => refinedById.get(route.id)).find(result => result && !result.ready);
-        const roleFallbackReason = failedResult && failedResult.fallbackReason ? failedResult.fallbackReason : null;
-        const views = unique.map(route => {
+        const roleFallbackReason = !baselineReady && failedResult && failedResult.fallbackReason ? failedResult.fallbackReason : null;
+        const views = comparable.map(route => {
             const refined = refinedById.get(route.id);
-            return createRoleRouteView(route, allReady && refined ? refined.refinedAnalyzed : route.analyzed,
+            return createRoleRouteView(route, baselineReady && refined ? refined.refinedAnalyzed : route.analyzed,
                 mode, roleFallbackReason || (refined && refined.fallbackReason));
         });
         const baseline = views[0];
@@ -1144,9 +1149,13 @@ window.ShadowRouter = (function () {
 
     function buildHeuristicProgressResult(analyzedRoutes, timeOfDayAdjustment, dateObj, start) {
         if (!analyzedRoutes.length) return null;
-        const fastest = analyzedRoutes.slice().sort((a, b) => a.durationSec - b.durationSec)[0];
-        const glareFree = analyzedRoutes.slice().sort((a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk || a.durationSec - b.durationSec)[0];
-        const shade = analyzedRoutes.slice().sort((a, b) => a.analyzed.totalUvExposureUnits - b.analyzed.totalUvExposureUnits || b.analyzed.avgShadeCoverage - a.analyzed.avgShadeCoverage || a.durationSec - b.durationSec)[0];
+        // Apply the same detour/improvement gates to the immediate heuristic
+        // result as the final result. Tiny floating-point differences must not
+        // recommend a visibly slower route with no meaningful user benefit.
+        const roles = selectRouteRoles(analyzedRoutes);
+        const fastest = roles.fastest;
+        const glareFree = roles.glareFree;
+        const shade = roles.shade;
         applyExposureReductions(fastest, glareFree, shade, dateObj, start);
         return {
             timeOfDayAdjustment,
@@ -1325,6 +1334,12 @@ window.ShadowRouter = (function () {
                     precomputedManifestTimeoutMs: options.precomputedManifestTimeoutMs || 10000,
                     precomputedPackTimeoutMs: options.precomputedPackTimeoutMs || 15000,
                     precomputedPackRetryCount: options.precomputedPackRetryCount ?? 1,
+                    // CapacitorHttp bridges binary responses as base64. Keep
+                    // Android ZIP transfers sequential to bound transient heap
+                    // while desktop browsers may still fetch two packs.
+                    scenePackConcurrency: options.scenePackConcurrency ||
+                        (window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' &&
+                            window.Capacitor.isNativePlatform() ? 1 : 2),
                     precomputedManifestUrl: options.precomputedManifestUrl,
                     maxRouteMeters: 250000
                 };
@@ -1456,9 +1471,10 @@ window.ShadowRouter = (function () {
         });
 
         // Apply reductions only after the common-tier comparison set is fixed.
-        // If any precision candidate lacks scene data, every final ranking
-        // deliberately stays on the common heuristic tier. Successful scene
-        // results remain auxiliary metadata and are never mixed into scores.
+        // A role uses precision only when its fastest baseline is ready. It
+        // compares that baseline solely with successful candidates from the
+        // same precision tier; failed candidates are excluded, never replaced
+        // by heuristic scores in the precision comparison.
         const fastestTier = selectRoleByTier(selection.fastest, [], 'fastest', refinedById);
         const glareTier = selectRoleByTier(selection.fastest, selection.glareCandidates, 'glare', refinedById);
         const shadeTier = selectRoleByTier(selection.fastest, selection.shadeCandidates, 'shade', refinedById);
@@ -1702,6 +1718,7 @@ window.ShadowRouter = (function () {
         areRoutesGeometricallySimilar: areRoutesGeometricallySimilar,
         selectPrecisionCandidates: selectPrecisionCandidates,
         selectRouteRoles: selectRouteRoles,
+        buildHeuristicProgressResult: buildHeuristicProgressResult,
         calculateRouteTradeoff: calculateRouteTradeoff,
         applyExposureReductions: applyExposureReductions,
         routeContainsToll: routeContainsToll,
