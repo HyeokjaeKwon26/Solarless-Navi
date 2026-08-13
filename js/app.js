@@ -30,9 +30,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let gpsLastError = null;
     let gpsAccuracyCircle = null;
     let navigationStartPending = false;
+    let navigationTransitionPending = false;
+    let navigationTransitionGeneration = 0;
+    let liveDestinationBackup = null;
     let currentEnd = null;
     let destinationName = "";
     const SAVED_ROUTE_MODE_KEY = 'solarless_last_route_mode';
+    const ACTIVE_NAVIGATION_SESSION_KEY = 'solarless_active_navigation_session';
+    const ACTIVE_NAVIGATION_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
     let currentMode = 'glareFree';
     try {
         const savedMode = localStorage.getItem(SAVED_ROUTE_MODE_KEY);
@@ -80,6 +85,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let isLiveNavActive = false;
     let isPipMode = false;
     let gpsWatchId = null;
+    let lastGpsWatchRestartAt = 0;
+    let navigationResumePromise = null;
+    let lastNavigationResumeAt = 0;
     let lastGpsPosition = null;
     let lastGpsTimestamp = null;
     let lastRerouteTime = 0;
@@ -127,6 +135,49 @@ document.addEventListener('DOMContentLoaded', () => {
         const first = coords[0] || [];
         const last = coords[coords.length - 1] || [];
         return `${route && route.id ? route.id : 'route'}|${coords.length}|${first[0]},${first[1]}|${last[0]},${last[1]}`;
+    }
+
+    function saveActiveNavigationSession() {
+        if (!currentEnd) return;
+        try {
+            localStorage.setItem(ACTIVE_NAVIGATION_SESSION_KEY, JSON.stringify({
+                end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
+                name: destinationName,
+                mode: currentMode,
+                savedAt: Date.now()
+            }));
+        } catch (e) {}
+    }
+
+    function clearActiveNavigationSession() {
+        try { localStorage.removeItem(ACTIVE_NAVIGATION_SESSION_KEY); } catch (e) {}
+    }
+
+    function offerActiveNavigationSessionRestore() {
+        if (isLiveNavActive || currentEnd) return;
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem(ACTIVE_NAVIGATION_SESSION_KEY) || 'null'); } catch (e) {}
+        const valid = saved && saved.end && Number.isFinite(Number(saved.end.lat)) &&
+            Number.isFinite(Number(saved.end.lng)) && Date.now() - Number(saved.savedAt || 0) <= ACTIVE_NAVIGATION_SESSION_TTL_MS;
+        if (!valid) {
+            clearActiveNavigationSession();
+            return;
+        }
+        const isKo = I18n.getLanguage().startsWith('ko');
+        const resume = confirm(isKo
+            ? `이전에 안내하던 ${saved.name || '목적지'} 경로를 다시 계산하시겠습니까?`
+            : `Recalculate guidance to ${saved.name || 'the previous destination'}?`);
+        if (!resume) {
+            clearActiveNavigationSession();
+            return;
+        }
+        currentEnd = { lat: Number(saved.end.lat), lng: Number(saved.end.lng) };
+        destinationName = String(saved.name || (isKo ? '이전 목적지' : 'Previous destination'));
+        if (['glareFree', 'fastest', 'shade'].includes(saved.mode)) currentMode = saved.mode;
+        updateModeButtonsHighlight();
+        const destinationInput = document.getElementById('destination-input');
+        if (destinationInput) destinationInput.value = destinationName;
+        startNavigationFlow();
     }
 
     function resetNavigationRouteProgress(route = null) {
@@ -250,7 +301,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ['live-gps-nav-btn', 'btn-map-start-nav'].forEach((id) => {
             const button = document.getElementById(id);
             if (!button) return;
-            const shouldDisable = !isEnabled && !isLiveNavActive;
+            const shouldDisable = navigationTransitionPending || (!isEnabled && !isLiveNavActive);
             button.disabled = shouldDisable;
             button.setAttribute('aria-disabled', shouldDisable ? 'true' : 'false');
         });
@@ -462,6 +513,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.DebugLogger) window.DebugLogger.init();
 
         setTimeout(checkGitHubLatestVersion, 2500);
+        setTimeout(offerActiveNavigationSessionRestore, 700);
     }
 
     /* MAP PANNING TRACKING & SHORT AUTO RECENTER COUNTDOWN TOAST */
@@ -1514,6 +1566,24 @@ document.addEventListener('DOMContentLoaded', () => {
         stopVehicleMarkerAnimation();
     }
 
+    function restartWebGpsWatchAfterInterruption() {
+        if (!isLiveNavActive || !navigator.geolocation || typeof window.__solarlessProcessNavigationPosition !== 'function') return false;
+        const now = Date.now();
+        if (now - lastGpsWatchRestartAt < 1500) return false;
+        lastGpsWatchRestartAt = now;
+        if (gpsWatchId !== null) navigator.geolocation.clearWatch(gpsWatchId);
+        gpsWatchId = navigator.geolocation.watchPosition(
+            position => window.__solarlessProcessNavigationPosition(position, 'web-watch-resumed'),
+            error => {
+                gpsLastError = error && error.code;
+                setGpsStatusIndicator(false, false);
+                if (window.DebugLogger) window.DebugLogger.log('gps-watch-resume-error', { code: error && error.code });
+            },
+            { enableHighAccuracy: true, timeout: 5000, maximumAge: 15000 }
+        );
+        return true;
+    }
+
     async function enableKeepAwake() {
         if (!navigator.wakeLock || document.visibilityState === 'hidden' || !isLiveNavActive) return;
         if (wakeLockSentinel && !wakeLockSentinel.released) return;
@@ -1567,6 +1637,34 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function resumeLiveNavigationAfterInterruption() {
+        if (!isLiveNavActive) return;
+        if (navigationResumePromise) return navigationResumePromise;
+        if (Date.now() - lastNavigationResumeAt < 1000) return;
+        lastNavigationResumeAt = Date.now();
+        navigationResumePromise = (async () => {
+            if (window.TTSVoice && typeof window.TTSVoice.handleInterruptionEnd === 'function') {
+                window.TTSVoice.handleInterruptionEnd();
+            }
+            if (window.PipController && typeof window.PipController.setNavigationActive === 'function') {
+                try {
+                    const state = await window.PipController.setNavigationActive(true);
+                    if (state && state.locationServiceStarted === false && window.DebugLogger) {
+                        window.DebugLogger.log('navigation-service-resume-failed', { reason: state.reason || 'UNKNOWN' });
+                    }
+                } catch (error) {
+                    if (window.DebugLogger) window.DebugLogger.log('navigation-service-resume-error', { message: String(error && error.message || error) });
+                }
+            }
+            if (!isLiveNavActive) return;
+            await applyNativeLastLocationOnResume();
+            restartWebGpsWatchAfterInterruption();
+            enableKeepAwake();
+            if (targetSnapLat !== null) startVehicleMarkerAnimationLoop();
+        })().finally(() => { navigationResumePromise = null; });
+        return navigationResumePromise;
+    }
+
     function setupAppResumeListener() {
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
             window.Capacitor.Plugins.App.addListener('appStateChange', (state) => {
@@ -1575,12 +1673,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     // backgrounded. Release our sentinel explicitly as well.
                     disableKeepAwake();
                     stopVehicleMarkerAnimation();
+                    if (isLiveNavActive && window.TTSVoice && typeof window.TTSVoice.handleInterruptionStart === 'function') {
+                        window.TTSVoice.handleInterruptionStart();
+                    }
                     return;
                 }
-                if (isLiveNavActive) enableKeepAwake();
-                if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
-                applyNativeLastLocationOnResume();
-                if (currentEnd) {
+                if (isLiveNavActive) {
+                    resumeLiveNavigationAfterInterruption();
+                } else if (currentEnd) {
                     console.log("App resumed to foreground. Refreshing GPS position...");
                     requestUserGpsLocation(false).catch(() => {});
                 }
@@ -1591,11 +1691,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (document.visibilityState === 'hidden') {
                 disableKeepAwake();
                 stopVehicleMarkerAnimation();
+                if (isLiveNavActive && window.TTSVoice && typeof window.TTSVoice.handleInterruptionStart === 'function') {
+                    window.TTSVoice.handleInterruptionStart();
+                }
             }
             else {
-                if (isLiveNavActive) enableKeepAwake();
-                if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
-                applyNativeLastLocationOnResume();
+                if (isLiveNavActive) resumeLiveNavigationAfterInterruption();
                 updateSunInfo();
             }
         });
@@ -1603,6 +1704,11 @@ document.addEventListener('DOMContentLoaded', () => {
             disableKeepAwake();
             stopVehicleMarkerAnimation();
         });
+    }
+
+    function setNavigationTransitionPending(pending) {
+        navigationTransitionPending = !!pending;
+        setNavigationButtonsEnabled(isLiveNavActive || isCurrentRouteReady());
     }
 
     async function setupNativeLocationPermissionState() {
@@ -2223,6 +2329,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const destInput = document.getElementById('destination-input');
         const typedText = destInput ? destInput.value.trim() : "";
         const isKo = I18n.getLanguage().startsWith('ko');
+        const previousLiveDestination = isLiveNavActive && currentEnd ? {
+            end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
+            name: destinationName,
+            verifiedRouteRequestKey
+        } : null;
 
         if (!typedText) {
             alert(isKo ? "목적지 장소나 주소를 입력해 주세요." : "Please enter a destination place or address.");
@@ -2251,6 +2362,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert(isKo ? `'${typedText}' 위치를 찾을 수 없습니다. 주소나 지역명을 다시 확인해 주세요.` : `Cannot find '${typedText}'. Please verify the address.`);
                 return;
             }
+        }
+
+        if (isLiveNavActive) {
+            const changed = !previousLiveDestination || !currentEnd ||
+                ShadowRouter.calculateDistanceMeters(
+                    previousLiveDestination.end.lat, previousLiveDestination.end.lng,
+                    currentEnd.lat, currentEnd.lng
+                ) > 5;
+            if (!changed) {
+                document.getElementById('start-search-modal').classList.add('hidden');
+                return;
+            }
+            const confirmed = confirm(isKo
+                ? '주행 중 목적지를 변경하고 현재 위치에서 새 경로를 계산하시겠습니까?'
+                : 'Change the destination and calculate a new route from the current position?');
+            if (!confirmed) {
+                currentEnd = previousLiveDestination.end;
+                destinationName = previousLiveDestination.name;
+                verifiedRouteRequestKey = previousLiveDestination.verifiedRouteRequestKey;
+                if (destInput) destInput.value = destinationName;
+                return;
+            }
+            liveDestinationBackup = previousLiveDestination;
+            document.getElementById('start-search-modal').classList.add('hidden');
+            document.getElementById('bar-dest-text').innerText = destinationName;
+            updateRoute(true, { reason: 'destination-change' });
+            return;
         }
 
         startNavigationFlow();
@@ -2497,6 +2635,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const rerouteReason = String(routeOptions.reason || (isMidDrive ? 'off-route' : 'planning'));
+        const destinationBackup = isMidDrive && rerouteReason === 'destination-change' ? liveDestinationBackup : null;
         let liveRerouteCommitted = false;
 
         // A mid-drive request is an explicit reroute. It is the only path
@@ -2637,6 +2776,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             // verified OSRM result. This is the point where it
                             // is safe to remove the old remaining polyline.
                             liveRerouteCommitted = true;
+                            if (rerouteReason === 'destination-change') {
+                                liveDestinationBackup = null;
+                                saveActiveNavigationSession();
+                            }
                             navigationSessionRouteId = selectedRouteObj.id || null;
                             navigationSessionRouteGeometry = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
                                 ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])])
@@ -2694,6 +2837,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Keep the last verified OSRM route visible, but it is tied to
                 // the old start/end/mode and must not be used for this request.
                 setNavigationButtonsEnabled(false);
+            }
+            if (destinationBackup && isLiveNavActive) {
+                currentEnd = destinationBackup.end;
+                destinationName = destinationBackup.name;
+                liveDestinationBackup = null;
+                const destinationInput = document.getElementById('destination-input');
+                const destinationBar = document.getElementById('bar-dest-text');
+                if (destinationInput) destinationInput.value = destinationName;
+                if (destinationBar) destinationBar.innerText = destinationName;
+                verifiedRouteRequestKey = destinationBackup.verifiedRouteRequestKey;
+                setNavigationButtonsEnabled(true);
             }
             showRouteFailureMessage(e, hadPreviousRoute);
             if (window.DebugLogger) window.DebugLogger.log('route-enrichment-failure', { message: String(e && e.message || e), keptPreviousRoute: hadPreviousRoute });
@@ -3248,10 +3402,32 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     setupAutocomplete('destination-input', 'destination-results', (coords, name) => {
+        const previousLiveDestination = isLiveNavActive && currentEnd ? {
+            end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
+            name: destinationName,
+            verifiedRouteRequestKey
+        } : null;
         currentEnd = coords;
         destinationName = name;
         document.getElementById('btn-confirm-destination').disabled = false;
-        startNavigationFlow();
+        if (!isLiveNavActive) {
+            startNavigationFlow();
+            return;
+        }
+        const confirmed = confirm(I18n.getLanguage().startsWith('ko')
+            ? '주행 중 목적지를 변경하고 현재 위치에서 새 경로를 계산하시겠습니까?'
+            : 'Change the destination and calculate a new route from the current position?');
+        if (!confirmed) {
+            currentEnd = previousLiveDestination.end;
+            destinationName = previousLiveDestination.name;
+            verifiedRouteRequestKey = previousLiveDestination.verifiedRouteRequestKey;
+            document.getElementById('destination-input').value = destinationName;
+            return;
+        }
+        liveDestinationBackup = previousLiveDestination;
+        document.getElementById('start-search-modal').classList.add('hidden');
+        document.getElementById('bar-dest-text').innerText = destinationName;
+        updateRoute(true, { reason: 'destination-change' });
     });
 
     document.getElementById('btn-confirm-destination').addEventListener('click', resolveAndStartNavigation);
@@ -3543,6 +3719,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
         navigationSessionArrived = true;
+        clearActiveNavigationSession();
         stopGpsWatch();
         isLiveNavActive = false;
         stopRouteSummaryCycling();
@@ -3596,6 +3773,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function toggleLiveGpsNavigation() {
+        if (navigationTransitionPending) return;
+        const transitionGeneration = ++navigationTransitionGeneration;
+        setNavigationTransitionPending(true);
+        try {
+            return await performLiveGpsNavigationToggle();
+        } finally {
+            if (transitionGeneration === navigationTransitionGeneration) {
+                setNavigationTransitionPending(false);
+            }
+        }
+    }
+
+    async function performLiveGpsNavigationToggle() {
         const btn = document.getElementById('live-gps-nav-btn');
         const directMapBtn = document.getElementById('btn-map-start-nav');
         const isKo = I18n.getLanguage().startsWith('ko');
@@ -3621,6 +3811,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             disableKeepAwake();
             navigationSessionArrived = true;
+            clearActiveNavigationSession();
+            liveDestinationBackup = null;
             navigationSessionRouteId = null;
             navigationSessionRouteGeometry = null;
             window.__solarlessProcessNavigationPosition = null;
@@ -3690,6 +3882,7 @@ document.addEventListener('DOMContentLoaded', () => {
         navigationSessionStartedAt = navStartTime;
         navigationSessionStartDistanceMeters = navStartDistanceMeters;
         navigationSessionArrived = false;
+        saveActiveNavigationSession();
         precisionReroutePending = false;
         precisionRerouteCooldownUntil = 0;
         navigationConsecutiveOffRouteCount = 0;
@@ -4153,6 +4346,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     // User confirmed OK: update mode, persist preference, and highlight to targetMode!
                     currentMode = targetMode;
                     saveRouteModePreference(currentMode);
+                    saveActiveNavigationSession();
                     updateModeButtonsHighlight();
                     updateRoute(true, { reason: 'manual-route-change', reuseCachedCandidates: true });
                     setSidebarOpen(false);

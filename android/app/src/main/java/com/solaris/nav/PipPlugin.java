@@ -32,6 +32,7 @@ public class PipPlugin extends Plugin {
     @Override
     public void load() {
         instance = this;
+        navigationActive = LocationForegroundService.isRunning();
         locationReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
                 if (LocationForegroundService.ACTION_SERVICE_STATUS.equals(intent.getAction())) {
@@ -308,6 +309,7 @@ public class PipPlugin extends Plugin {
             dispatchReason("LOCATION_SERVICE_NO_PROVIDER");
             return false;
         }
+        if (LocationForegroundService.isRunning()) return true;
         Intent intent = new Intent(activity, LocationForegroundService.class);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) activity.startForegroundService(intent);

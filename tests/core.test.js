@@ -1978,7 +1978,8 @@ test('live navigation auto-recenters after map exploration and cycles two large 
     assert.ok(appSource.includes("isKo ? '분' : ' min'"));
     assert.equal((html.match(/data-summary-page="0"/g) || []).length, 3);
     assert.equal((html.match(/data-summary-page="1"/g) || []).length, 3);
-    assert.ok(css.includes('.summary-stat[data-summary-page].summary-page-visible'));
+    assert.match(css, /\.summary-stat\[data-summary-page\]\.summary-page-visible\s*\{[^}]*opacity:\s*1/);
+    assert.match(css, /\.summary-divider\[data-summary-page\]\.summary-page-visible\s*\{[^}]*opacity:\s*1/);
     assert.ok(css.includes('font-size: 17px'));
 });
 
@@ -2273,6 +2274,46 @@ test('native and web location sources share the navigation pipeline and resume f
     assert.ok(appSource.includes('getLastNavigationLocation'));
     assert.ok(appSource.includes('gps-stale-ignored'));
     assert.ok(appSource.includes('gps-duplicate-ignored'));
+});
+
+test('navigation lifecycle survives brief interruptions without recalculating the active route', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const resumeStart = appSource.indexOf('async function resumeLiveNavigationAfterInterruption');
+    const resumeEnd = appSource.indexOf('function setupAppResumeListener', resumeStart);
+    const resumeSource = appSource.slice(resumeStart, resumeEnd);
+    assert.ok(resumeSource.includes('setNavigationActive(true)'));
+    assert.ok(resumeSource.includes('applyNativeLastLocationOnResume()'));
+    assert.ok(resumeSource.includes('restartWebGpsWatchAfterInterruption()'));
+    assert.equal(resumeSource.includes('updateRoute('), false);
+    assert.ok(appSource.includes("window.__solarlessProcessNavigationPosition(position, 'web-watch-resumed')"));
+    assert.ok(appSource.includes('navigationResumePromise'));
+});
+
+test('navigation start-stop is serialized and destination changes use a safe live reroute', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('if (navigationTransitionPending) return'));
+    assert.ok(appSource.includes('return await performLiveGpsNavigationToggle()'));
+    assert.ok(appSource.includes("updateRoute(true, { reason: 'destination-change' })"));
+    assert.ok(appSource.includes('liveDestinationBackup = previousLiveDestination'));
+    assert.ok(appSource.includes('currentEnd = destinationBackup.end'));
+    assert.ok(appSource.includes('verifiedRouteRequestKey = destinationBackup.verifiedRouteRequestKey'));
+});
+
+test('interrupted voice prompts reset only after resume and active sessions are recoverable', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const ttsSource = fs.readFileSync(path.join(root, 'js/tts-voice.js'), 'utf8');
+    const service = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/solaris/nav/LocationForegroundService.java'), 'utf8');
+    assert.ok(ttsSource.includes('function handleInterruptionStart()'));
+    assert.ok(ttsSource.includes('function handleInterruptionEnd()'));
+    assert.ok(appSource.includes('TTSVoice.handleInterruptionStart()'));
+    assert.ok(appSource.includes('TTSVoice.handleInterruptionEnd()'));
+    assert.ok(ttsSource.includes("lastTurnAnnounceBucket = ''"));
+    assert.ok(appSource.includes('ACTIVE_NAVIGATION_SESSION_TTL_MS'));
+    assert.ok(appSource.includes('offerActiveNavigationSessionRestore'));
+    assert.ok(appSource.includes('clearActiveNavigationSession()'));
+    assert.ok(service.includes('return START_STICKY'));
+    assert.ok(service.includes('PendingIntent.getActivity'));
+    assert.ok(service.includes('if (updatesRequested && providerRegistered) return'));
 });
 
 test('navigation freezes the direct route and permits replacement only through explicit reroute', () => {

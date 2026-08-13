@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
@@ -30,10 +31,12 @@ public final class LocationForegroundService extends Service implements Location
     private static final int NOTIFICATION_ID = 1206;
     private LocationManager locationManager;
     private boolean providerRegistered;
+    private boolean updatesRequested;
 
     @Override
     public void onCreate() {
         super.onCreate();
+        instanceRunning = true;
         createNotificationChannel();
     }
 
@@ -46,6 +49,13 @@ public final class LocationForegroundService extends Service implements Location
             .setContentTitle("SolarLess Navi")
             .setContentText("Navigation location is active")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentIntent(PendingIntent.getActivity(
+                this,
+                0,
+                new Intent(this, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0
+            ))
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .build();
@@ -61,7 +71,7 @@ public final class LocationForegroundService extends Service implements Location
             return START_NOT_STICKY;
         }
         requestLocationUpdates();
-        return START_NOT_STICKY;
+        return START_STICKY;
     }
 
     private void createNotificationChannel() {
@@ -77,6 +87,7 @@ public final class LocationForegroundService extends Service implements Location
     }
 
     private void requestLocationUpdates() {
+        if (updatesRequested && providerRegistered) return;
         if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
             checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             sendStatus("LOCATION_PERMISSION_MISSING");
@@ -95,6 +106,8 @@ public final class LocationForegroundService extends Service implements Location
         if (!providerRegistered) {
             sendStatus("LOCATION_SERVICE_NO_PROVIDER");
             stopSelf();
+        } else {
+            updatesRequested = true;
         }
     }
 
@@ -158,6 +171,12 @@ public final class LocationForegroundService extends Service implements Location
         context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().clear().apply();
     }
 
+    public static boolean isRunning() {
+        return instanceRunning;
+    }
+
+    private static volatile boolean instanceRunning;
+
     @Override public void onProviderEnabled(String provider) { }
     @Override public void onProviderDisabled(String provider) { }
 
@@ -166,6 +185,9 @@ public final class LocationForegroundService extends Service implements Location
         if (locationManager != null) {
             try { locationManager.removeUpdates(this); } catch (SecurityException ignored) { }
         }
+        updatesRequested = false;
+        providerRegistered = false;
+        instanceRunning = false;
         sendStatus("LOCATION_SERVICE_STOPPED");
         super.onDestroy();
     }

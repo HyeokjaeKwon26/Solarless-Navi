@@ -14,6 +14,7 @@ window.TTSVoice = (function () {
     let lastTurnAnnounceBucket = '';
     let lastTurnAnnounceTime = 0;
     let audioCtx = null;
+    let interruptionActive = false;
 
     function getAudioContext() {
         if (!audioCtx) {
@@ -103,6 +104,23 @@ window.TTSVoice = (function () {
         }
     }
 
+    function handleInterruptionStart() {
+        interruptionActive = true;
+        stopSpeech();
+    }
+
+    function handleInterruptionEnd() {
+        interruptionActive = false;
+        // Permit the next accepted GPS fix to repeat the current maneuver.
+        // A call or another full-screen interruption may have hidden or
+        // silenced the instruction that was emitted immediately beforehand.
+        lastSpokenText = '';
+        lastSpokenTime = 0;
+        lastTurnAnnounceBucket = '';
+        lastTurnAnnounceTime = 0;
+        lastAnnouncedBucket = '';
+    }
+
     function showVoiceToast(text) {
         if (typeof document === 'undefined') return;
         let toast = document.getElementById('voice-toast');
@@ -132,7 +150,7 @@ window.TTSVoice = (function () {
     }
 
     async function speak(text, force = false, playChimeType = null) {
-        if (!text || isMuted) return;
+        if (!text || isMuted || interruptionActive) return;
 
         if (playChimeType) {
             playWarningChime(playChimeType);
@@ -433,6 +451,8 @@ window.TTSVoice = (function () {
         setLanguage: setLanguage,
         toggleMute: toggleMute,
         speak: speak,
+        handleInterruptionStart: handleInterruptionStart,
+        handleInterruptionEnd: handleInterruptionEnd,
         playWarningChime: playWarningChime,
         announceProactiveGlareWarning: announceProactiveGlareWarning,
         announceNavHazard: announceNavHazard,

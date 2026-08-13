@@ -877,8 +877,8 @@ body.pip-mode .map-attribution {
 .summary-divider { width: 1px; height: 30px; background: var(--border-color); flex-shrink: 0; }
 .summary-stat[data-summary-page],
 .summary-divider[data-summary-page] { display: none; opacity: 0; }
-.summary-stat[data-summary-page].summary-page-visible { display: flex; animation: summary-page-fade 0.7s ease-out; }
-.summary-divider[data-summary-page].summary-page-visible { display: block; animation: summary-page-fade 0.7s ease-out; }
+.summary-stat[data-summary-page].summary-page-visible { display: flex; opacity: 1; animation: summary-page-fade 0.7s ease-out; }
+.summary-divider[data-summary-page].summary-page-visible { display: block; opacity: 1; animation: summary-page-fade 0.7s ease-out; }
 .summary-divider-between-pages { display: none; }
 
 @keyframes summary-page-fade {
