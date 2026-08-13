@@ -1812,7 +1812,7 @@
 
     function getSegmentOcclusion(p1, p2, sunPosition, scene, segmentIndex) {
         if (!scene || !sunPosition || !finite(sunPosition.altitude) || !finite(sunPosition.azimuth)) return null;
-        if (sunPosition.altitude <= -6) return { shadeScore: 1, source: 'night', buildingBlocked: false, terrainBlocked: false, tunnel: false };
+        if (sunPosition.altitude <= -6) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'night', source: 'night', buildingBlocked: false, terrainBlocked: false, tunnel: false };
         const origin = scene.origin;
         if (!origin) return null;
         const point = projectPoint(Number(p1[0]), Number(p1[1]), origin);
@@ -1826,7 +1826,7 @@
                 break;
             }
         }
-        if (tunnel) return { shadeScore: 1, source: 'tunnel', buildingBlocked: false, terrainBlocked: false, tunnel: true };
+        if (tunnel) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'tunnel', buildingBlocked: false, terrainBlocked: false, tunnel: true };
 
         let buildingBlocked = false;
         if (segmentCoverage.buildings && segmentCoverage.buildingGround !== false) {
@@ -1858,16 +1858,16 @@
         if (profile && finite(roadElevation)) {
             terrainBlocked = isTerrainRayOccluded(Number(roadElevation), Number(sunPosition.altitude), profile.distances, profile.elevations, 2);
         }
-        if (buildingBlocked && terrainBlocked) return { shadeScore: 1, source: 'building+terrain', buildingBlocked, terrainBlocked, tunnel: false };
-        if (buildingBlocked) return { shadeScore: 0.88, source: 'building', buildingBlocked, terrainBlocked, tunnel: false };
-        if (terrainBlocked) return { shadeScore: 0.78, source: 'terrain', buildingBlocked, terrainBlocked, tunnel: false };
+        if (buildingBlocked && terrainBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'building+terrain', buildingBlocked, terrainBlocked, tunnel: false };
+        if (buildingBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'building', buildingBlocked, terrainBlocked, tunnel: false };
+        if (terrainBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'terrain', buildingBlocked, terrainBlocked, tunnel: false };
         if (segmentCoverage.buildingGround === false && !terrainBlocked) {
-            return { shadeScore: null, source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false };
+            return { shadeScore: null, occlusionRatio: null, shadeState: 'unknown', source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false };
         }
         if (segmentCoverage.buildings || segmentCoverage.terrain || segmentCoverage.tunnels) {
-            return { shadeScore: 0, source: 'scene-clear', buildingBlocked, terrainBlocked, tunnel: false };
+            return { shadeScore: 0, occlusionRatio: 0, shadeState: 'confirmed-clear', source: 'scene-clear', buildingBlocked, terrainBlocked, tunnel: false };
         }
-        return { shadeScore: null, source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false };
+        return { shadeScore: null, occlusionRatio: null, shadeState: 'unknown', source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false };
     }
 
     return {

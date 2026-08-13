@@ -90,6 +90,15 @@ function calculateSegmentGlare(segmentHeading, sunPos) {
     return 0;
 }
 
+function calculateDirectSolarExposure(sunIntensity, occlusionRatio = null) {
+    const intensity = Number(sunIntensity);
+    if (!Number.isFinite(intensity) || intensity <= 0) return 0;
+    const occlusion = Number.isFinite(Number(occlusionRatio))
+        ? Math.max(0, Math.min(1, Number(occlusionRatio)))
+        : 0;
+    return Math.max(0, Math.min(1, intensity)) * (1 - occlusion);
+}
+
 function estimateSegmentShade(p1, p2, sunPos) {
     if (!sunPos || !isFinite(sunPos.altitude) || !isFinite(sunPos.azimuth)) return 0.5;
     if (sunPos.altitude <= -6.0) return 1.0;
@@ -114,9 +123,10 @@ self.onmessage = function (e) {
     // enough: the worker must have imported the occlusion API as well.
     const sceneApiAvailable = self.SceneShadow &&
         typeof self.SceneShadow.getSegmentOcclusion === 'function';
-    const useScene = !!scene &&
-        scene.precisionReady !== false &&
-        !!sceneApiAvailable;
+    const partialScene = !!scene && scene.precisionReady === false && scene.partial === true &&
+        Number(scene.coverage && scene.coverage.coveredSegments || 0) > 0;
+    const useScene = !!scene && !!sceneApiAvailable && (scene.precisionReady !== false || partialScene);
+    const analysisMode = !useScene ? 'heuristic' : (partialScene ? 'hybrid-scene' : 'scene');
 
     const n = coordinates.length;
     // Accept pre-computed timeLookup or build uniform fallback
@@ -142,7 +152,9 @@ self.onmessage = function (e) {
     }
 
     const segments = [];
-    let totalGlareWeighted = 0, totalShadeWeighted = 0, totalUvWeighted = 0, totalPathMeters = 0;
+    let totalGlareWeighted = 0, totalShadeWeighted = 0, totalSolarExposureWeighted = 0, totalPathMeters = 0;
+    let confirmedShadeDistance = 0, confirmedSceneDistance = 0;
+    let estimatedShadeWeighted = 0, estimatedDistance = 0;
 
     for (let i = 0; i < n - 1; i++) {
         const p1 = [coordinates[i][1], coordinates[i][0]];
@@ -163,12 +175,15 @@ self.onmessage = function (e) {
         const sceneResult = useScene && self.SceneShadow
             ? self.SceneShadow.getSegmentOcclusion(p1, p2, segSunPos, scene, i)
             : null;
-        const shadeScore = sceneResult && Number.isFinite(sceneResult.shadeScore)
-            ? sceneResult.shadeScore
-            : estimateSegmentShade(p1, p2, segSunPos);
-        const unshadedFraction = 1.0 - shadeScore * 0.85;
-        const vehicleExposureFactor = 0.35 + 0.65 * glareRisk;
-        const segmentUvScore = isFinite(sunIntensity) ? sunIntensity * unshadedFraction * vehicleExposureFactor : 0;
+        const estimatedShadePotential = estimateSegmentShade(p1, p2, segSunPos);
+        const shadeState = sceneResult && sceneResult.shadeState
+            ? sceneResult.shadeState
+            : (sunIntensity <= 0 ? 'night' : 'estimated-shade');
+        const confirmedOcclusion = sceneResult && Number.isFinite(sceneResult.occlusionRatio)
+            ? Math.max(0, Math.min(1, Number(sceneResult.occlusionRatio)))
+            : null;
+        const directSolarExposure = calculateDirectSolarExposure(sunIntensity, confirmedOcclusion);
+        const shadeScore = confirmedOcclusion === null ? estimatedShadePotential : confirmedOcclusion;
 
         segments.push({
             p1,
@@ -177,20 +192,36 @@ self.onmessage = function (e) {
             heading,
             glareRisk,
             shadeScore,
+            shadeState,
+            confirmedShade: shadeState === 'confirmed-shade',
+            estimatedShadePotential,
+            occlusionRatio: confirmedOcclusion,
+            sunIntensity,
+            directSolarExposure,
             shadeSource: sceneResult && sceneResult.source ? sceneResult.source : 'heuristic',
             sceneOcclusion: sceneResult || null,
-            uvScore: segmentUvScore
+            solarExposureScore: directSolarExposure,
+            uvScore: directSolarExposure
         });
 
         totalGlareWeighted += glareRisk * segDist;
         totalShadeWeighted += shadeScore * segDist;
-        totalUvWeighted += segmentUvScore * segDist;
+        totalSolarExposureWeighted += directSolarExposure * segDist;
+        if (shadeState === 'confirmed-shade' || shadeState === 'confirmed-clear') {
+            confirmedSceneDistance += segDist;
+            if (shadeState === 'confirmed-shade') confirmedShadeDistance += segDist;
+        } else if (shadeState === 'estimated-shade') {
+            estimatedDistance += segDist;
+            estimatedShadeWeighted += estimatedShadePotential * segDist;
+        }
     }
 
     const denom = totalPathMeters || 1;
     const avgGlare = totalGlareWeighted / denom;
     const avgShade = totalShadeWeighted / denom;
-    const totalUv = totalUvWeighted / denom;
+    const totalSolarExposure = totalSolarExposureWeighted / denom;
+    const confirmedShadeRatio = confirmedSceneDistance > 0 ? confirmedShadeDistance / confirmedSceneDistance : 0;
+    const estimatedShadeRatio = estimatedDistance > 0 ? estimatedShadeWeighted / estimatedDistance : 0;
 
     self.postMessage({
         id,
@@ -198,11 +229,15 @@ self.onmessage = function (e) {
             segments,
             avgGlareRisk: isFinite(avgGlare) ? avgGlare : 0,
             avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
-            totalUvExposureUnits: isFinite(totalUv) ? totalUv : 0,
+            totalDirectSolarExposureUnits: isFinite(totalSolarExposure) ? totalSolarExposure : 0,
+            totalUvExposureUnits: isFinite(totalSolarExposure) ? totalSolarExposure : 0,
+            confirmedShadeRatio: isFinite(confirmedShadeRatio) ? confirmedShadeRatio : 0,
+            estimatedShadeRatio: isFinite(estimatedShadeRatio) ? estimatedShadeRatio : 0,
+            confirmedSceneDistanceMeters: confirmedSceneDistance,
             sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
             segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
             sceneSource: useScene && scene.source ? scene.source : 'heuristic fallback',
-            analysisMode: useScene ? 'scene' : 'heuristic'
+            analysisMode
         }
     });
 };

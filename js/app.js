@@ -337,7 +337,9 @@ document.addEventListener('DOMContentLoaded', () => {
             targetRoute = selectedRouteObj;
         }
 
-        const uvCut = (targetRoute && typeof targetRoute.uvReductionPct === 'number') ? targetRoute.uvReductionPct : 0;
+        const uvCut = targetRoute && Number.isFinite(Number(targetRoute.solarExposureReductionPct))
+            ? Number(targetRoute.solarExposureReductionPct)
+            : ((targetRoute && typeof targetRoute.uvReductionPct === 'number') ? targetRoute.uvReductionPct : 0);
         const isNight = targetRoute && targetRoute.isNight;
 
         let modeNameKo = "역광 회피 경로";
@@ -2212,7 +2214,10 @@ document.addEventListener('DOMContentLoaded', () => {
             dynamicRemainingRouteId = routeIdentity;
             dynamicRemainingSegmentIndex = null;
         }
-        const colorForSegment = seg => seg.glareRisk > 0.45 ? '#f59e0b' : (seg.shadeScore > 0.5 ? '#7c3aed' : '#0284c7');
+        const colorForSegment = seg => seg.glareRisk > 0.45
+            ? '#f59e0b'
+            : (seg.confirmedShade ? '#7c3aed'
+                : (seg.shadeState === 'estimated-shade' && seg.shadeScore > 0.5 ? '#0e7490' : '#0284c7'));
         // Reuse one Leaflet layer per segment. GPS ticks update only the
         // current segment; unchanged future layers keep their DOM/SVG path.
         if (dynamicRemainingSegmentIndex === segIdx && dynamicRemainingLayers.size > 0) {
@@ -2868,16 +2873,26 @@ document.addEventListener('DOMContentLoaded', () => {
         const glrGlarePct = glr.analyzed ? Math.round(glr.analyzed.avgGlareRisk * 100) : 0;
         const shdGlarePct = shd.analyzed ? Math.round(shd.analyzed.avgGlareRisk * 100) : 0;
 
-        const glrUvCut = glr.uvReductionPct || 0;
-        const shdUvCut = shd.uvReductionPct || 0;
+        const glrUvCut = Number(glr.solarExposureReductionPct ?? glr.uvReductionPct) || 0;
+        const shdUvCut = Number(shd.solarExposureReductionPct ?? shd.uvReductionPct) || 0;
+        const routeShadeText = route => {
+            const analyzed = route && route.analyzed || {};
+            const mode = route && (route.analysisMode || analyzed.analysisMode);
+            if (['scene', 'hybrid-scene'].includes(mode)) {
+                const confirmed = Math.round(Math.max(0, Math.min(1, Number(analyzed.confirmedShadeRatio) || 0)) * 100);
+                return isKo ? `확인된 그늘 ${confirmed}%` : `Confirmed shade ${confirmed}%`;
+            }
+            const estimated = Math.round(Math.max(0, Math.min(1, Number(analyzed.estimatedShadeRatio ?? analyzed.avgShadeCoverage) || 0)) * 100);
+            return isKo ? `추정 그늘 가능성 ${estimated}%` : `Estimated shade potential ${estimated}%`;
+        };
 
         // 1. Fastest Route (OSRM baseline: estimated glare and solar exposure)
         document.getElementById('eta-fastest').innerText = `⏱️ ${fstMin}${isKo ? '분' : 'm'} (${fstKm}km)`;
         const fstDesc = document.getElementById('desc-fastest');
         if (fstDesc) {
             fstDesc.innerText = isKo
-                ? `역광 위험 추정 ${fstGlarePct}% | 태양 노출 추정 기준`
-                : `Estimated glare ${fstGlarePct}% | Solar exposure baseline`;
+                ? `역광 위험 추정 ${fstGlarePct}% | 태양 노출 기준 | ${routeShadeText(fst)}`
+                : `Estimated glare ${fstGlarePct}% | Solar exposure baseline | ${routeShadeText(fst)}`;
         }
         const fstTraffic = document.getElementById('traffic-fastest');
         if (fstTraffic) {
@@ -2900,9 +2915,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (glr.isNight) {
                 glrDesc.innerText = `${glrDiffText} | ${isKo ? '역광 위험 추정 0% | 야간 (태양 노출 0% 🌙)' : 'Estimated glare 0% | Night (solar exposure 0% 🌙)'}`;
             } else if (glrUvCut > 0) {
-                glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험 추정 ${glrGlarePct}% | 태양 노출 추정 ${glrUvCut}% 감소 🛡️` : `Estimated glare ${glrGlarePct}% | Estimated solar exposure -${glrUvCut}% 🛡️`}`;
+                glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험 추정 ${glrGlarePct}% | 태양 노출 ${glrUvCut}% 감소 | ${routeShadeText(glr)} 🛡️` : `Estimated glare ${glrGlarePct}% | Solar exposure -${glrUvCut}% | ${routeShadeText(glr)} 🛡️`}`;
             } else {
-                glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험 추정 ${glrGlarePct}% | 태양 노출 추정 기준 🛡️` : `Estimated glare ${glrGlarePct}% | Solar exposure baseline 🛡️`}`;
+                glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험 추정 ${glrGlarePct}% | 태양 노출 기준 | ${routeShadeText(glr)} 🛡️` : `Estimated glare ${glrGlarePct}% | Solar exposure baseline | ${routeShadeText(glr)} 🛡️`}`;
             }
         }
 
@@ -2915,9 +2930,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (shd.isNight) {
                 shdDesc.innerText = `${shdDiffText} | ${isKo ? '역광 위험 추정 0% | 야간 (태양 노출 0% 🌙)' : 'Estimated glare 0% | Night (solar exposure 0% 🌙)'}`;
             } else if (shdUvCut > 0) {
-                shdDesc.innerText = `${shdDiffText} | ${isKo ? `역광 위험 추정 ${shdGlarePct}% | 태양 노출 추정 ${shdUvCut}% 감소 ☂️` : `Estimated glare ${shdGlarePct}% | Estimated solar exposure -${shdUvCut}% ☂️`}`;
+                shdDesc.innerText = `${shdDiffText} | ${isKo ? `태양 노출 ${shdUvCut}% 감소 | ${routeShadeText(shd)} ☂️` : `Solar exposure -${shdUvCut}% | ${routeShadeText(shd)} ☂️`}`;
             } else {
-                shdDesc.innerText = `${shdDiffText} | ${isKo ? `역광 위험 추정 ${shdGlarePct}% | 태양 노출 추정 기준 ☂️` : `Estimated glare ${shdGlarePct}% | Solar exposure baseline ☂️`}`;
+                shdDesc.innerText = `${shdDiffText} | ${isKo ? `태양 노출 기준 | ${routeShadeText(shd)} ☂️` : `Solar exposure baseline | ${routeShadeText(shd)} ☂️`}`;
             }
         }
 
@@ -3047,7 +3062,8 @@ document.addEventListener('DOMContentLoaded', () => {
             segments.forEach(seg => {
                 let segColor = '#0284c7';
                 if (seg.glareRisk > 0.45) segColor = '#f59e0b';
-                else if (seg.shadeScore > 0.5) segColor = '#7c3aed';
+                else if (seg.confirmedShade) segColor = '#7c3aed';
+                else if (seg.shadeState === 'estimated-shade' && seg.shadeScore > 0.5) segColor = '#0e7490';
 
                 L.polyline([seg.p1, seg.p2], {
                     color: segColor,

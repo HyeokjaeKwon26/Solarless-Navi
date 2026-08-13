@@ -40,13 +40,74 @@ $$T_i = T_{start} + \left(\frac{d_{0 \rightarrow i}}{D_{total}}\right)T_{route}$
 - 대안 경로의 태양 노출 추정 감소율은 같은 분석 등급의 빠른 경로를 기준으로 계산합니다.
 - 시간은 OSRM 소요시간에 시간대 보정을 적용한 예상값이며 **실시간 교통정보가 아닙니다**.
 
+## 차광·태양 노출 계산법
+
+SolarLess Navi는 **역광 위험**, **실제 차광**, **직접 태양 노출**을 서로 다른 값으로 계산합니다. 태양이 머리 위에 있어 전방 눈부심이 적더라도 건물·지형·터널이 광선을 막지 않으면 태양 노출은 높게 계산됩니다.
+
+### 1. 구간별 태양 위치와 태양 강도
+
+경로 구간 `i`의 위치와 예상 통과 시각 `T_i`에서 태양 고도 `α_i`와 방위각 `A_i`를 계산합니다. 정규화된 태양 강도 `S_i`는 태양이 높을수록 커지고, 태양 고도가 `-6°` 아래인 야간에는 0입니다.
+
+$$0 \le S_i = f(\alpha_i) \le 1$$
+
+`S_i`는 경로 간 상대 비교를 위한 실험용 지표이며 실제 자외선 지수나 조사량이 아닙니다.
+
+### 2. 건물·지형·터널 차광
+
+장면 데이터가 있는 구간에서는 해당 시각의 태양 방향으로 광선을 투사합니다. 광선이 OSM 건물 높이, DEM 지형 단면 또는 터널과 교차하면 차광 `O_i=1`, 차단물이 없다고 확인되면 `O_i=0`으로 둡니다.
+
+$$O_i = \begin{cases}
+1, & \text{건물·지형·터널이 태양 광선을 차단함} \\
+0, & \text{장면 데이터에서 차단 없음이 확인됨}
+\end{cases}$$
+
+장면 데이터가 없는 구간은 실제 그늘로 확정하지 않습니다. 화면에는 도로 방향과 태양 위치에 따른 **추정 그늘 가능성**만 별도로 표시하며, 직접 태양 노출 계산에서는 가짜 차광 이득이 생기지 않도록 보수적으로 `O_i=0`인 노출 구간으로 취급합니다.
+
+### 3. 직접 태양 노출
+
+구간의 직접 태양 노출 `E_i`는 태양 강도와 실제 차광 여부만으로 계산합니다.
+
+$$E_i = S_i(1-O_i)$$
+
+경로 전체의 태양 노출 지표 `E_{route}`는 구간 거리 `d_i`로 가중 평균합니다.
+
+$$E_{route} = \frac{\sum_i E_i d_i}{\sum_i d_i}$$
+
+따라서 태양이 높고 탁 트인 도로는 역광 위험이 낮더라도 `E_i`가 높습니다. 반대로 터널이나 건물·산이 태양을 실제로 가리면 `E_i`는 0에 가까워집니다.
+
+### 4. 확인된 그늘 비율
+
+`확인된 그늘`은 장면 데이터로 판정할 수 있었던 거리만을 분모로 사용합니다.
+
+$$C_{shade} = \frac{\sum_i d_i\,\mathbf{1}[O_i=1]}{\sum_i d_i\,\mathbf{1}[O_i\text{가 확인됨}]}$$
+
+예를 들어 `장면 80% 분석 · 확인된 그늘 30%`는 전체 경로의 80%에서 건물·지형 판정이 가능했고, 그 분석 가능 구간 중 30%에서 차광이 확인됐다는 의미입니다. 나머지 20%를 그늘이라고 의미하지 않습니다.
+
+### 5. 역광 위험은 별도 계산
+
+차량 진행 방위 `H_i`와 태양 방위 `A_i`의 최소 각도 차이를 `Δ_i`라고 합니다.
+
+$$\Delta_i = \min(|H_i-A_i|,\,360^\circ-|H_i-A_i|)$$
+
+태양이 낮고 차량 정면에 가까울수록 역광 위험 `G_i`가 커집니다. 역광 값은 눈부심 회피 경로 선택에만 사용하며 `E_i`를 낮추는 계수로 사용하지 않습니다.
+
+### 6. 경로 간 태양 노출 감소율
+
+대안 경로의 감소율은 반드시 같은 분석 등급의 빠른 경로를 기준으로 계산합니다.
+
+$$R = 100\left(1-\frac{E_{candidate}}{E_{fastest}}\right)$$
+
+서로 다른 분석 등급의 숫자는 직접 비교하지 않습니다. 정밀 비교 기준을 만들 수 없으면 모든 후보를 공통 휴리스틱 등급으로 되돌립니다. 그늘 우선 경로는 최대 35%의 시간 증가 범위에서 태양 노출이 5% 이상 감소하거나 확인된 그늘 비율이 5%포인트 이상 증가할 때만 대안으로 선택할 수 있습니다.
+
+> **면책 및 안전 고지:** 태양 노출, 확인된 그늘, 추정 그늘 가능성, 역광 위험은 공개 지도·고도 데이터와 수학적 모델로 계산한 실험용 상대 지표입니다. 실제 UV 선량, 일사량, 피부 노출, 차량 내부 온도, 열질환·안과 질환 위험 또는 의학적 보호 효과를 측정하거나 보장하지 않습니다. 건물·수목·공사·터널·지형·날씨와 도로 데이터가 누락되거나 오래됐을 수 있습니다. 경로 선택과 운전 중에는 현장 표지, 교통법규, 기상 상태, 도로 상황과 운전자의 안전 판단을 항상 우선하세요. 앱 화면을 조작하거나 수치를 확인하기 위해 주행 중 주의를 분산시키지 마세요.
+
 ## 분석 등급
 
 | 앱 표시 | 의미 |
 | :--- | :--- |
 | **정밀 장면** | 비교에 필요한 건물·터널·지형 데이터를 확보해 2.5D 태양 광선 교차를 계산한 결과 |
-| **부분 장면** | 확보된 구간에는 장면 계산을 적용하고, 데이터가 부족한 구간에는 공통 휴리스틱을 적용한 결과 |
-| **휴리스틱** | 장면 데이터를 사용할 수 없어 태양 위치와 도로 방향을 중심으로 계산한 결과 |
+| **부분 장면** | 확보된 구간에는 실제 차광 계산을 적용하고, 미확인 구간에는 추정 그늘 가능성을 별도 표시하되 직접 태양 노출에는 차광 이득을 적용하지 않은 결과 |
+| **휴리스틱** | 장면 데이터를 사용할 수 없어 태양 위치와 도로 방향으로 그늘 가능성을 추정하되 실제 그늘로 확정하지 않은 결과 |
 | **야간** | 태양 고도가 충분히 낮아 장면 차광 분석이 필요하지 않은 상태 |
 
 건물 높이 태그가 없으면 층수 또는 보수적인 기본 높이를 사용할 수 있고, DEM은 유한한 해상도의 표본입니다. 따라서 정밀 장면도 실제 건축물의 완전한 3D 모델이나 측정된 차광률을 의미하지 않습니다.
@@ -190,7 +251,52 @@ SolarLess Navi is an experimental Android navigation app that compares the faste
 
 The Android map compensates touch and drag coordinates while heading-up or manually rotated. Address searches prioritize structured house-number and road matches, and navigation uses the final OSRM road coordinate for its destination marker and arrival check rather than a building centroid. Cancelling guidance clears the previous destination and route-card state.
 
-The app displays an initial common-heuristic result quickly and refines competitive routes as scene data becomes available. It downloads only the 5 km tiles required around the route, caches them locally, and can combine multiple regional releases for boundary-crossing trips. Missing coverage is explicitly reported as partial scene analysis and falls back to the same heuristic model for uncovered segments.
+The app displays an initial common-heuristic result quickly and refines competitive routes as scene data becomes available. It downloads only the 5 km tiles required around the route, caches them locally, and can combine multiple regional releases for boundary-crossing trips. Missing coverage is explicitly reported as partial scene analysis. Unverified segments keep a separate heuristic shade-potential value but receive no artificial shade benefit in the direct-exposure score.
+
+#### Shade and solar-exposure calculation
+
+SolarLess Navi calculates **windshield glare**, **confirmed occlusion**, and **direct solar exposure** as separate quantities. A high overhead sun can produce little forward glare while still producing high solar exposure on an open road.
+
+For route segment `i`, the app computes solar altitude `α_i` and azimuth `A_i` at the estimated pass time. Normalized solar intensity is:
+
+$$0 \le S_i=f(\alpha_i)\le1$$
+
+`S_i` is an experimental relative index, not a measured UV index or radiant dose. Where scene data is available, a sun ray is tested against OSM building heights, DEM terrain profiles, and tunnels:
+
+$$O_i=\begin{cases}
+1,&\text{the sun ray is blocked by a building, terrain, or tunnel}\\
+0,&\text{the scene confirms a clear sun ray}
+\end{cases}$$
+
+Direct solar exposure is independent of glare:
+
+$$E_i=S_i(1-O_i)$$
+
+The route exposure index is distance weighted:
+
+$$E_{route}=\frac{\sum_i E_i d_i}{\sum_i d_i}$$
+
+An overhead unobstructed sun therefore remains high exposure even when forward glare is low. Confirmed building, terrain, or tunnel shade reduces direct exposure to zero for that segment. A segment without scene coverage is never labeled confirmed shade; it receives a separate heuristic shade-potential value and is conservatively treated as exposed in the direct-exposure score.
+
+Confirmed shade uses only scene-verifiable distance as its denominator:
+
+$$C_{shade}=\frac{\sum_i d_i\,\mathbf{1}[O_i=1]}{\sum_i d_i\,\mathbf{1}[O_i\text{ is known}]}$$
+
+Thus, “80% scene coverage · 30% confirmed shade” means that 80% of the route was scene-verifiable and 30% of that verifiable distance was confirmed shaded. It does not claim that the unverified 20% is shaded.
+
+Glare uses the angular difference between vehicle heading `H_i` and solar azimuth `A_i`:
+
+$$\Delta_i=\min(|H_i-A_i|,\,360^\circ-|H_i-A_i|)$$
+
+Low sun close to the vehicle heading produces higher glare. Glare affects the glare-avoidance route only and is not multiplied into direct solar exposure.
+
+Exposure reduction is calculated against the fastest route from the same analysis tier:
+
+$$R=100\left(1-\frac{E_{candidate}}{E_{fastest}}\right)$$
+
+Values from different analysis tiers are never compared directly. If a common precision baseline is unavailable, candidates revert to a common heuristic tier. A shade alternative must stay within the configured 35% time-detour ceiling and provide at least a 5% exposure reduction or a 5-percentage-point confirmed-shade improvement.
+
+> **Disclaimer and safety notice:** Solar exposure, confirmed shade, estimated shade potential, and glare risk are experimental relative indicators derived from public map/elevation data and mathematical models. They do not measure or guarantee actual UV dose, solar irradiance, skin exposure, cabin temperature, heat-illness or eye-disease risk, medical protection, or driving safety. Buildings, vegetation, construction, tunnels, terrain, weather, and road data may be missing, outdated, or inaccurate. Always prioritize traffic laws, road signs, weather, actual road conditions, and the driver's judgment. Do not interact with the app or inspect its estimates in a way that distracts from driving.
 
 #### Important limitations
 

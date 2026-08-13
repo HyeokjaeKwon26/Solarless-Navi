@@ -152,6 +152,32 @@ test('offline route fallback never returns a synthetic navigation route', () => 
     assert.equal(OfflineMap.generateStandaloneRoute({ lat: 0, lng: 0 }, { lat: 1, lng: 1 }, new Date()), null);
 });
 
+test('overhead sun remains high exposure when clear and glare cannot reduce it', () => {
+    const sunIntensity = ShadowRouter.calculateSolarUvIntensity(70);
+    const glare = ShadowRouter.calculateSegmentGlare(180, { altitude: 70, azimuth: 180 });
+    const clearExposure = ShadowRouter.calculateDirectSolarExposure(sunIntensity, 0);
+    const shadedExposure = ShadowRouter.calculateDirectSolarExposure(sunIntensity, 1);
+    assert.ok(glare <= 0.04, `expected low overhead glare, got ${glare}`);
+    assert.ok(clearExposure > 0.9, `clear overhead exposure must remain high, got ${clearExposure}`);
+    assert.equal(shadedExposure, 0);
+    assert.equal(
+        ShadowRouter.calculateDirectSolarExposure(sunIntensity, 0),
+        ShadowRouter.calculateDirectSolarExposure(sunIntensity, 0),
+        'exposure has no glare input and cannot be reduced by glare'
+    );
+});
+
+test('heuristic shade potential is never reported as confirmed shade', () => {
+    const result = ShadowRouter.analyzeRouteSegments(
+        [[127, 37], [127.01, 37]], new Date('2026-06-21T03:00:00Z'), 100, null, null
+    );
+    assert.equal(result.analysisMode, 'heuristic');
+    assert.equal(result.confirmedShadeRatio, 0);
+    assert.ok(result.estimatedShadeRatio >= 0 && result.estimatedShadeRatio <= 1);
+    assert.ok(result.segments.every(segment => segment.shadeState !== 'confirmed-shade'));
+    assert.ok(result.segments.every(segment => segment.occlusionRatio === null));
+});
+
 test('screen drag deltas are inverse-rotated exactly once for heading-up maps', () => {
     const eastAt90 = RouteState.inverseRotateScreenDelta(100, 0, 90);
     assert.ok(Math.abs(eastAt90.x) < 1e-9);
@@ -260,7 +286,10 @@ test('scene coverage falls back to heuristics for uncovered route segments', () 
         terrainProfiles: []
     };
     const sun = { altitude: 10, azimuth: 90 };
-    assert.equal(SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, scene, 0).source, 'building');
+    const blocked = SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, scene, 0);
+    assert.equal(blocked.source, 'building');
+    assert.equal(blocked.shadeState, 'confirmed-shade');
+    assert.equal(blocked.occlusionRatio, 1);
     assert.equal(SceneShadow.getSegmentOcclusion([0, 0], [0.00001, 0], sun, scene, 1).source, 'heuristic');
 });
 
@@ -537,6 +566,22 @@ test('solar worker handles heuristic and precision scene messages without scope 
     assert.ok(Math.abs(workerScene.avgGlareRisk - mainScene.avgGlareRisk) < 1e-12);
     assert.ok(Math.abs(workerScene.avgShadeCoverage - mainScene.avgShadeCoverage) < 1e-12);
     assert.ok(Math.abs(workerScene.totalUvExposureUnits - mainScene.totalUvExposureUnits) < 1e-12);
+    assert.ok(Math.abs(workerScene.totalDirectSolarExposureUnits - mainScene.totalDirectSolarExposureUnits) < 1e-12);
+    assert.ok(Math.abs(workerScene.confirmedShadeRatio - mainScene.confirmedShadeRatio) < 1e-12);
+    assert.ok(Math.abs(workerScene.estimatedShadeRatio - mainScene.estimatedShadeRatio) < 1e-12);
+
+    const partialScene = {
+        ...scene,
+        precisionReady: false,
+        partial: true,
+        coverage: { ...scene.coverage, coveredSegments: 1, segmentCount: 1, segmentRatio: 1 }
+    };
+    const workerPartial = runSolarWorkerMessage({ ...base, scene: partialScene });
+    const mainPartial = ShadowRouter.analyzeRouteSegments(coordinates, new Date(0), 100, null, partialScene);
+    assert.equal(workerPartial.analysisMode, 'hybrid-scene');
+    assert.equal(mainPartial.analysisMode, 'hybrid-scene');
+    assert.ok(Math.abs(workerPartial.totalDirectSolarExposureUnits - mainPartial.totalDirectSolarExposureUnits) < 1e-12);
+    assert.ok(Math.abs(workerPartial.confirmedShadeRatio - mainPartial.confirmedShadeRatio) < 1e-12);
 
     const importFailure = runSolarWorkerMessage({ ...base, scene }, false);
     assert.equal(importFailure.analysisMode, 'heuristic');
@@ -888,6 +933,30 @@ test('route roles accept a modest detour with meaningful glare or shade improvem
     assert.equal(roles.shade.id, 'shade');
     assert.ok(routes[1].tradeoff.glareImprovement > 0.05);
     assert.ok(routes[2].tradeoff.uvReductionPct >= 5);
+});
+
+test('precision shade selection uses direct exposure and confirmed shade, not glare', () => {
+    const fastest = {
+        id: 'fast', durationSec: 100, baseDurationSec: 100, candidateIndex: 0,
+        analyzed: {
+            analysisMode: 'scene', avgGlareRisk: 0.05, avgShadeCoverage: 0.1,
+            totalDirectSolarExposureUnits: 0.8, totalUvExposureUnits: 0.8,
+            confirmedShadeRatio: 0.1
+        }
+    };
+    const shaded = {
+        id: 'shaded', durationSec: 112, baseDurationSec: 112, candidateIndex: 1,
+        analyzed: {
+            analysisMode: 'scene', avgGlareRisk: 0.8, avgShadeCoverage: 0.5,
+            totalDirectSolarExposureUnits: 0.55, totalUvExposureUnits: 0.55,
+            confirmedShadeRatio: 0.5
+        }
+    };
+    const roles = ShadowRouter.selectRouteRoles([fastest, shaded]);
+    assert.equal(roles.glareFree.id, 'fast');
+    assert.equal(roles.shade.id, 'shaded');
+    assert.ok(shaded.tradeoff.solarExposureReductionPct > 30);
+    assert.ok(shaded.tradeoff.shadeImprovement >= 0.4);
 });
 
 test('exposure reduction uses the same-tier refined fastest baseline', () => {
