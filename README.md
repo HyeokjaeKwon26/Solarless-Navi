@@ -3,7 +3,7 @@
 태양 위치, 도로 진행 방향, 건물·터널·지형 데이터를 이용해 **빠른 경로**, **눈부심 회피 경로**, **그늘 우선 경로**를 비교하는 Android용 실험적 내비게이션입니다.
 
 [![Platform](https://img.shields.io/badge/Platform-Android-blue.svg?style=for-the-badge&logo=android)](https://developer.android.com)
-[![Scene Data](https://img.shields.io/badge/Scene%20Data-USA-2ea44f.svg?style=for-the-badge)](#미국-사전계산-장면-데이터)
+[![Scene Data](https://img.shields.io/badge/Scene%20Data-USA%20%2B%20Korea-2ea44f.svg?style=for-the-badge)](#미국한국-사전계산-장면-데이터)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
 
 > SolarLess Navi의 그늘·눈부심·태양 노출 수치는 측정값이 아닌 **실험용 추정값**입니다. 실제 도로 상황, 교통법규와 운전자의 판단을 항상 우선하세요.
@@ -51,9 +51,9 @@ $$T_i = T_{start} + \left(\frac{d_{0 \rightarrow i}}{D_{total}}\right)T_{route}$
 
 건물 높이 태그가 없으면 층수 또는 보수적인 기본 높이를 사용할 수 있고, DEM은 유한한 해상도의 표본입니다. 따라서 정밀 장면도 실제 건축물의 완전한 3D 모델이나 측정된 차광률을 의미하지 않습니다.
 
-## 미국 사전계산 장면 데이터
+## 미국·한국 사전계산 장면 데이터
 
-미국 내 경로에서는 필요한 **5km 장면 타일만** GitHub Release에서 내려받아 기기에 캐시합니다. 앱 시작 시 미국 전체 데이터를 받지 않으며, 다음 주행부터 캐시된 타일을 재사용합니다.
+미국과 한국 내 경로에서는 필요한 **5km 장면 타일만** GitHub Release에서 내려받아 기기에 캐시합니다. 앱 시작 시 전체 데이터를 받지 않으며, 다음 주행부터 캐시된 타일을 재사용합니다.
 
 경로가 둘 이상의 데이터 권역을 통과하면 각 권역의 필요한 타일을 함께 사용합니다. 특정 타일이 없거나 다운로드에 실패하면 사용 가능한 구간은 부분 장면으로 유지하고, 나머지 구간은 휴리스틱으로 전환합니다. 사전계산 타일을 사용할 수 없는 경우에는 제한된 Overpass/OpenTopoData 조회를 시도할 수 있습니다.
 
@@ -66,6 +66,7 @@ $$T_i = T_{start} + \left(\frac{d_{0 \rightarrow i}}{D_{total}}\right)T_{route}$
 | Midwest | 43,668 | 899 | [scene-us-midwest-hybrid-v2](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v2) |
 | South | 47,524 | 899 | [scene-us-south-hybrid-v2](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v2) |
 | West | 42,575 | 899 | [scene-us-west-hybrid-v2](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v2) |
+| South Korea | 3,961 | 153 | [scene-kr-hybrid-v1](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-kr-hybrid-v1) |
 
 각 manifest에는 타일과 ZIP의 대응 관계, 파일 크기, SHA-256, 생성 시각과 데이터 출처 메타데이터가 기록됩니다. ZIP 전체를 메모리에 펼치지 않고 경로에 필요한 JSON 항목만 Worker에서 선택적으로 해제·파싱합니다.
 
@@ -185,7 +186,7 @@ node tools/validate-scene-release.mjs
 
 ### SolarLess Navi
 
-SolarLess Navi is an experimental Android navigation app that compares the fastest, lower-glare, and shade-preferred routes using solar position, road direction, and—when available—precomputed U.S. building, tunnel, and terrain scene tiles.
+SolarLess Navi is an experimental Android navigation app that compares the fastest, lower-glare, and shade-preferred routes using solar position, road direction, and—when available—precomputed U.S. and South Korean building, tunnel, and terrain scene tiles.
 
 The Android map compensates touch and drag coordinates while heading-up or manually rotated. Address searches prioritize structured house-number and road matches, and navigation uses the final OSRM road coordinate for its destination marker and arrival check rather than a building centroid. Cancelling guidance clears the previous destination and route-card state.
 

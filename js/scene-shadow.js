@@ -30,6 +30,11 @@
     const BUILDING_GRID_CELL_METERS = 250;
     const PRECOMPUTED_REGION_MANIFESTS = [
         {
+            id: 'kr',
+            url: 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/kr/manifest.json',
+            bounds: { south: 32.36076, west: 124.3188, north: 38.64966, east: 132.3386 }
+        },
+        {
             id: 'us-northeast',
             url: 'https://raw.githubusercontent.com/HyeokjaeKwon26/Solarless-Navi/main/data/scene/us-northeast/manifest.json',
             bounds: { south: 38.74287, west: -80.52275, north: 47.46222, east: -66.87164 }

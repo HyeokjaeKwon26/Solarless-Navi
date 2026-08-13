@@ -2036,6 +2036,30 @@ test('scene pack worker and regional merge hooks are present', () => {
     assert.ok(scene.includes('PRECOMPUTED_CACHE_MAX_BYTES'));
 });
 
+test('South Korea precomputed scene coverage is registered and packaged within release limits', () => {
+    const scene = fs.readFileSync(path.join(root, 'js/scene-shadow.js'), 'utf8');
+    const manifestPath = path.join(root, 'data/scene/kr/manifest.json');
+    assert.ok(scene.includes("id: 'kr'"));
+    assert.ok(scene.includes('data/scene/kr/manifest.json'));
+    assert.ok(fs.existsSync(manifestPath));
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.equal(manifest.region, 'SOUTH-KOREA');
+    assert.equal(manifest.releaseTag, 'scene-kr-hybrid-v1');
+    assert.equal(manifest.stats.tileCount, 3961);
+    assert.equal(manifest.stats.packCount, 153);
+    assert.ok(manifest.stats.releaseAssetCount <= 900);
+    assert.ok(manifest.stats.maxPackBytes < 10 * 1024 * 1024);
+    assert.deepEqual(manifest.grid, { latOrigin: 32, lngOrigin: 124, cosLat: 0.8090169943749475 });
+});
+
+test('HGT downloader supports east-longitude tiles used by South Korea', () => {
+    const downloader = fs.readFileSync(path.join(root, 'tools/download-hgt-grid.ps1'), 'utf8');
+    assert.ok(downloader.includes("[ValidateSet('W', 'E')]"));
+    assert.ok(downloader.includes("[string]$LongitudeHemisphere = 'W'"));
+    assert.ok(downloader.includes("$name = '{0}{1:D2}{2}{3:D3}'"));
+    assert.ok(downloader.includes('$latitudeBand'));
+});
+
 test('release metadata never treats local PBF mtime as extract timestamp', () => {
     const source = fs.readFileSync(path.join(root, 'tools/build-scene-tiles.mjs'), 'utf8');
     assert.ok(source.includes('SCENE_OSM_EXTRACT_TIMESTAMP'));
