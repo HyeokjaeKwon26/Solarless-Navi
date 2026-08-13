@@ -585,12 +585,104 @@ window.ShadowRouter = (function () {
     }
 
     function getRouteEndpoint(route) {
+        const rawRoute = route && route.raw ? route.raw : route;
+        const roadDestination = rawRoute && rawRoute.roadDestination;
+        if (roadDestination && Number.isFinite(Number(roadDestination.lat)) && Number.isFinite(Number(roadDestination.lng))) {
+            return { lat: Number(roadDestination.lat), lng: Number(roadDestination.lng) };
+        }
         const coordinates = route && route.analyzed && Array.isArray(route.analyzed.coordinates)
             ? route.analyzed.coordinates
-            : getRouteCoordinates(route && route.raw ? route.raw : route);
+            : getRouteCoordinates(rawRoute);
         const last = coordinates && coordinates.length ? coordinates[coordinates.length - 1] : null;
         return Array.isArray(last) && Number.isFinite(Number(last[0])) && Number.isFinite(Number(last[1]))
             ? { lat: Number(last[1]), lng: Number(last[0]) } : null;
+    }
+
+    function routeStepEndpoint(step) {
+        const coordinates = step && step.geometry && Array.isArray(step.geometry.coordinates)
+            ? step.geometry.coordinates : [];
+        const last = coordinates.length ? coordinates[coordinates.length - 1] : null;
+        return Array.isArray(last) && Number.isFinite(Number(last[0])) && Number.isFinite(Number(last[1]))
+            ? { lat: Number(last[1]), lng: Number(last[0]) } : null;
+    }
+
+    function trimRouteToRoadDestination(route, finalLeg, namedStepIndex, roadDestination) {
+        if (!route || !finalLeg || namedStepIndex < 0 || !roadDestination) return;
+        const steps = Array.isArray(finalLeg.steps) ? finalLeg.steps : [];
+        const tailSteps = steps.slice(namedStepIndex + 1).filter(step =>
+            step && step.maneuver && step.maneuver.type !== 'arrive');
+        const removedDistance = tailSteps.reduce((sum, step) => sum + (Number(step.distance) || 0), 0);
+        const removedDuration = tailSteps.reduce((sum, step) => sum + (Number(step.duration) || 0), 0);
+        const arrivalStep = steps.find(step => step && step.maneuver && step.maneuver.type === 'arrive');
+        const roadPoint = [roadDestination.lng, roadDestination.lat];
+        finalLeg.steps = steps.slice(0, namedStepIndex + 1);
+        if (arrivalStep) {
+            finalLeg.steps.push({
+                ...arrivalStep,
+                distance: 0,
+                duration: 0,
+                geometry: { type: 'LineString', coordinates: [roadPoint] },
+                maneuver: { ...arrivalStep.maneuver, location: roadPoint }
+            });
+        }
+        if (Number.isFinite(Number(finalLeg.distance))) finalLeg.distance = Math.max(0, Number(finalLeg.distance) - removedDistance);
+        if (Number.isFinite(Number(finalLeg.duration))) finalLeg.duration = Math.max(0, Number(finalLeg.duration) - removedDuration);
+        if (Number.isFinite(Number(route.distance))) route.distance = Math.max(0, Number(route.distance) - removedDistance);
+        if (Number.isFinite(Number(route.duration))) route.duration = Math.max(0, Number(route.duration) - removedDuration);
+
+        const coordinates = getRouteCoordinates(route);
+        if (coordinates.length) {
+            let nearestIndex = 0;
+            let nearestDistance = Infinity;
+            // Search backwards so a loop that passed the destination road
+            // earlier is not truncated at that earlier occurrence.
+            for (let index = coordinates.length - 1; index >= 0; index--) {
+                const point = coordinates[index];
+                const distance = calculateDistanceMeters(roadDestination.lat, roadDestination.lng, point[1], point[0]);
+                if (distance < nearestDistance) { nearestDistance = distance; nearestIndex = index; }
+            }
+            route.geometry.coordinates = coordinates.slice(0, nearestIndex + 1);
+            const last = route.geometry.coordinates[route.geometry.coordinates.length - 1];
+            if (!last || calculateDistanceMeters(roadDestination.lat, roadDestination.lng, last[1], last[0]) > 1) {
+                route.geometry.coordinates.push(roadPoint);
+            }
+        }
+    }
+
+    function assignRoadDestination(route, waypoints) {
+        if (!route) return route;
+        const waypoint = Array.isArray(waypoints) && waypoints.length
+            ? waypoints[waypoints.length - 1] : null;
+        const location = waypoint && Array.isArray(waypoint.location) ? waypoint.location : null;
+        const snapped = location && Number.isFinite(Number(location[0])) && Number.isFinite(Number(location[1]))
+            ? { lat: Number(location[1]), lng: Number(location[0]) } : null;
+        const finalLeg = route.legs && route.legs.length ? route.legs[route.legs.length - 1] : null;
+        const steps = finalLeg && Array.isArray(finalLeg.steps) ? finalLeg.steps : [];
+        const drivingSteps = steps.filter(step => step && step.maneuver && step.maneuver.type !== 'arrive');
+        let namedIndex = -1;
+        for (let index = drivingSteps.length - 1; index >= 0; index--) {
+            if (String(drivingSteps[index].name || '').trim() && routeStepEndpoint(drivingSteps[index])) {
+                namedIndex = index;
+                break;
+            }
+        }
+        const namedEndpoint = namedIndex >= 0 ? routeStepEndpoint(drivingSteps[namedIndex]) : null;
+        const hasTrailingUnnamedAccess = namedIndex >= 0 && drivingSteps.slice(namedIndex + 1).some(step =>
+            !String(step && step.name || '').trim());
+        const distanceToSnapped = namedEndpoint && snapped
+            ? calculateDistanceMeters(namedEndpoint.lat, namedEndpoint.lng, snapped.lat, snapped.lng) : Infinity;
+
+        // OSRM may route a POI centroid onto a short unnamed driveway or
+        // campus service road. For car guidance, stop at the last named road
+        // entrance when that access tail is short; otherwise retain OSRM's
+        // own snapped waypoint rather than the original POI coordinate.
+        const useRoadEntrance = hasTrailingUnnamedAccess && namedEndpoint && distanceToSnapped <= 300;
+        route.roadDestination = useRoadEntrance ? namedEndpoint : (snapped || namedEndpoint || getRouteEndpoint(route));
+        if (useRoadEntrance) {
+            const namedStep = drivingSteps[namedIndex];
+            trimRouteToRoadDestination(route, finalLeg, steps.indexOf(namedStep), namedEndpoint);
+        }
+        return route;
     }
 
     const PRECISION_SAMPLE_INTERVAL_METERS = 50;
@@ -1295,6 +1387,7 @@ window.ShadowRouter = (function () {
                 timeoutMs: options.directTimeoutMs || 10000
             });
             rawCandidates = directResponse && Array.isArray(directResponse.routes) ? directResponse.routes.slice() : [];
+            rawCandidates.forEach(route => assignRoadDestination(route, directResponse && directResponse.waypoints));
             if (window.DebugLogger && typeof window.DebugLogger.log === 'function') {
                 window.DebugLogger.log('osrm-direct-success', { elapsedMs: Date.now() - directStartedAt, routeCount: rawCandidates.length, http: 'ok' });
             }
@@ -1344,7 +1437,10 @@ window.ShadowRouter = (function () {
             })));
             if (window.DebugLogger) window.DebugLogger.log('osrm-via-end', { requested: viaUrls.slice(0, viaBudget).length, fulfilled: responses.filter(result => result.status === 'fulfilled').length });
             responses.forEach(res => {
-                if (res.status === 'fulfilled' && res.value && res.value.routes) rawCandidates.push(...res.value.routes);
+                if (res.status === 'fulfilled' && res.value && res.value.routes) {
+                    res.value.routes.forEach(route => assignRoadDestination(route, res.value.waypoints));
+                    rawCandidates.push(...res.value.routes);
+                }
             });
         }
 
@@ -1828,6 +1924,7 @@ window.ShadowRouter = (function () {
         applyExposureReductions: applyExposureReductions,
         routeContainsToll: routeContainsToll,
         getRouteEndpoint: getRouteEndpoint,
+        assignRoadDestination: assignRoadDestination,
         areValidRouteCoordinates: areValidRouteCoordinates,
         analyzeRouteSegments: analyzeRouteSegments,
         analyzeRouteSegmentsAsync: analyzeRouteSegmentsAsync,

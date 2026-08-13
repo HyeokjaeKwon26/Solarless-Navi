@@ -214,6 +214,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let recenterWaitTimer = null;
     let recenterCountdownInterval = null;
     let countdownSecLeft = 3;
+    let routeSummaryCycleTimer = null;
+    let routeSummaryCycleIndex = 0;
+    const ROUTE_SUMMARY_CYCLE_MS = 6000;
 
     let currentCountry = 'KR';
     let currentCountryCode = null;
@@ -461,7 +464,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(checkGitHubLatestVersion, 2500);
     }
 
-    /* MAP PANNING TRACKING & 25-SECOND AUTO RECENTER COUNTDOWN TOAST */
+    /* MAP PANNING TRACKING & SHORT AUTO RECENTER COUNTDOWN TOAST */
     function resetRecenterInactivityTimer() {
         clearTimeout(recenterWaitTimer);
         clearInterval(recenterCountdownInterval);
@@ -472,11 +475,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // If sidebar drawer is active or modal is open, do NOT trigger countdown
         const sidebar = document.getElementById('sidebar-panel');
         if (sidebar && sidebar.classList.contains('active')) return;
-        const hasOpenModal = document.querySelector('.modal.active, .start-search-card:not(.hidden)');
+        const hasOpenModal = document.querySelector('.modal.active, .start-search-overlay:not(.hidden)');
         if (hasOpenModal) return;
 
-        // 25-second timer of panning without user interaction -> trigger 3s countdown toast
-        recenterWaitTimer = setTimeout(triggerRecenterCountdownToast, 25000);
+        // Return to active guidance after a short exploration pause. Eight
+        // seconds is long enough to inspect nearby roads without leaving the
+        // driver permanently detached from the vehicle marker.
+        recenterWaitTimer = setTimeout(triggerRecenterCountdownToast, 8000);
     }
 
     function setupMapPanTrackingListeners() {
@@ -490,6 +495,18 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         map.on('dragstart', onUserPan);
+        map.on('drag', () => {
+            if (isUserMapPanning) resetRecenterInactivityTimer();
+        });
+        map.on('dragend', () => {
+            if (isUserMapPanning) resetRecenterInactivityTimer();
+        });
+        map.on('zoomstart', event => {
+            if (event && event.originalEvent) onUserPan();
+        });
+        map.on('zoomend', () => {
+            if (isUserMapPanning) resetRecenterInactivityTimer();
+        });
         map.on('movestart', (e) => {
             if (e.originalEvent) onUserPan();
         });
@@ -653,7 +670,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Do NOT trigger countdown if user is viewing sidebar drawer or modal!
         const sidebar = document.getElementById('sidebar-panel');
         if (sidebar && sidebar.classList.contains('active')) return;
-        const hasOpenModal = document.querySelector('.modal.active, .start-search-card:not(.hidden)');
+        const hasOpenModal = document.querySelector('.modal.active, .start-search-overlay:not(.hidden)');
         if (hasOpenModal) return;
 
         const toast = document.getElementById('recenter-toast-banner');
@@ -2420,12 +2437,39 @@ document.addEventListener('DOMContentLoaded', () => {
         const distanceEl = document.getElementById('sum-dist');
         const destinationEl = document.getElementById('sum-destination');
         if (arrivalEl) arrivalEl.innerText = formatArrivalTime(seconds);
-        if (durationEl) durationEl.innerText = `${Math.max(1, Math.round(seconds / 60))}${isKo ? '분' : 'm'}`;
         if (distanceEl) distanceEl.innerText = `${(Math.max(0, Number(remainingMeters) || 0) / 1000).toFixed(1)} km`;
+        // Avoid the ambiguous single-letter "m", which is normally read as
+        // metres in a driving HUD. Korean uses its full minute unit as well.
+        if (durationEl) durationEl.innerText = `${Math.max(1, Math.round(seconds / 60))}${isKo ? '분' : ' min'}`;
         if (destinationEl) {
             destinationEl.innerText = destinationName || (isKo ? '목적지' : 'Destination');
             destinationEl.title = destinationName || '';
         }
+        if (isLiveNavActive) ensureRouteSummaryCycling();
+        else showRouteSummaryPage(0);
+    }
+
+    function showRouteSummaryPage(page) {
+        routeSummaryCycleIndex = page === 1 ? 1 : 0;
+        document.querySelectorAll('#route-summary-box [data-summary-page]').forEach(element => {
+            element.classList.toggle('summary-page-visible', Number(element.dataset.summaryPage) === routeSummaryCycleIndex);
+        });
+    }
+
+    function ensureRouteSummaryCycling() {
+        showRouteSummaryPage(routeSummaryCycleIndex);
+        if (routeSummaryCycleTimer !== null) return;
+        routeSummaryCycleTimer = setInterval(() => {
+            if (!isLiveNavActive) return;
+            showRouteSummaryPage(routeSummaryCycleIndex === 0 ? 1 : 0);
+        }, ROUTE_SUMMARY_CYCLE_MS);
+    }
+
+    function stopRouteSummaryCycling() {
+        if (routeSummaryCycleTimer !== null) clearInterval(routeSummaryCycleTimer);
+        routeSummaryCycleTimer = null;
+        routeSummaryCycleIndex = 0;
+        showRouteSummaryPage(0);
     }
 
     function getActiveRoadDestination() {
@@ -2974,6 +3018,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (!keepDestination) {
+            stopRouteSummaryCycling();
             currentEnd = null;
             destinationName = '';
             const destinationInput = document.getElementById('destination-input');
@@ -3500,6 +3545,7 @@ document.addEventListener('DOMContentLoaded', () => {
         navigationSessionArrived = true;
         stopGpsWatch();
         isLiveNavActive = false;
+        stopRouteSummaryCycling();
         setLiveNavigationMapMode(false);
         if (window.PipController) window.PipController.setNavigationActive(false);
 
@@ -3557,6 +3603,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isLiveNavActive) {
             stopGpsWatch();
             isLiveNavActive = false;
+            stopRouteSummaryCycling();
             setLiveNavigationMapMode(false);
             if (window.PipController) window.PipController.setNavigationActive(false);
             recenterMapToVehicle();
@@ -3611,6 +3658,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         isLiveNavActive = true;
+        ensureRouteSummaryCycling();
         setLiveNavigationMapMode(true);
         // Planning/preview stays north-up. Once a valid movement heading is
         // available, guidance switches to heading-up; manual compass changes

@@ -588,31 +588,31 @@
                 <!-- Floating Route Summary Card with Direct One-Tap Map Start Button -->
                 <div class="route-summary-floating" id="route-summary-box">
                     <div class="summary-stats-wrapper">
-                        <div class="summary-stat">
+                        <div class="summary-stat summary-page-visible" data-summary-page="0">
                             <span class="stat-icon"><i class="fa-solid fa-clock"></i></span>
                             <div>
                                 <div class="stat-val" id="sum-time">--:--</div>
                                 <div class="stat-lbl" id="sum-time-lbl">도착 예정</div>
                             </div>
                         </div>
-                        <div class="summary-divider"></div>
-                        <div class="summary-stat">
+                        <div class="summary-divider summary-page-visible" data-summary-page="0"></div>
+                        <div class="summary-stat summary-page-visible" data-summary-page="0">
                             <span class="stat-icon"><i class="fa-solid fa-location-dot"></i></span>
                             <div>
                                 <div class="stat-val summary-destination" id="sum-destination">--</div>
                                 <div class="stat-lbl" id="sum-destination-lbl">목적지</div>
                             </div>
                         </div>
-                        <div class="summary-divider"></div>
-                        <div class="summary-stat">
+                        <div class="summary-divider summary-divider-between-pages"></div>
+                        <div class="summary-stat" data-summary-page="1">
                             <span class="stat-icon"><i class="fa-solid fa-stopwatch"></i></span>
                             <div>
                                 <div class="stat-val" id="sum-duration">--</div>
                                 <div class="stat-lbl" id="sum-duration-lbl">남은 시간</div>
                             </div>
                         </div>
-                        <div class="summary-divider"></div>
-                        <div class="summary-stat">
+                        <div class="summary-divider" data-summary-page="1"></div>
+                        <div class="summary-stat" data-summary-page="1">
                             <span class="stat-icon"><i class="fa-solid fa-road"></i></span>
                             <div>
                                 <div class="stat-val" id="sum-dist">-- km</div>

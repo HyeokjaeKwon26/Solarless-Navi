@@ -1691,6 +1691,40 @@ test('car destination is the final OSRM road coordinate, not the POI centroid', 
     assert.equal(ShadowRouter.getRouteEndpoint({ analyzed: { coordinates: [] } }), null);
 });
 
+test('short unnamed POI access tail ends car guidance at the last named road', () => {
+    const route = {
+        geometry: { coordinates: [[-71.14, 42.33], [-71.136486, 42.340755]] },
+        legs: [{ steps: [
+            { name: 'Washington Street', maneuver: { type: 'turn' }, geometry: { coordinates: [[-71.14, 42.33], [-71.136896, 42.340438]] } },
+            { name: '', maneuver: { type: 'turn' }, geometry: { coordinates: [[-71.136896, 42.340438], [-71.136486, 42.340755]] } },
+            { name: '', maneuver: { type: 'arrive' }, geometry: { coordinates: [[-71.136486, 42.340755]] } }
+        ] }]
+    };
+    ShadowRouter.assignRoadDestination(route, [{ location: [-71.14, 42.33] }, { location: [-71.136486, 42.340755] }]);
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(ShadowRouter.getRouteEndpoint({ raw: route }))),
+        { lat: 42.340438, lng: -71.136896 }
+    );
+    assert.deepEqual(JSON.parse(JSON.stringify(route.geometry.coordinates.at(-1))), [-71.136896, 42.340438]);
+    assert.equal(route.legs[0].steps.length, 2);
+    assert.equal(route.legs[0].steps[0].name, 'Washington Street');
+});
+
+test('named road destination retains the OSRM snapped waypoint', () => {
+    const route = {
+        geometry: { coordinates: [[-71.14, 42.33], [-71.1365, 42.3407]] },
+        legs: [{ steps: [
+            { name: 'Washington Street', maneuver: { type: 'turn' }, geometry: { coordinates: [[-71.14, 42.33], [-71.1365, 42.3407]] } },
+            { name: '', maneuver: { type: 'arrive' }, geometry: { coordinates: [[-71.1365, 42.3407]] } }
+        ] }]
+    };
+    ShadowRouter.assignRoadDestination(route, [{ location: [-71.14, 42.33] }, { location: [-71.13649, 42.34071] }]);
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(ShadowRouter.getRouteEndpoint({ raw: route }))),
+        { lat: 42.34071, lng: -71.13649 }
+    );
+});
+
 test('turn voice does not append a generic straight prompt when a maneuver is pending', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     const guardedHazardCalls = appSource.match(/if \(!nextManeuver\) TTSVoice\.announceNavHazard/g) || [];
@@ -1928,6 +1962,24 @@ test('heading-up gestures compensate CSS rotation and route preview frames both 
     assert.ok(appSource.includes('setLiveNavigationMapMode(false)'));
     assert.ok(appSource.includes('manualMapRotation = 0;'));
     assert.ok(appSource.includes("wrapper.classList.remove('user-map-panning', 'manual-rotation-gesture')"));
+});
+
+test('live navigation auto-recenters after map exploration and cycles two large summary values', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+    assert.equal(appSource.includes('.start-search-card:not(.hidden)'), false);
+    assert.ok(appSource.includes(".start-search-overlay:not(.hidden)"));
+    assert.ok(appSource.includes('setTimeout(triggerRecenterCountdownToast, 8000)'));
+    assert.ok(appSource.includes("map.on('dragend'"));
+    assert.ok(appSource.includes("map.on('zoomend'"));
+    assert.ok(appSource.includes('setInterval(() =>'));
+    assert.ok(appSource.includes('const ROUTE_SUMMARY_CYCLE_MS = 6000'));
+    assert.ok(appSource.includes("isKo ? '분' : ' min'"));
+    assert.equal((html.match(/data-summary-page="0"/g) || []).length, 3);
+    assert.equal((html.match(/data-summary-page="1"/g) || []).length, 3);
+    assert.ok(css.includes('.summary-stat[data-summary-page].summary-page-visible'));
+    assert.ok(css.includes('font-size: 17px'));
 });
 
 test('heading-up map covers rotated corners in preview and live navigation', () => {
