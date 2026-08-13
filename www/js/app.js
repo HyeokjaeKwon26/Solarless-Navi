@@ -104,6 +104,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let routeAbortController = null;
     let sceneRefinementAbortController = null;
     let pendingRouteRequestKey = null;
+    // A usable OSRM route can be exposed before optional scene refinement
+    // completes. Keep the full request identity separately so a later GPS fix
+    // does not mistake "road route ready" for "all background work finished"
+    // and repeatedly abort a healthy long-route refinement.
+    let activeRouteRequestKey = null;
+    let routeRefinementPending = false;
     let verifiedRouteRequestKey = null;
     let routeCandidateCacheKey = null;
     let routeAnalysisGeneration = 0;
@@ -2045,17 +2051,18 @@ document.addEventListener('DOMContentLoaded', () => {
                             applyGpsFix(refined, 'high-accuracy');
                             const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
                             const refinedKey = getCurrentRouteRequestKey(dateObj);
+                            const routeIdentityInFlight = activeRouteRequestKey || verifiedRouteRequestKey;
                             const restartPendingRoute = window.RouteState &&
                                 typeof window.RouteState.shouldRestartRouteForGpsFix === 'function' &&
                                 window.RouteState.shouldRestartRouteForGpsFix(
-                                    pendingRouteRequestKey, refinedKey, !!currentEnd, isLiveNavActive
+                                    routeIdentityInFlight, refinedKey, !!currentEnd, isLiveNavActive
                                 );
                             // A refined fix changes the request identity. Do
                             // not let the old-origin result render while the
                             // start button compares against the new origin.
                             // updateRoute() aborts that request and replaces it
                             // exactly once with the refined position.
-                            if (restartPendingRoute || (currentEnd && !isLiveNavActive && !pendingRouteRequestKey)) updateRoute();
+                            if (restartPendingRoute) updateRoute();
                         }
                     }, () => {}, { enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 });
                 }
@@ -2625,6 +2632,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
         const requestKey = getCurrentRouteRequestKey(dateObj);
         pendingRouteRequestKey = requestKey;
+        activeRouteRequestKey = requestKey;
+        routeRefinementPending = true;
         // Keep the previously rendered route visible as context, but never
         // allow it to start navigation while a different request is pending.
         setNavigationButtonsEnabled(false);
@@ -2663,6 +2672,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         routeData.calculatedAt = Date.now();
                         routeData.requestKey = progressRequestKey;
                         routeData.routeCandidateKey = candidateCacheKey;
+                        routeRefinementPending = progress.enrichmentPending === true;
                         pendingRouteRequestKey = null;
                         verifiedRouteRequestKey = progressRequestKey;
                         updateRouteOptionButtons(routeData);
@@ -2758,11 +2768,15 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             verifiedRouteRequestKey = completedRequestKey;
             pendingRouteRequestKey = null;
+            activeRouteRequestKey = null;
+            routeRefinementPending = false;
             if (window.DebugLogger) window.DebugLogger.log('route-enrichment-complete', { elapsedMs: Date.now() - routeStartedAt, routeCount: routeData.routes && routeData.routes.all ? routeData.routes.all.length : 0 });
         } catch (e) {
             if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
             const hadPreviousRoute = !!(routeData && selectedRouteObj);
             pendingRouteRequestKey = null;
+            activeRouteRequestKey = null;
+            routeRefinementPending = false;
             verifiedRouteRequestKey = null;
             if (!hadPreviousRoute) {
                 routeData = null;
@@ -2911,7 +2925,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // usable when public scene services fail, but it must not look as if a
         // full building/terrain model was used in that case.
         function sceneLabel(route) {
-            const coverage = route && route.analyzed && route.analyzed.sceneCoverage;
+            // A route can retain partial scene diagnostics while its final
+            // ranking deliberately falls back to the common heuristic tier.
+            // Read the route-level coverage first; the initial analyzed object
+            // otherwise hides successfully downloaded long-route coverage.
+            const coverage = route && (route.sceneCoverage || (route.analyzed && route.analyzed.sceneCoverage));
             const mode = route && (route.analysisMode || (route.analyzed && route.analyzed.analysisMode));
             if (route && route.fallbackReason === 'NIGHT_SCENE_NOT_NEEDED') {
                 return isKo ? '야간 · 장면 분석 불필요' : 'Night · scene analysis not needed';
@@ -2944,11 +2962,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 SCENE_DECOMPRESS_FAILURE: isKo ? '\uc7a5\uba74 \uc555\ucd95 \ud574\uc81c \uc2e4\ud328' : 'scene decompression failure',
                 SCENE_JSON_PARSE_FAILURE: isKo ? '\uc7a5\uba74 \ud0c0\uc77c \ud30c\uc2f1 \uc2e4\ud328' : 'scene tile parse failure',
                 SCENE_TILE_MISSING: isKo ? '\ud574\ub2f9 \uad6c\uac04 \uc7a5\uba74 \ud0c0\uc77c \uc5c6\uc74c' : 'scene tile not available',
+                SCENE_REFINEMENT_INCOMPLETE: isKo ? '\uc7a5\uba74 \ube44\uad50 \ub4f1\uae09 \ubd88\uc644\uc804' : 'scene comparison tier incomplete',
                 SCENE_DATA_UNAVAILABLE: isKo ? '\uc7a5\uba74 \ub370\uc774\ud130 \uc0ac\uc6a9 \ubd88\uac00' : 'scene data unavailable'
             };
             const failureReason = route && route.fallbackReason;
+            const coverageRatio = coverage && Number.isFinite(Number(coverage.segmentRatio))
+                ? Math.round(Number(coverage.segmentRatio) * 100) : null;
+            const coverageNote = coverageRatio > 0
+                ? (isKo ? ` · 장면 ${coverageRatio}% 확보` : ` · ${coverageRatio}% scene coverage retained`)
+                : '';
             const reason = failureReason ? ` (${failureLabels[failureReason] || failureReason})` : '';
-            return isKo ? `휴리스틱 추정${reason}` : `Heuristic estimate${reason}`;
+            return isKo ? `휴리스틱 추정${reason}${coverageNote}` : `Heuristic estimate${reason}${coverageNote}`;
         }
         [[fstDesc, fst], [glrDesc, glr], [shdDesc, shd]].forEach(([element, route]) => {
             if (element) element.innerText += ` | ${sceneLabel(route)}`;
@@ -3084,6 +3108,8 @@ document.addEventListener('DOMContentLoaded', () => {
         routeData = null;
         selectedRouteObj = null;
         pendingRouteRequestKey = null;
+        activeRouteRequestKey = null;
+        routeRefinementPending = false;
         verifiedRouteRequestKey = null;
 
         const isKo = I18n.getLanguage().startsWith('ko');
@@ -4183,6 +4209,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     );
                     routeData.requestKey = currentRequestKey;
                     pendingRouteRequestKey = null;
+                    if (routeRefinementPending) activeRouteRequestKey = currentRequestKey;
                     verifiedRouteRequestKey = currentRequestKey;
                     updateRouteOptionButtons(routeData);
                     renderMapMarkersAndPolyline(selectedRouteObj, false);

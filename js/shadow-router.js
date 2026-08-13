@@ -1051,12 +1051,19 @@ window.ShadowRouter = (function () {
     }
 
     function createRoleRouteView(route, analyzed, mode, fallbackReason = null) {
+        const analyzedCoverage = analyzed && analyzed.sceneCoverage;
+        const retainedCoverage = route.sceneCoverage;
         const view = Object.assign({}, route, {
             analyzed,
             analysisMode: mode,
             analysisTier: mode,
             fallbackReason: mode === 'heuristic' ? (fallbackReason || route.fallbackReason || null) : null,
-            sceneCoverage: analyzed && analyzed.sceneCoverage ? analyzed.sceneCoverage : route.sceneCoverage,
+            // A heuristic comparison tier may still have useful partial-scene
+            // diagnostics. Prefer that retained coverage instead of masking it
+            // with the empty coverage attached to the initial heuristic pass.
+            sceneCoverage: mode === 'heuristic'
+                ? (retainedCoverage || analyzedCoverage)
+                : (analyzedCoverage || retainedCoverage),
             sceneSource: analyzed && analyzed.sceneSource ? analyzed.sceneSource : route.sceneSource
         });
         if (route.sceneAnalysis) view.sceneAnalysis = route.sceneAnalysis;
@@ -1086,7 +1093,9 @@ window.ShadowRouter = (function () {
         const allReady = baselineReady;
         const mode = baselineReady ? baselineMode : 'heuristic';
         const failedResult = unique.map(route => refinedById.get(route.id)).find(result => result && !result.ready);
-        const roleFallbackReason = !baselineReady && failedResult && failedResult.fallbackReason ? failedResult.fallbackReason : null;
+        const roleFallbackReason = !baselineReady
+            ? (failedResult && failedResult.fallbackReason || 'SCENE_REFINEMENT_INCOMPLETE')
+            : null;
         const views = comparable.map(route => {
             const refined = refinedById.get(route.id);
             return createRoleRouteView(route, baselineReady && refined ? refined.refinedAnalyzed : route.analyzed,
@@ -1550,6 +1559,22 @@ window.ShadowRouter = (function () {
     let workerRestartCount = 0;
     const MAX_WORKER_RESTARTS = 1;
     const DEFAULT_WORKER_TIMEOUT_MS = 8000;
+    const MAX_WORKER_TIMEOUT_MS = 30000;
+
+    function calculateWorkerTimeoutMs(coordinates, scene, overrideMs = null) {
+        if (Number.isFinite(Number(overrideMs)) && Number(overrideMs) > 0) return Number(overrideMs);
+        const coordinateCount = Array.isArray(coordinates) ? coordinates.length : 0;
+        const terrainCount = scene && Array.isArray(scene.terrainSamples) ? scene.terrainSamples.length : 0;
+        const buildingCount = scene && Array.isArray(scene.buildings) ? scene.buildings.length : 0;
+        // Structured cloning and ray tests grow with both route samples and
+        // scene size. Short routes retain the old 8 s watchdog, while a
+        // legitimate 100+ km mobile analysis gets enough time without allowing
+        // a permanently silent Worker to stall indefinitely.
+        const workloadAllowance = Math.min(22000,
+            coordinateCount * 8 + terrainCount * 0.05 + buildingCount * 1.5);
+        return Math.min(MAX_WORKER_TIMEOUT_MS, Math.max(DEFAULT_WORKER_TIMEOUT_MS,
+            Math.ceil(DEFAULT_WORKER_TIMEOUT_MS + workloadAllowance)));
+    }
 
     function createAbortError() {
         const error = new Error('Solar analysis request was aborted');
@@ -1651,7 +1676,7 @@ window.ShadowRouter = (function () {
 
         if (initSolarWorker() && solarWorker) {
             const generation = workerGeneration;
-            const timeoutMs = Math.max(1, Number(workerOptions.timeoutMs || DEFAULT_WORKER_TIMEOUT_MS));
+            const timeoutMs = calculateWorkerTimeoutMs(coordinates, scene, workerOptions.timeoutMs);
             return new Promise((resolve, reject) => {
                 const id = ++workerCallId;
                 const callback = {
@@ -1735,6 +1760,7 @@ window.ShadowRouter = (function () {
         areValidRouteCoordinates: areValidRouteCoordinates,
         analyzeRouteSegments: analyzeRouteSegments,
         analyzeRouteSegmentsAsync: analyzeRouteSegmentsAsync,
+        calculateWorkerTimeoutMs: calculateWorkerTimeoutMs,
         fetchAndAnalyzeRoutes: fetchAndAnalyzeRoutes
     };
 })();

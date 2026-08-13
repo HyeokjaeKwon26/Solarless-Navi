@@ -1932,6 +1932,64 @@ test('route analysis emits heuristic progress before non-blocking scene refineme
     }
 });
 
+test('long partial scene routes retain coverage and finish as a common hybrid tier', async () => {
+    const originalSceneFetch = SceneShadow.fetchSceneForRoute;
+    const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
+    const coordinates = Array.from({ length: 800 }, (_, index) => [index * 0.00012, 0]);
+    const rawRoute = {
+        distance: 108600,
+        duration: 6780,
+        geometry: { coordinates },
+        legs: [{ steps: [] }]
+    };
+    SceneShadow.fetchPrecomputedSceneForRoute = async sampledCoordinates => ({
+        precisionReady: false,
+        partial: true,
+        origin: { lat: 0, lng: 0 },
+        coverage: {
+            buildings: true, terrain: true, tunnels: true, buildingGround: true,
+            precomputedTiles: 41, requestedTiles: 44, missingTiles: 3,
+            coveredSegments: Math.floor((sampledCoordinates.length - 1) * 0.89),
+            segmentCount: sampledCoordinates.length - 1,
+            segmentRatio: 0.89
+        },
+        segmentCoverage: Array.from({ length: sampledCoordinates.length - 1 }, (_, index) => ({
+            buildings: index < (sampledCoordinates.length - 1) * 0.89,
+            terrain: index < (sampledCoordinates.length - 1) * 0.89,
+            tunnels: true,
+            buildingGround: index < (sampledCoordinates.length - 1) * 0.89
+        })),
+        buildings: [], tunnels: [], terrainSamples: [], terrainProfiles: [],
+        source: 'GitHub precomputed partial scene'
+    });
+    SceneShadow.fetchSceneForRoute = async () => { throw new Error('live fallback should not run'); };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 0, lng: 0 }, { lat: 0, lng: 0.096 }, new Date('2026-08-12T14:01:00Z'), false,
+            { candidates: [rawRoute], preferredRouteRole: 'shade' }
+        );
+        assert.equal(result.analysisMode, 'hybrid-scene');
+        for (const role of ['fastest', 'glareFree', 'shade']) {
+            assert.equal(result.routes[role].analysisMode, 'hybrid-scene');
+            assert.equal(result.routes[role].sceneCoverage.segmentRatio, 0.89);
+        }
+    } finally {
+        SceneShadow.fetchSceneForRoute = originalSceneFetch;
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputedFetch;
+    }
+});
+
+test('mobile solar worker timeout scales with long-route scene workload', () => {
+    const shortTimeout = ShadowRouter.calculateWorkerTimeoutMs([[0, 0], [0.001, 0]], null);
+    const longTimeout = ShadowRouter.calculateWorkerTimeoutMs(
+        Array.from({ length: 800 }, (_, index) => [index * 0.0001, 0]),
+        { terrainSamples: Array.from({ length: 100000 }, () => null), buildings: Array.from({ length: 300 }, () => null) }
+    );
+    assert.equal(shortTimeout, 8016);
+    assert.ok(longTimeout >= 19000 && longTimeout <= 30000, `unexpected long timeout ${longTimeout}`);
+    assert.equal(ShadowRouter.calculateWorkerTimeoutMs([[0, 0], [1, 1]], null, 15), 15);
+});
+
 test('selected-role scene is fetched before fastest and emits a same-tier partial result', async () => {
     const originalSceneFetch = SceneShadow.fetchSceneForRoute;
     const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
@@ -1981,6 +2039,16 @@ test('precision progress can replace an active heuristic glare or shade route', 
     assert.ok(appSource.includes('Guidance updated to the precision'));
     assert.ok(appSource.includes('precisionRerouteCooldownUntil = Date.now() + PRECISION_REROUTE_COOLDOWN_MS'));
     assert.equal(appSource.includes('navigationSessionRouteGeometry = null;\n            precisionReroutePending = false;'), false);
+});
+
+test('app keeps scene refinement identity separate from ready OSRM guidance', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('let activeRouteRequestKey = null'));
+    assert.ok(appSource.includes('let routeRefinementPending = false'));
+    assert.ok(appSource.includes('const routeIdentityInFlight = activeRouteRequestKey || verifiedRouteRequestKey'));
+    assert.equal(appSource.includes('(currentEnd && !isLiveNavActive && !pendingRouteRequestKey)'), false);
+    assert.ok(appSource.includes('route.sceneCoverage || (route.analyzed && route.analyzed.sceneCoverage)'));
+    assert.ok(appSource.includes('SCENE_REFINEMENT_INCOMPLETE'));
 });
 
 test('native and web location sources share the navigation pipeline and resume fix seam', () => {
