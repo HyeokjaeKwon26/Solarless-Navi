@@ -187,6 +187,26 @@ test('screen drag deltas are inverse-rotated exactly once for heading-up maps', 
     assert.ok(Math.abs(eastAt180.y) < 1e-9);
 });
 
+test('rotated map screen and layout coordinates round-trip at all navigation angles', () => {
+    const center = { x: 540, y: 960 };
+    const layout = { width: 1440, height: 1440 };
+    const points = [
+        { x: 720, y: 720 }, { x: 1100, y: 900 }, { x: 300, y: 1200 }, { x: 540, y: 960 }
+    ];
+    for (const angle of [0, 30, 45, 90, 135, 180, 225, 270, 315, 359]) {
+        for (const point of points) {
+            const screen = RouteState.rotatedLayoutPointToScreen(
+                point.x, point.y, center.x, center.y, layout.width, layout.height, angle
+            );
+            const restored = RouteState.screenPointToRotatedLayout(
+                screen.x, screen.y, center.x, center.y, layout.width, layout.height, angle
+            );
+            assert.ok(Math.abs(restored.x - point.x) < 1e-8, `x round-trip failed at ${angle}°`);
+            assert.ok(Math.abs(restored.y - point.y) < 1e-8, `y round-trip failed at ${angle}°`);
+        }
+    }
+});
+
 test('APK update checks ignore scene releases and compare SemVer without parseFloat', () => {
     assert.equal(VersionUtils.compareSemver('v1.10.0', '1.9.9') > 0, true);
     assert.equal(VersionUtils.compareSemver('app-v1.0', '1.0.0'), 0);
@@ -789,6 +809,43 @@ test('initial GPS acquisition does not repeat a denied permission request', asyn
     };
     await assert.rejects(RouteState.acquireInitialPosition(geolocation), error => error.code === 1);
     assert.equal(requests, 1);
+});
+
+test('initial GPS acquisition replaces a coarse indoor fix with a precise fix', async () => {
+    const positions = [
+        { coords: { latitude: 42.4, longitude: -71.1, accuracy: 180 }, timestamp: Date.now() },
+        { coords: { latitude: 42.4001, longitude: -71.1001, accuracy: 14 }, timestamp: Date.now() + 1000 }
+    ];
+    let requests = 0;
+    const geolocation = {
+        getCurrentPosition(success) {
+            success(positions[requests++]);
+        }
+    };
+    const result = await RouteState.acquireInitialPosition(geolocation);
+    assert.equal(result, positions[1]);
+    assert.equal(requests, 2);
+});
+
+test('navigation rejects low-accuracy and implausible indoor GPS jumps', () => {
+    const distanceMeters = (lat1, lng1, lat2, lng2) => ShadowRouter.calculateDistanceMeters(lat1, lng1, lat2, lng2);
+    const previous = { lat: 42.4, lng: -71.1, timestamp: 10000, accuracy: 12 };
+    const lowAccuracy = RouteState.evaluateNavigationFix(previous, {
+        lat: 42.401, lng: -71.101, timestamp: 12000, accuracy: 140, reportedSpeedKmh: 0
+    }, distanceMeters);
+    assert.equal(lowAccuracy.accepted, false);
+    assert.equal(lowAccuracy.reason, 'LOW_ACCURACY');
+
+    const teleport = RouteState.evaluateNavigationFix(previous, {
+        lat: 42.41, lng: -71.11, timestamp: 12000, accuracy: 10, reportedSpeedKmh: 0
+    }, distanceMeters);
+    assert.equal(teleport.accepted, false);
+    assert.ok(['IMPLAUSIBLE_JUMP', 'STATIONARY_JUMP'].includes(teleport.reason));
+
+    const normalDrive = RouteState.evaluateNavigationFix(previous, {
+        lat: 42.40018, lng: -71.1, timestamp: 12000, accuracy: 10, reportedSpeedKmh: 36
+    }, distanceMeters);
+    assert.equal(normalDrive.accepted, true);
 });
 
 test('a refined GPS fix restarts an in-flight route with a changed request identity', () => {
@@ -1638,8 +1695,8 @@ test('turn voice does not append a generic straight prompt when a maneuver is pe
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     const guardedHazardCalls = appSource.match(/if \(!nextManeuver\) TTSVoice\.announceNavHazard/g) || [];
     assert.equal(guardedHazardCalls.length, 2);
-    assert.ok(appSource.includes('fa-arrow-left maneuver-icon maneuver-left'));
-    assert.ok(appSource.includes('fa-arrow-right maneuver-icon maneuver-right'));
+    assert.ok(appSource.includes('fa-arrow-turn-up maneuver-icon maneuver-left'));
+    assert.ok(appSource.includes('fa-arrow-turn-up maneuver-icon maneuver-right'));
 });
 
 test('reverse-geocoded ISO country is cached and controls speed units', async () => {
@@ -1826,6 +1883,13 @@ test('map summary exposes destination, arrival clock, remaining time, and distan
     assert.ok(html.includes('id="sum-duration"'));
     assert.ok(appSource.includes('function formatArrivalTime(remainingSec)'));
     assert.ok(appSource.includes('function updateRemainingSummary(remainingSec, remainingMeters)'));
+    const remainingPath = appSource.slice(
+        appSource.indexOf('function renderDynamicRemainingPath'),
+        appSource.indexOf('function updateVehicleMarkerPosition')
+    );
+    assert.ok(remainingPath.includes('calculateRemainingRouteDistance'));
+    assert.ok(remainingPath.includes('updateRemainingSummary(remSec, remDistMeters)'));
+    assert.ok(appSource.includes('new Date(Date.now() + Math.max(0, Number(remainingSec) || 0) * 1000)'));
 });
 
 test('planning mode changes reuse the current analysis without aborting scene downloads', () => {
@@ -1855,9 +1919,8 @@ test('heading-up gestures compensate CSS rotation and route preview frames both 
     assert.ok(appSource.includes("'touchmove'"));
     assert.ok(appSource.includes('startOffset: manualMapRotation'));
     assert.ok(appSource.includes('manualMapRotation = gesture.startOffset'));
-    assert.ok(appSource.includes("'pointermove'"));
     assert.ok(appSource.includes('rotatePointToMapCoordinates'));
-    assert.ok(appSource.includes('queueMicrotask'));
+    assert.ok(appSource.includes('screenPointToRotatedLayout'));
     assert.ok(appSource.includes('paddingTopLeft: [48, 176]'));
     assert.ok(appSource.includes('paddingBottomRight: [48, 156]'));
     assert.ok(appSource.includes('maxZoom: PREVIEW_MAX_ZOOM'));
@@ -1894,11 +1957,22 @@ test('rotated Leaflet input uses logical layout dimensions and document drag eve
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('const layoutWidth = container.clientWidth || rect.width;'));
     assert.ok(appSource.includes('const layoutHeight = container.clientHeight || rect.height;'));
-    assert.ok(appSource.includes('rect.left + (container.clientLeft || 0) + localX'));
-    assert.ok(appSource.includes('const patchDocumentEvent = event =>'));
-    assert.ok(appSource.includes("'touchmove', 'touchend', 'touchcancel'"));
+    assert.ok(appSource.includes("rect.left + (container.clientLeft || 0) + logicalPoint.x"));
     assert.ok(appSource.includes('map.mouseEventToContainerPoint = event =>'));
     assert.ok(appSource.includes("draggable.on('predrag'"));
+    assert.ok(appSource.includes('screenPointToRotatedLayout'));
+    assert.equal(appSource.includes('Object.defineProperty(target, property'), false);
+    assert.equal(appSource.includes('nativeCoordinatePatchActive'), false);
+});
+
+test('location permission uses the Android prompt without a duplicate onboarding modal', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    assert.equal(html.includes('id="permission-onboarding"'), false);
+    assert.equal(html.includes('id="btn-request-location"'), false);
+    assert.equal(html.includes('Continue without GPS'), false);
+    assert.ok(appSource.includes('setupNativeLocationPermissionState()'));
+    assert.equal(appSource.includes('setupPermissionOnboarding()'), false);
 });
 
 test('GPS permission and GPS fix are separate, with one in-flight request', () => {
@@ -1926,6 +2000,25 @@ test('startup is north-up and native permission/PiP state is checked before onbo
     assert.ok(appSource.includes('updateGpsAccuracyCircle'));
     assert.equal(html.includes('map-container heading-up-active'), false);
     assert.equal(html.includes('compass-btn heading-up'), false);
+});
+
+test('language switching keeps one CARTO Voyager road layer and compass clicks persist', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.equal(appSource.includes('World_Street_Map/MapServer'), false);
+    assert.equal((appSource.match(/basemaps\.cartocdn\.com\/rastertiles\/voyager/g) || []).length, 1);
+    assert.ok(appSource.includes('targetTileLayer = lightTileLayer;'));
+    const toggleStart = appSource.indexOf('function toggleCompassMode()');
+    const toggleEnd = appSource.indexOf('function applyMapRotation', toggleStart);
+    const toggleSection = appSource.slice(toggleStart, toggleEnd);
+    assert.ok(toggleSection.includes('compassModeUserOverride = true;'));
+    assert.ok(toggleSection.includes('setCompassMode(next);'));
+    const navStart = appSource.indexOf('isLiveNavActive = true;');
+    const navEnd = appSource.indexOf('const navStartTime = Date.now();', navStart);
+    const startSection = appSource.slice(navStart, navEnd);
+    assert.ok(startSection.includes('if (!compassModeUserOverride)'));
+    assert.ok(startSection.includes("setCompassMode(hasValidGpsHeading ? 'heading-up' : 'north-up')"));
+    assert.ok(startSection.includes('setCompassMode(compassMode);'));
+    assert.equal(startSection.includes('compassModeUserOverride = false;'), false);
 });
 
 test('offline map does not issue a second cache.add fetch after tileload', () => {

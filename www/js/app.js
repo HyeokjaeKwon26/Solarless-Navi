@@ -15,8 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ];
 
     let map = null;
-    let lightTileLayerKo = null;
-    let lightTileLayerEn = null;
+    let lightTileLayer = null;
     let darkTileLayer = null;
     let satelliteTileLayer = null;
     let currentTileLayer = null;
@@ -100,6 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastProcessedNavigationTimestamp = 0;
     let lastProcessedNavigationPosition = null;
     let lastProcessedNavigationAccuracy = Infinity;
+    let lastGpsUncertainNoticeAt = 0;
     const NAVIGATION_LOCATION_DEDUPE_WINDOW_MS = 1500;
     let routeAbortController = null;
     let sceneRefinementAbortController = null;
@@ -397,13 +397,9 @@ document.addEventListener('DOMContentLoaded', () => {
             attributionControl: false
         }).setView([initialLat, initialLng], initialZoom);
 
-        // Korean Localized Tile Layer: ESRI World Street Map (Korean place names)
-        lightTileLayerKo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-            maxZoom: 19
-        });
-
-        // English Tile Layer: CartoDB Voyager High-Contrast Navigation
-        lightTileLayerEn = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        // Use the same base map in every UI language. Language switching
+        // changes UI/voice/search presentation, not the map geometry/style.
+        lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
             maxZoom: 19,
             subdomains: 'abcd'
         });
@@ -419,11 +415,10 @@ document.addEventListener('DOMContentLoaded', () => {
             maxZoom: 19
         });
 
-        currentTileLayer = lightTileLayerKo;
+        currentTileLayer = lightTileLayer;
         currentTileLayer.addTo(map);
 
-        OfflineMap.registerOfflineTileCache(lightTileLayerKo);
-        OfflineMap.registerOfflineTileCache(lightTileLayerEn);
+        OfflineMap.registerOfflineTileCache(lightTileLayer);
 
         activeRoutePolylineGroup = L.featureGroup().addTo(map);
         dynamicRemainingPolylineGroup = L.featureGroup().addTo(map);
@@ -459,7 +454,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderRecentDestinationHistory();
         updateModeButtonsHighlight();
         setNavigationButtonsEnabled(false);
-        setupPermissionOnboarding();
+        setupNativeLocationPermissionState();
         setupPipUi();
         if (window.DebugLogger) window.DebugLogger.init();
 
@@ -528,44 +523,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /**
-     * The heading-up view is a CSS rotation of Leaflet's container. Leaflet's
-     * gesture handlers still receive coordinates in the unrotated container
-     * coordinate system, so a screen drag otherwise pans at the wrong angle.
-     * Patch pointer/mouse/touch coordinates during capture, then restore the
-     * native event immediately after Leaflet has synchronously consumed it.
+     * The heading-up view is a CSS rotation of Leaflet's container while
+     * Leaflet itself keeps an unrotated coordinate system. Use one final
+     * visual angle for every input: tap/pinch centers are inverse-mapped by
+     * mouseEventToContainerPoint and drag vectors are inverse-rotated once at
+     * the predrag seam. Native Android event objects are never mutated.
      */
     function installHeadingUpInteractionCompensation() {
         const container = map && map.getContainer ? map.getContainer() : null;
         if (!container || container.__headingUpInteractionCompensationInstalled) return;
         container.__headingUpInteractionCompensationInstalled = true;
-
-        const restoreAfterDispatch = (restore) => {
-            const release = () => restore.forEach(fn => {
-                try { fn(); } catch (e) { /* best effort: native event may be sealed */ }
-            });
-            if (typeof queueMicrotask === 'function') queueMicrotask(release);
-            else Promise.resolve().then(release);
-        };
-
-        const defineTemporary = (target, property, value, restore) => {
-            if (!target) return false;
-            try {
-                const hadOwn = Object.prototype.hasOwnProperty.call(target, property);
-                const previous = target[property];
-                Object.defineProperty(target, property, {
-                    configurable: true,
-                    enumerable: true,
-                    value
-                });
-                restore.push(() => {
-                    if (hadOwn) Object.defineProperty(target, property, { configurable: true, enumerable: true, value: previous });
-                    else delete target[property];
-                });
-                return true;
-            } catch (e) {
-                return false;
-            }
-        };
 
         const rotatePointToMapCoordinates = (x, y, angleDeg) => {
             const rect = container.getBoundingClientRect();
@@ -578,35 +545,14 @@ document.addEventListener('DOMContentLoaded', () => {
             // Leaflet's own rect subtraction produces the right local point.
             const layoutWidth = container.clientWidth || rect.width;
             const layoutHeight = container.clientHeight || rect.height;
-            const dx = x - cx;
-            const dy = y - cy;
-            const logicalDelta = window.RouteState && typeof window.RouteState.inverseRotateScreenDelta === 'function'
-                ? window.RouteState.inverseRotateScreenDelta(dx, dy, angleDeg)
-                : { x: dx, y: dy };
-            const localX = layoutWidth / 2 + logicalDelta.x;
-            const localY = layoutHeight / 2 + logicalDelta.y;
+            const logicalPoint = window.RouteState && typeof window.RouteState.screenPointToRotatedLayout === 'function'
+                ? window.RouteState.screenPointToRotatedLayout(x, y, cx, cy, layoutWidth, layoutHeight, angleDeg)
+                : { x: x - rect.left, y: y - rect.top };
             return {
-                clientX: rect.left + (container.clientLeft || 0) + localX,
-                clientY: rect.top + (container.clientTop || 0) + localY
+                clientX: rect.left + (container.clientLeft || 0) + logicalPoint.x,
+                clientY: rect.top + (container.clientTop || 0) + logicalPoint.y
             };
         };
-
-        const patchPoint = (point, angleDeg, restore) => {
-            if (!point || !Number.isFinite(point.clientX) || !Number.isFinite(point.clientY)) return;
-            const rotated = rotatePointToMapCoordinates(point.clientX, point.clientY, angleDeg);
-            const scrollX = window.scrollX || window.pageXOffset || 0;
-            const scrollY = window.scrollY || window.pageYOffset || 0;
-            defineTemporary(point, 'clientX', rotated.clientX, restore);
-            defineTemporary(point, 'clientY', rotated.clientY, restore);
-            defineTemporary(point, 'pageX', rotated.clientX + scrollX, restore);
-            defineTemporary(point, 'pageY', rotated.clientY + scrollY, restore);
-        };
-
-        const patchedEvents = new WeakSet();
-        let nativeCoordinatePatchActive = false;
-        let mouseGestureActive = false;
-        const activePointerIds = new Set();
-        let touchGestureActive = false;
 
         // Android WebView can expose read-only native Touch/PointerEvent
         // properties. Keep a Leaflet-level fallback so pinch/zoom handlers
@@ -618,7 +564,7 @@ document.addEventListener('DOMContentLoaded', () => {
             (compassMode === 'heading-up' || Math.abs(manualMapRotation) >= 0.1);
         if (originalMouseEventToContainerPoint) {
             map.mouseEventToContainerPoint = event => {
-                if (!isRotationActive() || (event && patchedEvents.has(event))) {
+                if (!isRotationActive()) {
                     return originalMouseEventToContainerPoint(event);
                 }
                 const source = event && event.touches && event.touches.length
@@ -636,64 +582,6 @@ document.addEventListener('DOMContentLoaded', () => {
             };
         }
 
-        const patchEvent = (event) => {
-            if (!event || lastAppliedMapRotation === null || (compassMode !== 'heading-up' && Math.abs(manualMapRotation) < 0.1)) return;
-            if (patchedEvents.has(event)) return;
-            const angleDeg = Number(lastAppliedMapRotation) || 0;
-            const restore = [];
-            const touchLists = ['touches', 'targetTouches', 'changedTouches'];
-            let patchedTouchList = false;
-            touchLists.forEach(name => {
-                const list = event[name];
-                if (!list || typeof list.length !== 'number') return;
-                const mapped = Array.from(list, touch => {
-                    const clone = Object.create(touch);
-                    patchPoint(clone, angleDeg, restore);
-                    return clone;
-                });
-                patchedTouchList = defineTemporary(event, name, mapped, restore) || patchedTouchList;
-            });
-            if (!patchedTouchList) patchPoint(event, angleDeg, restore);
-            if (restore.length) {
-                patchedEvents.add(event);
-                nativeCoordinatePatchActive = true;
-                restoreAfterDispatch([
-                    ...restore,
-                    () => { nativeCoordinatePatchActive = false; }
-                ]);
-            }
-        };
-
-        ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'mousedown', 'mousemove', 'mouseup', 'touchstart', 'touchmove', 'touchend', 'touchcancel']
-            .forEach(type => container.addEventListener(type, patchEvent, { capture: true, passive: true }));
-
-        container.addEventListener('mousedown', () => { mouseGestureActive = true; }, { capture: true, passive: true });
-        container.addEventListener('mouseup', () => { mouseGestureActive = false; }, { capture: true, passive: true });
-        container.addEventListener('pointerdown', event => { if (event.pointerId !== undefined) activePointerIds.add(event.pointerId); }, { capture: true, passive: true });
-        ['pointerup', 'pointercancel'].forEach(type => container.addEventListener(type, event => {
-            if (event.pointerId !== undefined) activePointerIds.delete(event.pointerId);
-        }, { capture: true, passive: true }));
-        container.addEventListener('touchstart', () => { touchGestureActive = true; }, { capture: true, passive: true });
-        ['touchend', 'touchcancel'].forEach(type => container.addEventListener(type, event => {
-            if (!event.touches || event.touches.length === 0) touchGestureActive = false;
-        }, { capture: true, passive: true }));
-
-        // Leaflet promotes drag/pinch moves to document listeners. Patch those
-        // events too, but only while a gesture that started on this map is
-        // active, so buttons and drawers outside the map remain untouched.
-        const patchDocumentEvent = event => {
-            const type = event && event.type;
-            const active = type && type.startsWith('mouse') ? mouseGestureActive
-                : type && type.startsWith('pointer') ? activePointerIds.size > 0
-                    : touchGestureActive;
-            if (active) patchEvent(event);
-            if (type === 'mouseup') mouseGestureActive = false;
-            if ((type === 'touchend' || type === 'touchcancel') && (!event.touches || event.touches.length === 0)) touchGestureActive = false;
-            if ((type === 'pointerup' || type === 'pointercancel') && event.pointerId !== undefined) activePointerIds.delete(event.pointerId);
-        };
-        ['mousemove', 'mouseup', 'pointermove', 'pointerup', 'pointercancel', 'touchmove', 'touchend', 'touchcancel']
-            .forEach(type => document.addEventListener(type, patchDocumentEvent, { capture: true, passive: true }));
-
         // Leaflet's Draggable computes map-pane deltas directly from pointer
         // coordinates, bypassing mouseEventToContainerPoint. Correct the
         // pending delta at the predrag seam so a screen-space drag follows the
@@ -702,11 +590,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const draggable = map && map.dragging && map.dragging._draggable;
         if (draggable && typeof draggable.on === 'function') {
             draggable.on('predrag', event => {
-                // When the native event was successfully remapped above,
-                // Draggable already computed a logical delta. Only apply this
-                // seam correction for sealed/native events that could not be
-                // patched, avoiding a double rotation.
-                if (nativeCoordinatePatchActive) return;
                 if (!isRotationActive() || !draggable._startPos || !draggable._newPos) return;
                 const dx = draggable._newPos.x - draggable._startPos.x;
                 const dy = draggable._newPos.y - draggable._startPos.y;
@@ -967,7 +850,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Dynamically update solar info and buttons in new language
                 updateSunInfo();
 
-                // Dynamically Switch Map Tiles to match KO / EN Language
+                // Re-evaluate dark/satellite state. The normal road layer is
+                // deliberately identical in Korean and English.
                 checkAndUpdateMapTileTheme();
 
                 // Refresh Compass Mode Tag Text
@@ -1098,12 +982,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // The CSS classes are mirrored in www/style.css and make left/right
         // deterministic in both the banner and PiP HUD.
         switch (normalizedModifier) {
-            case 'left': return '<i class="fa-solid fa-arrow-left maneuver-icon maneuver-left" aria-label="left turn"></i>';
-            case 'right': return '<i class="fa-solid fa-arrow-right maneuver-icon maneuver-right" aria-label="right turn"></i>';
+            case 'left': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-left" aria-label="left turn"></i>';
+            case 'right': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-right" aria-label="right turn"></i>';
             case 'slight left': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-slight-left" aria-label="slight left"></i>';
             case 'slight right': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-slight-right" aria-label="slight right"></i>';
-            case 'sharp left': return '<i class="fa-solid fa-arrow-left maneuver-icon maneuver-sharp-left" aria-label="sharp left"></i>';
-            case 'sharp right': return '<i class="fa-solid fa-arrow-right maneuver-icon maneuver-sharp-right" aria-label="sharp right"></i>';
+            case 'sharp left': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-sharp-left" aria-label="sharp left"></i>';
+            case 'sharp right': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-sharp-right" aria-label="sharp right"></i>';
             case 'uturn': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-uturn" aria-label="U-turn"></i>';
             case 'straight': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-straight" aria-label="straight"></i>';
             default: return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-straight" aria-label="straight"></i>';
@@ -1238,9 +1122,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isSatelliteViewActive) {
             targetTileLayer = satelliteTileLayer;
         } else {
-            const lang = I18n.getLanguage();
-            const isKo = lang.startsWith('ko');
-            targetTileLayer = isKo ? lightTileLayerKo : lightTileLayerEn;
+            targetTileLayer = lightTileLayer;
 
             if (isAutoDarkModeEnabled) {
                 const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
@@ -1706,48 +1588,33 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function setupPermissionOnboarding() {
-        const overlay = document.getElementById('permission-onboarding');
-        const status = document.getElementById('permission-onboarding-status');
-        const request = document.getElementById('btn-request-location');
-        const skip = document.getElementById('btn-skip-onboarding');
-        if (!overlay || !request || !skip) return;
-        const hide = () => { overlay.classList.add('hidden'); try { localStorage.setItem('solarless_onboarding_seen', '1'); } catch (e) {} };
+    async function setupNativeLocationPermissionState() {
+        // Android/WebView owns the actual permission prompt. The app keeps no
+        // duplicate onboarding dialog; it only reads the current state so an
+        // already granted permission is not requested or explained twice.
         const update = async () => {
             let state = 'prompt';
             let nativePermission = null;
-            if (window.PipController && typeof window.PipController.getLocationPermissionState === 'function') {
-                nativePermission = await window.PipController.getLocationPermissionState();
-                if (nativePermission && nativePermission.granted) {
-                    state = nativePermission.fine ? 'fine-granted' : 'coarse-granted';
-                }
-            }
             try {
-                if (!nativePermission || !nativePermission.granted) {
-                    if (navigator.permissions && navigator.permissions.query) state = (await navigator.permissions.query({ name: 'geolocation' })).state;
+                if (window.PipController && typeof window.PipController.getLocationPermissionState === 'function') {
+                    nativePermission = await window.PipController.getLocationPermissionState();
+                    if (nativePermission && nativePermission.granted) {
+                        state = nativePermission.fine ? 'fine-granted' : 'coarse-granted';
+                    } else if (nativePermission && nativePermission.denied) {
+                        state = 'denied';
+                    }
                 }
-            } catch (e) { /* WebView may not expose Permissions API. */ }
+                if ((!nativePermission || !nativePermission.granted) && navigator.permissions && navigator.permissions.query) {
+                    state = (await navigator.permissions.query({ name: 'geolocation' })).state;
+                }
+            } catch (e) { /* Some Android WebViews do not expose Permissions API. */ }
             gpsPermissionState = state;
-            if (status) status.textContent = (state === 'granted' || state === 'fine-granted' || state === 'coarse-granted')
-                ? I18n.getText('permissionAllowed')
-                : (state === 'denied' ? I18n.getText('permissionDenied') : I18n.getText('permissionPrompt'));
-            let seen = false;
-            try { seen = localStorage.getItem('solarless_onboarding_seen') === '1'; } catch (e) {}
-            if (state === 'granted' || state === 'fine-granted' || state === 'coarse-granted') {
-                hide();
-                if (!currentStart && !gpsFixPromise) requestUserGpsLocation(true).catch(() => {});
+            if (window.DebugLogger) window.DebugLogger.log('location-permission-state', { state });
+            if (['granted', 'fine-granted', 'coarse-granted'].includes(state) && !currentStart && !gpsFixPromise) {
+                requestUserGpsLocation(true).catch(() => {});
             }
-            else if (state === 'denied' || !seen) overlay.classList.remove('hidden');
-            else overlay.classList.add('hidden');
         };
-        request.addEventListener('click', () => {
-            try { localStorage.setItem('solarless_onboarding_seen', '1'); } catch (e) {}
-            hide();
-            requestUserGpsLocation(true).catch(() => {});
-        });
-        skip.addEventListener('click', hide);
         await update();
-        if (window.DebugLogger) window.DebugLogger.log('location-permission-state', { state: gpsPermissionState });
         window.addEventListener('pageshow', update);
         document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') update(); });
     }
@@ -2273,25 +2140,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function toggleCompassMode() {
-        const btn = document.getElementById('btn-toggle-compass');
-        const tag = document.getElementById('compass-mode-tag');
+        const next = compassMode === 'heading-up' ? 'north-up' : 'heading-up';
         const isKo = I18n.getLanguage().startsWith('ko');
-
-        if (compassMode === 'heading-up') {
-            compassMode = 'north-up';
-            manualMapRotation = 0;
-            if (btn) btn.classList.remove('heading-up');
-            if (tag) tag.innerText = isKo ? "북쪽고정" : "NORTH-UP";
-            applyMapRotation(0);
-            TTSVoice.speak(isKo ? "북쪽 고정 모드입니다." : "North-up mode activated.");
-        } else {
-            compassMode = 'heading-up';
-            manualMapRotation = 0;
-            if (btn) btn.classList.add('heading-up');
-            if (tag) tag.innerText = isKo ? "주행방향" : "HEADING-UP";
-            applyMapRotation(currentHeading);
-            TTSVoice.speak(isKo ? "주행 방향 모드입니다." : "Heading-up mode activated.");
-        }
+        compassModeUserOverride = true;
+        setCompassMode(next);
+        TTSVoice.speak(next === 'heading-up'
+            ? (isKo ? '주행 방향 모드입니다.' : 'Heading-up mode activated.')
+            : (isKo ? '북쪽 고정 모드입니다.' : 'North-up mode activated.'));
     }
 
     function applyMapRotation(heading) {
@@ -2393,7 +2248,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (navigationStartPending) return;
         navigationStartPending = true;
         const isKo = I18n.getLanguage().startsWith('ko');
-        compassModeUserOverride = true;
         try {
             await requestUserGpsLocation(false);
         } catch (e) {
@@ -2405,6 +2259,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert(isKo ? '위치 권한이 거부되었습니다. Android 설정에서 위치 권한을 허용해 주세요.' : 'Location permission was denied. Allow it in Android settings.');
             } else if (e && e.code === 'UNAVAILABLE') {
                 alert(isKo ? '이 기기에서는 위치 정보를 사용할 수 없습니다.' : 'Location is not available on this device.');
+            } else if (e && e.code === 'POSITION_UNCERTAIN') {
+                alert(isKo
+                    ? 'GPS 정확도가 낮아 자동차 안내를 시작할 수 없습니다. 창가나 실외에서 더 정확한 신호를 받은 뒤 다시 시도해 주세요.'
+                    : 'GPS accuracy is too low to start driving guidance. Move near a window or outdoors and try again.');
             } else {
                 alert(isKo ? 'GPS 위치를 아직 받지 못했습니다. 잠시 후 다시 시도해 주세요.' : 'The current GPS fix is not ready yet. Please try again shortly.');
             }
@@ -3757,9 +3615,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Planning/preview stays north-up. Once a valid movement heading is
         // available, guidance switches to heading-up; manual compass changes
         // remain respected after this point.
-        if (hasValidGpsHeading) setCompassMode('heading-up');
-        else setCompassMode('north-up');
-        compassModeUserOverride = false;
+        if (!compassModeUserOverride) {
+            setCompassMode(hasValidGpsHeading ? 'heading-up' : 'north-up');
+        } else {
+            setCompassMode(compassMode);
+        }
         if (window.PipController) {
             try {
                 const nativeState = await window.PipController.setNavigationActive(true);
@@ -3787,8 +3647,16 @@ document.addEventListener('DOMContentLoaded', () => {
         navigationConsecutiveOffRouteCount = 0;
         lastPrecisionSwitchRouteId = null;
         lastProcessedNavigationTimestamp = 0;
-        lastProcessedNavigationPosition = null;
-        lastProcessedNavigationAccuracy = Infinity;
+        // Anchor GPS validation to the verified route origin. This prevents
+        // the first indoor/network watch fix from teleporting guidance to a
+        // nearby block before there is a prior watch sample to compare.
+        lastProcessedNavigationPosition = currentStart && Number.isFinite(Number(currentStart.lat)) && Number.isFinite(Number(currentStart.lng))
+            ? { lat: Number(currentStart.lat), lng: Number(currentStart.lng) }
+            : null;
+        lastProcessedNavigationTimestamp = Date.now();
+        lastProcessedNavigationAccuracy = currentStart && Number(currentStart.accuracy) > 0
+            ? Number(currentStart.accuracy)
+            : 50;
         navigationSessionRouteId = selectedRouteObj && selectedRouteObj.id || null;
         navigationSessionRouteGeometry = selectedRouteObj && selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
             ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])]) : null;
@@ -3851,6 +3719,40 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const normalized = { coords: { ...coords, latitude: lat, longitude: lng }, timestamp };
             const rawSpeedKmh = getPositionSpeedKmh(normalized);
+            const fixEvaluation = window.RouteState && typeof window.RouteState.evaluateNavigationFix === 'function'
+                ? window.RouteState.evaluateNavigationFix(
+                    lastProcessedNavigationPosition && {
+                        ...lastProcessedNavigationPosition,
+                        timestamp: lastProcessedNavigationTimestamp,
+                        accuracy: lastProcessedNavigationAccuracy
+                    },
+                    { lat, lng, timestamp, accuracy: incomingAccuracy, reportedSpeedKmh: rawSpeedKmh },
+                    ShadowRouter.calculateDistanceMeters
+                )
+                : { accepted: true };
+            if (!fixEvaluation.accepted) {
+                // Still show the receiver's uncertainty, but do not move the
+                // vehicle, alter route progress, announce arrival, or reroute
+                // from a low-confidence indoor/network position.
+                gpsLastFixSource = source || 'web-watch';
+                gpsLastFixAt = timestamp;
+                updateGpsAccuracyCircle(lat, lng, accuracy);
+                navigationConsecutiveOffRouteCount = 0;
+                if (Date.now() - lastGpsUncertainNoticeAt > 30000) {
+                    lastGpsUncertainNoticeAt = Date.now();
+                    const isKoGps = I18n.getLanguage().startsWith('ko');
+                    showApiNotice(isKoGps
+                        ? 'GPS 정확도가 낮아 현재 위치를 안내와 재탐색에 반영하지 않았습니다. 더 정확한 신호를 기다립니다.'
+                        : 'GPS accuracy is too low for guidance or rerouting. Waiting for a more reliable fix.');
+                }
+                if (window.DebugLogger) window.DebugLogger.log('gps-fix-rejected', {
+                    source,
+                    reason: fixEvaluation.reason,
+                    accuracy: Number.isFinite(incomingAccuracy) ? incomingAccuracy : null,
+                    distanceMeters: Number.isFinite(fixEvaluation.distanceMeters) ? Math.round(fixEvaluation.distanceMeters) : null
+                });
+                return true;
+            }
             const hasHwHeading = Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0;
             if (hasHwHeading) hasValidGpsHeading = true;
             if (hasHwHeading && !compassModeUserOverride && compassMode === 'north-up') setCompassMode('heading-up');

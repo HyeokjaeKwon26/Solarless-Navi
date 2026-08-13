@@ -797,12 +797,12 @@ body.pip-mode .map-attribution {
 /* Direction-specific maneuver glyphs.  The explicit transforms avoid the
  * left/right ambiguity that the generic arrow-turn-down icon had in WebView. */
 .maneuver-icon { display: inline-block; transform-origin: 50% 50%; }
-.maneuver-left { transform: none; }
-.maneuver-right { transform: none; }
+.maneuver-left { transform: rotate(-90deg); }
+.maneuver-right { transform: rotate(90deg); }
 .maneuver-slight-left { transform: rotate(-30deg); }
 .maneuver-slight-right { transform: rotate(30deg); }
-.maneuver-sharp-left { transform: none; }
-.maneuver-sharp-right { transform: none; }
+.maneuver-sharp-left { transform: rotate(-115deg); }
+.maneuver-sharp-right { transform: rotate(115deg); }
 .maneuver-uturn { transform: rotate(180deg); }
 .maneuver-straight { transform: none; }
 .turn-dist { font-family: var(--font-heading); font-size: 18px; font-weight: 800; color: #fff; }

@@ -43,6 +43,41 @@
         };
     }
 
+    function screenPointToRotatedLayout(clientX, clientY, centerX, centerY, layoutWidth, layoutHeight, angleDeg) {
+        const x = Number(clientX);
+        const y = Number(clientY);
+        const cx = Number(centerX);
+        const cy = Number(centerY);
+        const width = Number(layoutWidth);
+        const height = Number(layoutHeight);
+        if (![x, y, cx, cy, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+            return { x: 0, y: 0 };
+        }
+        const delta = inverseRotateScreenDelta(x - cx, y - cy, angleDeg);
+        return { x: width / 2 + delta.x, y: height / 2 + delta.y };
+    }
+
+    function rotatedLayoutPointToScreen(layoutX, layoutY, centerX, centerY, layoutWidth, layoutHeight, angleDeg) {
+        const x = Number(layoutX);
+        const y = Number(layoutY);
+        const cx = Number(centerX);
+        const cy = Number(centerY);
+        const width = Number(layoutWidth);
+        const height = Number(layoutHeight);
+        if (![x, y, cx, cy, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+            return { x: 0, y: 0 };
+        }
+        const radians = (Number(angleDeg) || 0) * Math.PI / 180;
+        const dx = x - width / 2;
+        const dy = y - height / 2;
+        // The map DOM uses CSS rotate(-angle). This is the exact forward
+        // transform paired with screenPointToRotatedLayout's +angle inverse.
+        return {
+            x: cx + dx * Math.cos(radians) + dy * Math.sin(radians),
+            y: cy - dx * Math.sin(radians) + dy * Math.cos(radians)
+        };
+    }
+
     function rectsOverlap(a, b, gap = 0) {
         if (!a || !b) return false;
         const clearance = Math.max(0, Number(gap) || 0);
@@ -130,30 +165,107 @@
             timeout: Number(config.preciseTimeoutMs || 12000),
             maximumAge: Number(config.preciseMaximumAgeMs || 15000)
         };
+        const quickAccuracyMeters = Number(config.quickAccuracyMeters || 30);
+        const maxInitialAccuracyMeters = Number(config.maxInitialAccuracyMeters || 50);
+        const accuracyOf = position => Number(position && position.coords && position.coords.accuracy);
+        const isReliable = position => {
+            const accuracy = accuracyOf(position);
+            return Number.isFinite(accuracy) && accuracy > 0 && accuracy <= maxInitialAccuracyMeters;
+        };
+        const acquirePrecise = async fallback => {
+            try {
+                const precise = await requestGeolocationPosition(geolocation, preciseOptions);
+                if (isReliable(precise)) return precise;
+                if (isReliable(fallback)) return fallback;
+                const uncertain = new Error('Location accuracy is insufficient for driving guidance.');
+                uncertain.code = 'POSITION_UNCERTAIN';
+                uncertain.accuracy = accuracyOf(precise);
+                throw uncertain;
+            } catch (error) {
+                // A moderately accurate quick fix remains usable when the
+                // high-accuracy follow-up times out. Very coarse indoor fixes
+                // are never promoted through this fallback.
+                if (isReliable(fallback) && error && error.code !== 'POSITION_UNCERTAIN') return fallback;
+                throw error;
+            }
+        };
+        let quick;
         try {
-            return await requestGeolocationPosition(geolocation, quickOptions);
+            quick = await requestGeolocationPosition(geolocation, quickOptions);
         } catch (error) {
             // Permission denial must be surfaced immediately. A timeout or an
             // unavailable cached/network fix gets one bounded GPS attempt.
             if (Number(error && error.code) === 1 || error && error.code === 'UNAVAILABLE') throw error;
-            return requestGeolocationPosition(geolocation, preciseOptions);
+            return acquirePrecise(null);
         }
+        if (isReliable(quick) && accuracyOf(quick) <= quickAccuracyMeters) return quick;
+        return acquirePrecise(quick);
     }
 
     function shouldRestartRouteForGpsFix(pendingKey, currentKey, hasDestination, liveNavigationActive) {
         return !!hasDestination && !liveNavigationActive && !!pendingKey && !!currentKey && pendingKey !== currentKey;
     }
 
+    function evaluateNavigationFix(previous, candidate, distanceMeters, config = {}) {
+        const lat = Number(candidate && candidate.lat);
+        const lng = Number(candidate && candidate.lng);
+        const timestamp = Number(candidate && candidate.timestamp);
+        const accuracy = Number(candidate && candidate.accuracy);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(timestamp)) {
+            return { accepted: false, reason: 'INVALID_FIX' };
+        }
+
+        // A coarse indoor/network fix is useful for showing an uncertainty
+        // circle, but is not safe enough to move turn guidance or trigger a
+        // road reroute. Waiting for a better fix is safer than manufacturing
+        // a route from a position that may be in another block.
+        const maxAccuracyMeters = Number(config.maxAccuracyMeters || 50);
+        if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > maxAccuracyMeters) {
+            return { accepted: false, reason: 'LOW_ACCURACY', accuracy };
+        }
+
+        if (!previous) return { accepted: true, reason: 'FIRST_RELIABLE_FIX', distanceMeters: 0, impliedSpeedKmh: 0 };
+        const previousTimestamp = Number(previous.timestamp);
+        const dtSeconds = (timestamp - previousTimestamp) / 1000;
+        if (!Number.isFinite(previousTimestamp) || dtSeconds <= 0) {
+            return { accepted: false, reason: 'STALE_FIX' };
+        }
+
+        const distance = typeof distanceMeters === 'function'
+            ? Number(distanceMeters(Number(previous.lat), Number(previous.lng), lat, lng))
+            : Infinity;
+        const impliedSpeedKmh = Number.isFinite(distance) ? distance / dtSeconds * 3.6 : Infinity;
+        if (impliedSpeedKmh > Number(config.maxPlausibleSpeedKmh || 220)) {
+            return { accepted: false, reason: 'IMPLAUSIBLE_JUMP', distanceMeters: distance, impliedSpeedKmh };
+        }
+
+        const reportedSpeedKmh = Number(candidate.reportedSpeedKmh);
+        const previousAccuracy = Number(previous.accuracy);
+        const uncertaintyMeters = Math.max(
+            Number(config.stationaryJumpMeters || 60),
+            ((Number.isFinite(previousAccuracy) ? previousAccuracy : accuracy) + accuracy) * 2
+        );
+        if (Number.isFinite(reportedSpeedKmh) && reportedSpeedKmh <= Number(config.stationarySpeedKmh || 3.5) &&
+            dtSeconds <= Number(config.stationaryWindowSeconds || 8) && distance > uncertaintyMeters) {
+            return { accepted: false, reason: 'STATIONARY_JUMP', distanceMeters: distance, impliedSpeedKmh };
+        }
+
+        return { accepted: true, reason: 'RELIABLE_FIX', distanceMeters: distance, impliedSpeedKmh };
+    }
+
     return {
         createRouteRequestKey,
         isRouteRequestKeyCurrent,
         inverseRotateScreenDelta,
+        screenPointToRotatedLayout,
+        rotatedLayoutPointToScreen,
         normalizeTimeToken,
         rectsOverlap,
         findRectIntersections,
         createDebouncedScheduler,
         shouldRefreshRoadRules,
         acquireInitialPosition,
-        shouldRestartRouteForGpsFix
+        shouldRestartRouteForGpsFix,
+        evaluateNavigationFix
     };
 });
