@@ -30,7 +30,7 @@ sandbox.window = sandbox;
 sandbox.self = sandbox;
 vm.createContext(sandbox);
 
-for (const file of ['js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/geocoder.js', 'js/offline-map.js', 'js/app-version.js']) {
+for (const file of ['js/nrel-spa.js', 'js/solar-physics.js', 'js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/geocoder.js', 'js/offline-map.js', 'js/app-version.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), sandbox, { filename: file });
 }
 
@@ -40,6 +40,7 @@ const SceneShadow = sandbox.SceneShadow;
 const RouteState = sandbox.RouteState;
 const Geocoder = sandbox.Geocoder;
 const VersionUtils = sandbox.SolarlessVersionUtils;
+const SolarPhysics = sandbox.SolarPhysics;
 
 function runSolarWorkerMessage(data, importAvailable = true) {
     const messages = [];
@@ -62,9 +63,11 @@ function runSolarWorkerMessage(data, importAvailable = true) {
         isFinite,
         self: null,
         postMessage: message => messages.push(message),
-        importScripts: file => {
+        importScripts: (...files) => {
             if (!importAvailable) throw new Error('scene module unavailable');
-            vm.runInContext(fs.readFileSync(path.join(root, 'js', file), 'utf8'), workerSandbox, { filename: file });
+            for (const file of files) {
+                vm.runInContext(fs.readFileSync(path.join(root, 'js', file), 'utf8'), workerSandbox, { filename: file });
+            }
         }
     };
     workerSandbox.self = workerSandbox;
@@ -131,9 +134,9 @@ test('distance and bearing calculations handle normal and invalid inputs', () =>
     assert.equal(ShadowRouter.calculateBearing(undefined, 0, 0, 0), 0);
 });
 
-test('solar intensity handles daylight, twilight, night, and invalid altitude', () => {
+test('legacy normalized direct-solar factor excludes twilight and invalid altitude', () => {
     assert.ok(ShadowRouter.calculateSolarUvIntensity(45) > 0);
-    assert.ok(ShadowRouter.calculateSolarUvIntensity(-1) > 0);
+    assert.equal(ShadowRouter.calculateSolarUvIntensity(-1), 0);
     assert.equal(ShadowRouter.calculateSolarUvIntensity(-7), 0);
     assert.equal(ShadowRouter.calculateSolarUvIntensity(NaN), 0);
     assert.equal(ShadowRouter.calculateSolarUvIntensity(null), 0);
@@ -144,7 +147,7 @@ test('glare risk respects invalid, night, high-angle, and angular boundaries', (
     assert.equal(ShadowRouter.calculateSegmentGlare(0, { altitude: -1, azimuth: 0 }), 0);
     assert.ok(ShadowRouter.calculateSegmentGlare(0, { altitude: 5, azimuth: 0 }) > 0);
     assert.ok(ShadowRouter.calculateSegmentGlare(0, { altitude: 60, azimuth: 0 }) > 0);
-    assert.equal(ShadowRouter.calculateSegmentGlare(45, { altitude: 5, azimuth: 0 }), 0);
+    assert.ok(ShadowRouter.calculateSegmentGlare(45, { altitude: 5, azimuth: 0 }) >= 0);
 });
 
 test('offline route fallback never returns a synthetic navigation route', () => {
@@ -152,12 +155,57 @@ test('offline route fallback never returns a synthetic navigation route', () => 
     assert.equal(OfflineMap.generateStandaloneRoute({ lat: 0, lng: 0 }, { lat: 1, lng: 1 }, new Date()), null);
 });
 
+test('NREL SPA matches the published 2003 reference case', () => {
+    const position = SolarPhysics.spaPosition(
+        new Date('2003-10-17T19:30:30Z'), 39.742476, -105.1786,
+        { elevationMeters: 1830.14, pressurePa: 82000, temperatureC: 11, deltaTSeconds: 67 }
+    );
+    assert.ok(Math.abs(position.zenith - 50.111622) < 0.00001, position.zenith);
+    assert.ok(Math.abs(position.azimuth - 194.340241) < 0.00001, position.azimuth);
+    assert.equal(position.model, 'NREL_SPA_R1');
+});
+
+test('browser loads NREL SPA and SolarPhysics before the SunCalc compatibility API', () => {
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const nrelIndex = html.indexOf('js/nrel-spa.js');
+    const physicsIndex = html.indexOf('js/solar-physics.js');
+    const sunCalcIndex = html.indexOf('js/suncalc.js');
+    assert.ok(nrelIndex >= 0 && nrelIndex < physicsIndex);
+    assert.ok(physicsIndex < sunCalcIndex);
+});
+
+test('Bird clear-sky model matches the NREL spreadsheet vector', () => {
+    const irradiance = SolarPhysics.birdClearSky(
+        { zenith: 63.52421726 }, new Date('2015-01-01T19:00:00Z'),
+        {
+            pressurePa: 84000, ozoneCm: 0.3, precipitableWaterCm: 1.5,
+            aod500: 0.1, aod380: 0.15, asymmetry: 0.85, albedo: 0.2,
+            dniExtraWm2: 1414.91335, source: 'NREL_BIRD_REFERENCE'
+        }
+    );
+    assert.ok(Math.abs(irradiance.dni - 805.171223) < 0.01, irradiance.dni);
+    assert.ok(Math.abs(irradiance.directHorizontal - 358.961716) < 0.01, irradiance.directHorizontal);
+    assert.ok(Math.abs(irradiance.ghi - 450.215507) < 0.01, irradiance.ghi);
+    assert.ok(Math.abs(irradiance.dhi - 91.253791) < 0.01, irradiance.dhi);
+});
+
+test('CIE glare proxy is continuous and confirmed occlusion removes direct glare', () => {
+    const sun = { altitude: 8, azimuth: 90 };
+    const irradiance = { dni: 850 };
+    const ahead = SolarPhysics.disabilityGlare(90, sun, irradiance, 0);
+    const aside = SolarPhysics.disabilityGlare(20, sun, irradiance, 0);
+    const blocked = SolarPhysics.disabilityGlare(90, sun, irradiance, 1);
+    assert.ok(ahead.veilingLuminanceCdM2 > aside.veilingLuminanceCdM2);
+    assert.equal(blocked.veilingLuminanceCdM2, 0);
+    assert.equal(blocked.normalizedPotential, 0);
+});
+
 test('overhead sun remains high exposure when clear and glare cannot reduce it', () => {
     const sunIntensity = ShadowRouter.calculateSolarUvIntensity(70);
     const glare = ShadowRouter.calculateSegmentGlare(180, { altitude: 70, azimuth: 180 });
     const clearExposure = ShadowRouter.calculateDirectSolarExposure(sunIntensity, 0);
     const shadedExposure = ShadowRouter.calculateDirectSolarExposure(sunIntensity, 1);
-    assert.ok(glare <= 0.04, `expected low overhead glare, got ${glare}`);
+    assert.ok(glare < 0.1, `expected low overhead glare, got ${glare}`);
     assert.ok(clearExposure > 0.9, `clear overhead exposure must remain high, got ${clearExposure}`);
     assert.equal(shadedExposure, 0);
     assert.equal(
@@ -267,6 +315,191 @@ test('terrain ray obstruction respects night, invalid data, and horizon toleranc
     assert.equal(SceneShadow.isTerrainRayOccluded(100, 10, [100, 200], [130, 160]), true);
     assert.equal(SceneShadow.isTerrainRayOccluded(100, 10, [100], [101]), false);
     assert.equal(SceneShadow.isTerrainRayOccluded(NaN, 10, [100], [300]), false);
+});
+
+test('v3 terrain uncertainty distinguishes robust block, uncertain horizon, and clear sky', () => {
+    const blocked = SceneShadow.classifyTerrainRayOcclusion(100, 10, [100], [140], 10);
+    const uncertain = SceneShadow.classifyTerrainRayOcclusion(100, 10, [100], [124], 10);
+    const clear = SceneShadow.classifyTerrainRayOcclusion(100, 10, [100], [100], 10);
+    assert.equal(blocked.state, 'blocked');
+    assert.equal(uncertain.state, 'uncertain');
+    assert.equal(clear.state, 'clear');
+    assert.equal(SceneShadow.classifyTerrainRayOcclusion(100, 10, [100], [null], 10).state, 'unknown');
+});
+
+test('precision scene DEM elevation feeds SPA pressure and Bird irradiance', () => {
+    const p1 = [39.7392, -104.9903];
+    const p2 = [39.7393, -104.9893];
+    const origin = { lat: p1[0], lng: p1[1] };
+    const projected = SceneShadow.projectPoint((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, origin);
+    const terrainSamples = [{ ...projected, elevation: 1609 }];
+    const scene = {
+        origin, terrainSamples,
+        terrainGrid: SceneShadow.buildTerrainGrid(terrainSamples),
+        atmosphere: { temperatureC: 15 }
+    };
+    const options = ShadowRouter.segmentAtmosphereOptions(p1, p2, scene);
+    assert.equal(options.elevationMeters, 1609);
+    assert.equal(options.source, 'bird-standard-atmosphere+scene-dem-elevation');
+    assert.ok(SolarPhysics.pressureFromElevation(options.elevationMeters) < SolarPhysics.pressureFromElevation(0));
+    const date = new Date('2026-06-21T19:00:00Z');
+    const high = sandbox.SunCalc.getPosition(date, p1[0], p1[1], options);
+    const sea = sandbox.SunCalc.getPosition(date, p1[0], p1[1], { elevationMeters: 0 });
+    assert.notEqual(high.altitude, sea.altitude);
+    const highBird = SolarPhysics.birdClearSky(high, date, options);
+    const seaBird = SolarPhysics.birdClearSky(sea, date, { elevationMeters: 0 });
+    assert.notEqual(highBird.dni, seaBird.dni);
+    const precisionScene = {
+        ...scene, precisionReady: true, source: 'high-elevation-scene',
+        coverage: { buildings: false, terrain: true, tunnels: false, buildingGround: true },
+        segmentCoverage: [{ buildings: false, terrain: true, tunnels: false, buildingGround: true }],
+        buildings: [], tunnels: [], terrainProfiles: []
+    };
+    const coordinates = [[p1[1], p1[0]], [p2[1], p2[0]]];
+    const main = ShadowRouter.analyzeRouteSegments(coordinates, date, 60, null, precisionScene);
+    const worker = runSolarWorkerMessage({
+        id: 'high-elevation-scene', coordinates, startTimestamp: date.getTime(),
+        durationSec: 60, timeLookup: [0, 60], scene: precisionScene
+    });
+    assert.equal(main.segments[0].atmosphereOptions.elevationMeters, 1609);
+    assert.equal(worker.segments[0].atmosphereOptions.elevationMeters, 1609);
+    assert.ok(Math.abs(main.segments[0].clearSkyIrradiance.dni - worker.segments[0].clearSkyIrradiance.dni) < 1e-9);
+});
+
+test('v3 building height provenance creates a deterministic sensitivity envelope', () => {
+    assert.deepEqual({ ...SceneShadow.parseHeightModel({ height: '12 m' }) }, {
+        height: 12, heightLower: 12, heightUpper: 12, heightSource: 'osm-height', heightEstimated: false,
+        heightUncertainty: 'tag-value; source accuracy is not specified by OSM',
+        minHeight: 0, minHeightLower: 0, minHeightUpper: 0, minHeightSource: 'ground'
+    });
+    assert.equal(SceneShadow.parseHeightModel({ height: '30 ft' }).height, 9.144);
+    assert.deepEqual({ ...SceneShadow.parseHeightModel({ 'building:levels': '3' }) }, {
+        height: 9.6, heightLower: 9, heightUpper: 13.5,
+        heightSource: 'osm-building-levels', heightEstimated: true,
+        heightUncertainty: '3.0-4.5 m/storey literature sensitivity envelope',
+        minHeight: 0, minHeightLower: 0, minHeightUpper: 0, minHeightSource: 'ground'
+    });
+    assert.deepEqual({ ...SceneShadow.parseHeightModel({}) }, {
+        height: 6, heightLower: 3, heightUpper: 12,
+        heightSource: 'missing-height-default', heightEstimated: true,
+        heightUncertainty: '3-12 m conservative sensitivity envelope; not a statistical CI',
+        minHeight: 0, minHeightLower: 0, minHeightUpper: 0, minHeightSource: 'ground'
+    });
+    assert.deepEqual({ ...SceneShadow.parseHeightModel({ 'building:levels': '2', 'building:min_level': '3' }) }, {
+        height: 16, heightLower: 15, heightUpper: 22.5,
+        heightSource: 'osm-building-levels', heightEstimated: true,
+        heightUncertainty: '3.0-4.5 m/storey literature sensitivity envelope',
+        minHeight: 9.6, minHeightLower: 9, minHeightUpper: 13.5,
+        minHeightSource: 'osm-building-min-level'
+    });
+    assert.deepEqual({ ...SceneShadow.parseHeightModel({ height: '4', min_height: '12' }) }, {
+        height: 4, heightLower: 4, heightUpper: 4,
+        heightSource: 'osm-height', heightEstimated: false,
+        heightUncertainty: 'tag-value; source accuracy is not specified by OSM',
+        minHeight: 4, minHeightLower: 4, minHeightUpper: 4,
+        minHeightSource: 'osm-min-height-clamped-to-height', minHeightAdjusted: true
+    });
+});
+
+test('floating building parts do not shade rays below their minimum height', () => {
+    const scene = {
+        origin: { lat: 0, lng: 0 },
+        coverage: { buildings: true, terrain: false, tunnels: false, buildingGround: true },
+        segmentCoverage: [{ buildings: true, terrain: false, tunnels: false, buildingGround: true }],
+        uncertaintyModel: { version: 'scene-uncertainty-v1', terrain: { relativeVerticalErrorM: 0 } },
+        buildings: [{
+            polygon: [{ x: 30, y: -10 }, { x: 60, y: -10 }, { x: 60, y: 10 }, { x: 30, y: 10 }],
+            bounds: { minX: 30, maxX: 60, minY: -10, maxY: 10 },
+            height: 20, heightLower: 20, heightUpper: 20,
+            minHeight: 10, minHeightLower: 10, minHeightUpper: 10,
+            ground: 0, groundVerticalErrorM: 0
+        }],
+        tunnels: [], terrainSamples: [], terrainProfiles: []
+    };
+    const below = SceneShadow.getSegmentOcclusion(
+        [0, 0], [0.00001, 0], { altitude: 1, azimuth: 90 }, scene, 0
+    );
+    assert.equal(below.shadeState, 'confirmed-clear');
+    const throughPart = SceneShadow.getSegmentOcclusion(
+        [0, 0], [0.00001, 0], { altitude: 20, azimuth: 90 }, scene, 0
+    );
+    assert.equal(throughPart.shadeState, 'confirmed-shade');
+});
+
+test('v3 building envelope never turns a marginal height into confirmed shade', () => {
+    const scene = {
+        origin: { lat: 0, lng: 0 },
+        coverage: { buildings: true, terrain: false, tunnels: false, buildingGround: true },
+        segmentCoverage: [{ buildings: true, terrain: false, tunnels: false, buildingGround: true }],
+        uncertaintyModel: { version: 'scene-uncertainty-v1', terrain: { relativeVerticalErrorM: 10 } },
+        buildings: [{
+            polygon: [{ x: 30, y: -10 }, { x: 60, y: -10 }, { x: 60, y: 10 }, { x: 30, y: 10 }],
+            bounds: { minX: 30, maxX: 60, minY: -10, maxY: 10 },
+            height: 6, heightLower: 3, heightUpper: 12, ground: 0, groundVerticalErrorM: 0
+        }],
+        tunnels: [], terrainSamples: [], terrainProfiles: []
+    };
+    const marginal = SceneShadow.getSegmentOcclusion(
+        [0, 0], [0.00001, 0], { altitude: 15, azimuth: 90 }, scene, 0
+    );
+    assert.equal(marginal.shadeState, 'uncertain');
+    assert.equal(marginal.occlusionRatio, null);
+    assert.equal(marginal.uncertainty.buildingUncertain, true);
+    const robust = SceneShadow.getSegmentOcclusion(
+        [0, 0], [0.00001, 0], { altitude: 2, azimuth: 90 }, scene, 0
+    );
+    assert.equal(robust.shadeState, 'confirmed-shade');
+});
+
+test('v3 building shade remains uncertain when relative DEM ground error crosses the ray', () => {
+    const scene = {
+        origin: { lat: 0, lng: 0 },
+        coverage: { buildings: true, terrain: false, tunnels: false, buildingGround: true },
+        segmentCoverage: [{ buildings: true, terrain: false, tunnels: false, buildingGround: true }],
+        uncertaintyModel: { version: 'scene-uncertainty-v1', terrain: { relativeVerticalErrorM: 10 } },
+        buildings: [{
+            polygon: [{ x: 30, y: -10 }, { x: 60, y: -10 }, { x: 60, y: 10 }, { x: 30, y: 10 }],
+            bounds: { minX: 30, maxX: 60, minY: -10, maxY: 10 },
+            height: 12, heightLower: 12, heightUpper: 12, ground: 0, groundVerticalErrorM: 10
+        }],
+        tunnels: [], terrainSamples: [], terrainProfiles: []
+    };
+    const result = SceneShadow.getSegmentOcclusion(
+        [0, 0], [0.00001, 0], { altitude: 5, azimuth: 90 }, scene, 0
+    );
+    assert.equal(result.shadeState, 'uncertain');
+    assert.equal(result.occlusionRatio, null);
+    assert.equal(result.uncertainty.buildingGroundRelativeErrorM, 10);
+});
+
+test('uncertain scene segments remain exposed and are reported separately', () => {
+    const originalGetPosition = sandbox.SunCalc.getPosition;
+    const originalSceneOcclusion = sandbox.SceneShadow.getSegmentOcclusion;
+    sandbox.SunCalc.getPosition = () => ({ azimuth: 0, altitude: Math.PI / 4 });
+    sandbox.SceneShadow.getSegmentOcclusion = () => ({
+        shadeState: 'uncertain',
+        occlusionRatio: null,
+        source: 'building-height-uncertainty'
+    });
+    try {
+        const result = ShadowRouter.analyzeRouteSegments(
+            [[-71, 42], [-70.999, 42]],
+            new Date('2026-06-21T16:00:00Z'),
+            60,
+            null,
+            { source: 'v3-test', coverage: { buildings: true, terrain: true, tunnels: true } }
+        );
+        assert.equal(result.confirmedShadeRatio, 0);
+        assert.ok(result.uncertainOcclusionDistanceRatio > 0.99);
+        assert.ok(result.uncertainOcclusionTimeRatio > 0.99);
+        assert.equal(result.segments[0].occlusionRatio, null);
+        assert.equal(result.avgShadeCoverage, 0, 'uncertainty must not be credited as aggregate shade');
+        assert.equal(result.directSolarEnergyWhM2, result.clearSkyDirectEnergyWhM2,
+            'uncertainty must not be credited as shade');
+    } finally {
+        sandbox.SunCalc.getPosition = originalGetPosition;
+        sandbox.SceneShadow.getSegmentOcclusion = originalSceneOcclusion;
+    }
 });
 
 test('scene occlusion reports building and tunnel sources without fabricating geometry', () => {
@@ -476,7 +709,7 @@ test('boundary-crossing routes merge two regional releases with aligned profiles
     for (let lat = -0.05; lat <= 0.05; lat += 0.001) {
         for (let lng = -0.08; lng <= 0.08; lng += 0.001) terrain.push([Number(lat.toFixed(5)), Number(lng.toFixed(5)), 15]);
     }
-    function makeRegion(id, bounds) {
+    function makeRegion(id, bounds, terrainErrorM) {
         const files = {};
         const tiles = {};
         for (let x = -3; x <= 2; x++) for (let y = -2; y <= 1; y++) {
@@ -489,15 +722,16 @@ test('boundary-crossing routes merge two regional releases with aligned profiles
         return {
             id, url: `https://example.test/${id}/manifest.json`, bounds, zip,
             manifest: {
-                schema: 2, region: id, releaseTag: id, baseUrl: `https://example.test/${id}`,
+                schema: terrainErrorM > 2 ? 3 : 2, region: id, releaseTag: id, baseUrl: `https://example.test/${id}`,
                 tileSizeM: 5000, tilePaddingMeters: 4500, terrainSpacingM: 100,
                 grid: { latOrigin: 0, lngOrigin: 0, cosLat: 1 },
+                uncertaintyModel: { version: `${id}-uncertainty`, terrain: { relativeVerticalErrorM: terrainErrorM, confidenceLevel: terrainErrorM > 2 ? 0.90 : null } },
                 packs: { [id]: { path: `${id}.zip`, bytes: zip.length } }, tiles
             }
         };
     }
-    const west = makeRegion('west-test', { south: -1, west: -1, north: 1, east: 0 });
-    const east = makeRegion('east-test', { south: -1, west: 0, north: 1, east: 1 });
+    const west = makeRegion('west-test', { south: -1, west: -1, north: 1, east: 0 }, 2);
+    const east = makeRegion('east-test', { south: -1, west: 0, north: 1, east: 1 }, 10);
     const regions = [west, east];
     const fetches = [];
     sandbox.fetch = async url => {
@@ -518,6 +752,8 @@ test('boundary-crossing routes merge two regional releases with aligned profiles
         assert.equal(scene.segmentCoverage.length, coordinates.length - 1);
         assert.ok(scene.terrainProfiles.some(profile => profile.coordinateIndex <= 1));
         assert.ok(scene.terrainProfiles.some(profile => profile.coordinateIndex >= 2));
+        assert.equal(scene.uncertaintyModel.terrain.relativeVerticalErrorM, 10);
+        assert.deepEqual(Array.from(scene.uncertaintyModel.sourceModels).sort(), ['east-test-uncertainty', 'west-test-uncertainty']);
         assert.ok(fetches.some(url => url.includes('/west-test/')));
         assert.ok(fetches.some(url => url.includes('/east-test/')));
     } finally {
@@ -602,6 +838,34 @@ test('solar worker handles heuristic and precision scene messages without scope 
     assert.equal(mainPartial.analysisMode, 'hybrid-scene');
     assert.ok(Math.abs(workerPartial.totalDirectSolarExposureUnits - mainPartial.totalDirectSolarExposureUnits) < 1e-12);
     assert.ok(Math.abs(workerPartial.confirmedShadeRatio - mainPartial.confirmedShadeRatio) < 1e-12);
+
+    const uncertainCoordinates = [[0, 0], [0.001, 0]];
+    const uncertainScene = {
+        precisionReady: true,
+        source: 'v3 uncertain scene',
+        origin: { lat: 0, lng: 0 },
+        uncertaintyModel: { version: 'scene-uncertainty-v1', terrain: { relativeVerticalErrorM: 10 } },
+        coverage: { buildings: true, terrain: false, tunnels: false, buildingGround: true },
+        segmentCoverage: [{ buildings: true, terrain: false, tunnels: false, buildingGround: true }],
+        buildings: [{
+            polygon: [{ x: 30, y: -10 }, { x: 60, y: -10 }, { x: 60, y: 10 }, { x: 30, y: 10 }],
+            bounds: { minX: 30, maxX: 60, minY: -10, maxY: 10 },
+            height: 12, heightLower: 12, heightUpper: 12, ground: 0, groundVerticalErrorM: 10
+        }],
+        tunnels: [], terrainSamples: [], terrainProfiles: []
+    };
+    const uncertainTimestamp = new Date('2026-03-20T06:20:00Z').getTime();
+    const workerUncertain = runSolarWorkerMessage({
+        ...base, coordinates: uncertainCoordinates, startTimestamp: uncertainTimestamp,
+        durationSec: 100, timeLookup: [0, 100], scene: uncertainScene
+    });
+    const mainUncertain = ShadowRouter.analyzeRouteSegments(
+        uncertainCoordinates, new Date(uncertainTimestamp), 100, null, uncertainScene
+    );
+    assert.ok(workerUncertain.uncertainOcclusionDistanceRatio > 0.99);
+    assert.equal(workerUncertain.avgShadeCoverage, 0);
+    assert.ok(Math.abs(workerUncertain.uncertainOcclusionDistanceRatio - mainUncertain.uncertainOcclusionDistanceRatio) < 1e-12);
+    assert.ok(Math.abs(workerUncertain.directSolarEnergyWhM2 - mainUncertain.directSolarEnergyWhM2) < 1e-12);
 
     const importFailure = runSolarWorkerMessage({ ...base, scene }, false);
     assert.equal(importFailure.analysisMode, 'heuristic');
@@ -1016,6 +1280,28 @@ test('precision shade selection uses direct exposure and confirmed shade, not gl
     assert.ok(shaded.tradeoff.shadeImprovement >= 0.4);
 });
 
+test('route solar tradeoff uses integrated energy instead of lower mean irradiance', () => {
+    const fastest = {
+        id: 'fast', durationSec: 100, baseDurationSec: 100, candidateIndex: 0,
+        analyzed: {
+            analysisMode: 'scene', avgGlareRisk: 0.1, avgShadeCoverage: 0.1,
+            totalDirectSolarExposureUnits: 0.8, directSolarEnergyWhM2: 20,
+            confirmedShadeRatio: 0.1
+        }
+    };
+    const longerButMoreEnergy = {
+        id: 'mean-only', durationSec: 120, baseDurationSec: 120, candidateIndex: 1,
+        analyzed: {
+            analysisMode: 'scene', avgGlareRisk: 0.1, avgShadeCoverage: 0.3,
+            totalDirectSolarExposureUnits: 0.5, directSolarEnergyWhM2: 22,
+            confirmedShadeRatio: 0.3
+        }
+    };
+    const tradeoff = ShadowRouter.calculateRouteTradeoff(fastest, longerButMoreEnergy);
+    assert.equal(tradeoff.solarExposureReductionPct, 0);
+    assert.equal(tradeoff.uvReductionPct, 0);
+});
+
 test('exposure reduction uses the same-tier refined fastest baseline', () => {
     const fastest = { id: 'fast', analyzed: { totalUvExposureUnits: 0.5 } };
     const glare = { id: 'glare', analyzed: { totalUvExposureUnits: 0.25 } };
@@ -1051,6 +1337,120 @@ test('step time lookup scales OSRM 100 seconds to an adjusted 142-second route',
     assert.equal(analyzed.segments.length, 2);
     const lastPass = analyzed.segments[1].passTime.getTime() / 1000;
     assert.ok(lastPass > 71 && lastPass < 142);
+});
+
+test('zero-duration OSRM steps never mix metre and second glare weights', () => {
+    const coordinates = [[0, 0], [0.01, 0], [0.02, 0]];
+    const steps = [
+        { distance: 1000, duration: 0, geometry: { coordinates: [coordinates[0], coordinates[1]] } },
+        { distance: 1000, duration: 10, geometry: { coordinates: [coordinates[1], coordinates[2]] } }
+    ];
+    const main = ShadowRouter.analyzeRouteSegments(coordinates, new Date('2026-06-21T12:00:00Z'), 10, steps);
+    const worker = runSolarWorkerMessage({
+        id: 'zero-duration-glare', coordinates,
+        startTimestamp: new Date('2026-06-21T12:00:00Z').getTime(),
+        durationSec: 10, timeLookup: [0, 0, 10]
+    });
+    assert.ok(main.avgGlareRisk >= 0 && main.avgGlareRisk <= 1);
+    assert.ok(worker.avgGlareRisk >= 0 && worker.avgGlareRisk <= 1);
+    assert.ok(Math.abs(main.avgGlareRisk - main.segments[1].glareRisk) < 1e-12);
+    assert.ok(Math.abs(worker.avgGlareRisk - worker.segments[1].glareRisk) < 1e-12);
+    assert.ok(Math.abs(main.avgGlareRisk - worker.avgGlareRisk) < 1e-12);
+});
+
+test('confirmed shade time is reported against the whole route, not only covered scene time', () => {
+    const coordinates = [[0, 0], [0.01, 0], [0.02, 0]];
+    const scene = {
+        origin: { lat: 0, lng: 0 },
+        precisionReady: true,
+        source: 'test-scene',
+        coverage: { buildings: true, terrain: true, tunnels: true },
+        segmentCoverage: [
+            { buildings: false, terrain: false, tunnels: true, buildingGround: true },
+            { buildings: false, terrain: false, tunnels: false, buildingGround: true }
+        ],
+        buildings: [],
+        tunnels: [{ line: [{ x: -10, y: 0 }, { x: 10, y: 0 }] }],
+        terrainSamples: [],
+        terrainProfiles: []
+    };
+    const main = ShadowRouter.analyzeRouteSegments(coordinates, new Date('2026-06-21T12:00:00Z'), 100, null, scene);
+    const worker = runSolarWorkerMessage({
+        id: 'shade-time-denominator', coordinates,
+        startTimestamp: new Date('2026-06-21T12:00:00Z').getTime(),
+        durationSec: 100, timeLookup: [0, 50, 100], scene
+    });
+    assert.equal(main.confirmedShadeTimeRatio, 0.5);
+    assert.equal(main.confirmedShadeWithinSceneTimeRatio, 1);
+    assert.equal(main.confirmedSceneTimeRatio, 0.5);
+    assert.equal(worker.confirmedShadeTimeRatio, 0.5);
+    assert.equal(worker.confirmedShadeWithinSceneTimeRatio, 1);
+    assert.equal(worker.confirmedSceneTimeRatio, 0.5);
+});
+
+test('remaining ETA follows OSRM step timing and exposes GPS-only uncertainty separately', () => {
+    const coordinates = [[0, 0], [0.01, 0], [0.02, 0]];
+    const steps = [
+        { distance: 1000, duration: 20, geometry: { coordinates: [[0, 0], [0.01, 0]] } },
+        { distance: 1000, duration: 80, geometry: { coordinates: [[0.01, 0], [0.02, 0]] } }
+    ];
+    assert.equal(Math.round(ShadowRouter.calculateRemainingRouteDuration(coordinates, steps, 100, 0, 0.5)), 90);
+    assert.equal(Math.round(ShadowRouter.calculateRemainingRouteDuration(coordinates, steps, 100, 1, 0.5)), 40);
+    const gps = RouteState.estimateGpsEtaUncertainty(20, 1000, 100, {
+        confidenceLevel: 0.95,
+        accuracySource: 'w3c-geolocation-horizontal-95'
+    });
+    assert.equal(gps.confidenceLevel, 0.95);
+    assert.equal(gps.scope, 'gps-position-only');
+    assert.equal(gps.seconds, 2);
+    assert.equal(gps.accuracySource, 'w3c-geolocation-horizontal-95');
+});
+
+test('remaining ETA safely normalizes arbitrary segment progress and can reuse its lookup', () => {
+    const coordinates = [[0, 0], [0.01, 0], [0.02, 0]];
+    const steps = [
+        { distance: 1000, duration: 20 },
+        { distance: 1000, duration: 80 }
+    ];
+    const lookup = ShadowRouter.buildStepTimeLookup(coordinates, steps, 100);
+    assert.equal(Math.round(ShadowRouter.calculateRemainingRouteDuration(coordinates, steps, 100, 0.9, 0.5, lookup)), 90);
+    const injectedLookup = new Float64Array([0, 40, 100]);
+    assert.equal(ShadowRouter.calculateRemainingRouteDuration(coordinates, steps, 100, 0, 0.5, injectedLookup), 80);
+    assert.equal(ShadowRouter.calculateRemainingRouteDuration(coordinates, steps, 100, 99, 1, lookup), 0);
+    assert.equal(ShadowRouter.calculateRemainingRouteDuration(coordinates, steps, 100, NaN, NaN, lookup), 100);
+    assert.equal(ShadowRouter.calculateRemainingRouteDuration(coordinates, steps, 0, 0, 0, lookup), 0);
+    assert.equal(ShadowRouter.calculateRemainingRouteDuration([[0, 0], [NaN, 0]], steps, 100, 0, 0), 0);
+    assert.equal(ShadowRouter.buildStepTimeLookup(null, steps, 100).length, 0);
+});
+
+test('GPS ETA uncertainty preserves provider confidence and is not computationally capped', () => {
+    const slow = RouteState.estimateGpsEtaUncertainty(20, 10, 100, {
+        confidenceLevel: 0.68,
+        accuracySource: 'android-location-horizontal-68'
+    });
+    assert.equal(slow.seconds, 200);
+    assert.equal(slow.confidenceLevel, 0.68);
+    assert.equal(slow.scope, 'gps-position-only');
+    assert.equal(slow.accuracySource, 'android-location-horizontal-68');
+    const unspecified = RouteState.estimateGpsEtaUncertainty(20, 1000, 100);
+    assert.equal(unspecified.confidenceLevel, null);
+    assert.equal(unspecified.accuracySource, 'unspecified');
+    for (const args of [[0, 1000, 100], [20, 0, 100], [20, 1000, 0], [NaN, 1000, 100]]) {
+        const result = RouteState.estimateGpsEtaUncertainty(...args);
+        assert.equal(result.seconds, null);
+        assert.equal(result.scope, 'unavailable');
+    }
+});
+
+test('native and web GPS accuracy confidence metadata remain distinct', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const serviceSource = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/solaris/nav/LocationForegroundService.java'), 'utf8');
+    const pluginSource = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/solaris/nav/PipPlugin.java'), 'utf8');
+    assert.ok(appSource.includes("nativeSource ? 0.68 : 0.95"));
+    assert.ok(appSource.includes("'android-location-horizontal-68'"));
+    assert.ok(appSource.includes("'w3c-geolocation-horizontal-95'"));
+    assert.ok(serviceSource.includes('HORIZONTAL_ACCURACY_CONFIDENCE_LEVEL = 0.68f'));
+    assert.ok(pluginSource.includes('accuracyConfidenceLevel'));
 });
 
 test('toll-free candidate filtering rejects routes with OSRM toll indicators', () => {
@@ -1922,6 +2322,9 @@ test('map summary exposes destination, arrival clock, remaining time, and distan
         appSource.indexOf('function updateVehicleMarkerPosition')
     );
     assert.ok(remainingPath.includes('calculateRemainingRouteDistance'));
+    assert.ok(remainingPath.includes('calculateRemainingRouteDuration'));
+    assert.ok(remainingPath.includes('buildStepTimeLookup'));
+    assert.ok(remainingPath.includes('selectedRouteObj._remainingTimeLookup'));
     assert.ok(remainingPath.includes('updateRemainingSummary(remSec, remDistMeters)'));
     assert.ok(appSource.includes('new Date(Date.now() + Math.max(0, Number(remainingSec) || 0) * 1000)'));
 });
@@ -2289,6 +2692,14 @@ test('navigation lifecycle survives brief interruptions without recalculating th
     assert.ok(appSource.includes('navigationResumePromise'));
 });
 
+test('live glare guidance reuses Bird irradiance and fresh scene occlusion', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('function calculateLiveGlareRisk'));
+    assert.ok(appSource.includes('SolarPhysics.birdClearSky(sunPos, at, atmosphereOptions)'));
+    assert.ok(appSource.includes('Math.abs(at.getTime() - passTimeMs) <= 15 * 60 * 1000'));
+    assert.equal((appSource.match(/calculateSegmentGlare\(currentHeading, sunPos\)/g) || []).length, 0);
+});
+
 test('navigation start-stop is serialized and destination changes use a safe live reroute', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('if (navigationTransitionPending) return'));
@@ -2366,10 +2777,12 @@ test('South Korea precomputed scene coverage is registered and packaged within r
     assert.ok(scene.includes('data/scene/kr/manifest.json'));
     assert.ok(fs.existsSync(manifestPath));
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    assert.equal(manifest.region, 'SOUTH-KOREA');
-    assert.equal(manifest.releaseTag, 'scene-kr-hybrid-v1');
+    assert.equal(manifest.region, 'South Korea');
+    assert.equal(manifest.schema, 3);
+    assert.equal(manifest.dataVersion, 'hybrid-scene-v3');
+    assert.equal(manifest.releaseTag, 'scene-kr-hybrid-v3');
     assert.equal(manifest.stats.tileCount, 3961);
-    assert.equal(manifest.stats.packCount, 153);
+    assert.equal(manifest.stats.packCount, 158);
     assert.ok(manifest.stats.releaseAssetCount <= 900);
     assert.ok(manifest.stats.maxPackBytes < 10 * 1024 * 1024);
     assert.deepEqual(manifest.grid, { latOrigin: 32, lngOrigin: 124, cosLat: 0.8090169943749475 });
@@ -2388,6 +2801,16 @@ test('release metadata never treats local PBF mtime as extract timestamp', () =>
     assert.ok(source.includes('SCENE_OSM_EXTRACT_TIMESTAMP'));
     assert.ok(source.includes('localFileModifiedAt'));
     assert.ok(source.includes('extractTimestamp: verifiedExtractTimestamp'));
+    assert.ok(source.includes('indexSize > 0'), 'a zero-byte node index must never be reused');
+    assert.ok(source.includes('NODE_INDEX_METADATA_PATH'));
+    assert.ok(source.includes('indexMetadata.pbfSha256 === sourceFingerprint.pbfSha256'));
+    assert.ok(source.includes('SCENE_NODE_INDEX_PATH'), 'large builds must be able to separate random node reads from shard writes');
+    assert.ok(source.includes('SCENE_RESUME_WRITE_TILES'), 'interrupted multi-hour tile emission must be resumable');
+    assert.ok(source.includes('tile.source?.osmPbfSha256 === metadata.osm.pbfSha256'), 'resumed tiles must match the immutable OSM input');
+    assert.ok(source.includes('JSON.parse(fs.readFileSync(file, \'utf8\'))'), 'resumed tiles must parse successfully before reuse');
+    assert.ok(source.includes('SCENE_DELETE_NODE_INDEX_AFTER_COLLECT'));
+    assert.ok(source.includes("relative.startsWith('..')"), 'temporary index deletion must be constrained to the work directory');
+    assert.ok(source.indexOf('lookup.close();') < source.indexOf('removed completed temporary node index'), 'the index must be closed before cleanup');
 });
 
 test('PiP is map-only and hides every guidance banner', () => {

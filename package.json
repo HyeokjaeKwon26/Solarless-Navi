@@ -6,6 +6,7 @@
   "scripts": {
     "start": "serve -p 8080",
     "test": "node --test tests/*.test.js",
+    "simulate:us": "node tools/simulate-us-solar-routes.mjs",
     "scene:build": "node tools/build-scene-tiles.mjs",
     "scene:package": "node tools/package-scene-tiles.mjs"
   },
@@ -15,7 +16,8 @@
     "@capacitor-community/text-to-speech": "^5.1.0",
     "@capacitor/android": "^6.0.0",
     "@capacitor/app": "^6.0.3",
-    "@capacitor/core": "^6.0.0"
+    "@capacitor/core": "^6.0.0",
+    "nrel-spa": "^2.0.2"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.0.0",

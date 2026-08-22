@@ -35,17 +35,30 @@ const GRID_COS_LAT = Number(process.env.SCENE_GRID_COS_LAT || Math.cos((REGION_I
 const TERRAIN_SPACING_M = 100;
 const NODE_RECORD_SIZE = 16; // uint64 id + int32 latitude/lng at 1e-7 degree
 const PBF_PATH = path.resolve(process.env.SCENE_PBF_PATH || path.join(SOURCE_DIR, REGION_ID === 'ma' ? 'massachusetts-latest.osm.pbf' : `${REGION_ID}-latest.osm.pbf`));
-const NODE_INDEX_PATH = path.join(WORK_DIR, 'nodes.bin');
+// Large-region pass 2 performs random node lookups while writing thousands of
+// line shards. Allow the immutable node index to live on a separate physical
+// disk so those I/O patterns do not contend on one drive.
+const NODE_INDEX_PATH = path.resolve(process.env.SCENE_NODE_INDEX_PATH || path.join(WORK_DIR, 'nodes.bin'));
+const NODE_INDEX_METADATA_PATH = `${NODE_INDEX_PATH}.meta.json`;
 const HGT_DIR = path.resolve(process.env.SCENE_HGT_DIR || path.join(SOURCE_DIR, 'hgt'));
 const POLY_PATH = path.resolve(process.env.SCENE_POLY_PATH || path.join(SOURCE_DIR, `${REGION_ID}.poly`));
 const PROFILE_AZIMUTH_DEG = Math.max(1, Number(process.env.SCENE_PROFILE_AZIMUTH_DEG || 10));
 const PROFILE_SAMPLE_SPACING_M = Math.max(25, Number(process.env.SCENE_PROFILE_SAMPLE_SPACING_M || 100));
-const DATA_VERSION = String(process.env.SCENE_DATA_VERSION || 'hybrid-scene-v1');
+const SCENE_SCHEMA_VERSION = Math.max(3, Number(process.env.SCENE_SCHEMA_VERSION || 3));
+const DATA_VERSION = String(process.env.SCENE_DATA_VERSION || 'hybrid-scene-v3');
+// SRTM mission specification: relative vertical error <=10 m at 90%.
+// This is a dataset-level bound, not a per-pixel Gaussian standard deviation.
+const TERRAIN_RELATIVE_VERTICAL_ERROR_M = Math.max(0, Number(process.env.SCENE_TERRAIN_RELATIVE_ERROR_M || 10));
 const OSM_SOURCE_URL = process.env.SCENE_OSM_SOURCE_URL || null;
 const OSM_EXTRACT_TIMESTAMP = process.env.SCENE_OSM_EXTRACT_TIMESTAMP || null;
 const OSM_SOURCE_METADATA_PATH = process.env.SCENE_OSM_SOURCE_METADATA || null;
 const DEM_DATASET = String(process.env.SCENE_DEM_DATASET || 'SRTM 1 arc-second public elevation tiles');
 const DEM_DATASET_VERSION = process.env.SCENE_DEM_DATASET_VERSION || null;
+// Regional tile emission can take hours. An interrupted write pass may be
+// resumed, but only after every existing tile is parsed and matched against
+// the immutable inputs/configuration that determine its payload.
+const RESUME_WRITE_TILES = String(process.env.SCENE_RESUME_WRITE_TILES || '').toLowerCase() === 'true';
+const DELETE_LOCAL_NODE_INDEX_AFTER_COLLECT = String(process.env.SCENE_DELETE_NODE_INDEX_AFTER_COLLECT || '').toLowerCase() === 'true';
 // Restoring every road node in a large regional PBF is needlessly expensive. For larger
 // regions the app already computes route tile keys at runtime, so precompute
 // only scene geometry unless explicitly requested.
@@ -74,7 +87,9 @@ function readBoundsFromPoly(file) {
 
 const REGION_BOUNDS = readBoundsFromPoly(POLY_PATH);
 
+let cachedSourceMetadata = null;
 function sourceMetadata() {
+    if (cachedSourceMetadata) return cachedSourceMetadata;
     const pbf = fs.existsSync(PBF_PATH) ? fs.statSync(PBF_PATH) : null;
     const hgtCount = fs.existsSync(HGT_DIR)
         ? fs.readdirSync(HGT_DIR).filter(name => /\.hgt(?:\.gz)?$/i.test(name)).length
@@ -102,7 +117,7 @@ function sourceMetadata() {
             verifiedExtractTimestamp = null;
         }
     }
-    return {
+    cachedSourceMetadata = {
         osm: {
             extract: path.basename(PBF_PATH),
             bytes: pbf ? pbf.size : null,
@@ -115,6 +130,7 @@ function sourceMetadata() {
         boundary: fs.existsSync(POLY_PATH) ? path.basename(POLY_PATH) : null,
         terrain: { dataset: DEM_DATASET, datasetVersion: DEM_DATASET_VERSION, tileCount: hgtCount }
     };
+    return cachedSourceMetadata;
 }
 
 function finite(value) {
@@ -153,12 +169,105 @@ function tileBounds(key) {
     return { south: sw.lat, west: sw.lng, north: ne.lat, east: ne.lng };
 }
 
-function parseHeight(tags = {}) {
-    const height = String(tags.height || '').replace(',', '.').match(/-?\d+(?:\.\d+)?/);
-    if (height && Number(height[0]) > 0) return Number(height[0]);
+function parseOsmLengthMeters(value) {
+    const text = String(value || '').replace(',', '.').trim();
+    const match = text.match(/-?\d+(?:\.\d+)?/);
+    if (!match) return null;
+    const feetInches = text.match(/(\d+(?:\.\d+)?)\s*(?:ft|feet|foot|')\s*(\d+(?:\.\d+)?)?\s*(?:in|inch|inches|")?/i);
+    let meters = feetInches
+        ? Number(feetInches[1]) * 0.3048 + Number(feetInches[2] || 0) * 0.0254
+        : Number(match[0]);
+    if (!feetInches && (/\b(?:ft|feet|foot)\b|'/i.test(text))) meters *= 0.3048;
+    else if (!feetInches && (/\b(?:in|inch|inches)\b|"/i.test(text))) meters *= 0.0254;
+    return Number.isFinite(meters) ? Number(meters.toFixed(3)) : null;
+}
+
+function parseMinHeightModel(tags = {}) {
+    const explicit = parseOsmLengthMeters(tags.min_height);
+    if (Number.isFinite(explicit) && explicit >= 0) {
+        return { nominal: explicit, lower: explicit, upper: explicit, source: 'osm-min-height' };
+    }
+    const match = String(tags['building:min_level'] || '').replace(',', '.').match(/\d+(?:\.\d+)?/);
+    if (match) {
+        const levels = Number(match[0]);
+        return {
+            nominal: Number((levels * 3.2).toFixed(3)),
+            lower: Number((levels * 3.0).toFixed(3)),
+            upper: Number((levels * 4.5).toFixed(3)),
+            source: 'osm-building-min-level'
+        };
+    }
+    return { nominal: 0, lower: 0, upper: 0, source: 'ground' };
+}
+
+function normalizeMinHeightEnvelope(minHeight = {}, topHeight = {}) {
+    const topNominal = Math.max(0, Number(topHeight.nominal) || 0);
+    const topLower = Math.max(0, Number(topHeight.lower) || topNominal);
+    const topUpper = Math.max(0, Number(topHeight.upper) || topNominal);
+    const original = {
+        nominal: Math.max(0, Number(minHeight.nominal) || 0),
+        lower: Math.max(0, Number(minHeight.lower) || 0),
+        upper: Math.max(0, Number(minHeight.upper) || 0)
+    };
+    const normalized = {
+        nominal: Math.min(original.nominal, topNominal),
+        lower: Math.min(original.lower, topLower),
+        upper: Math.min(original.upper, topUpper)
+    };
+    const adjusted = normalized.nominal !== original.nominal
+        || normalized.lower !== original.lower
+        || normalized.upper !== original.upper;
+    return {
+        ...normalized,
+        source: adjusted
+            ? `${String(minHeight.source || 'unknown')}-clamped-to-height`
+            : String(minHeight.source || 'ground'),
+        adjusted
+    };
+}
+
+function parseHeightModel(tags = {}) {
+    const minHeight = parseMinHeightModel(tags);
+    const heightText = String(tags.height || '').replace(',', '.');
+    const height = heightText.match(/-?\d+(?:\.\d+)?/);
+    if (height && Number(height[0]) > 0) {
+        const feetInches = heightText.match(/(\d+(?:\.\d+)?)\s*(?:ft|feet|foot|')\s*(\d+(?:\.\d+)?)?\s*(?:in|inch|inches|")?/i);
+        let nominal = feetInches
+            ? Number(feetInches[1]) * 0.3048 + Number(feetInches[2] || 0) * 0.0254
+            : Number(height[0]);
+        // OSM uses metres by default, while explicit imperial suffixes are
+        // valid and must be normalized before writing scene tiles.
+        if (!feetInches && (/\b(?:ft|feet|foot)\b|'/i.test(heightText))) nominal *= 0.3048;
+        else if (!feetInches && (/\b(?:in|inch|inches)\b|"/i.test(heightText))) nominal *= 0.0254;
+        nominal = Number(nominal.toFixed(3));
+        return {
+            nominal, lower: nominal, upper: nominal, source: 'osm-height', estimated: false,
+            uncertainty: 'tag-value; source accuracy is not specified by OSM', minHeight
+        };
+    }
     const levels = String(tags['building:levels'] || '').replace(',', '.').match(/\d+(?:\.\d+)?/);
-    if (levels && Number(levels[0]) > 0) return Number(levels[0]) * 3.2;
-    return 6;
+    if (levels && Number(levels[0]) > 0) {
+        const count = Number(levels[0]);
+        // 3.0–4.5 m/storey covers published residential/service/industrial
+        // means. It is a deterministic sensitivity envelope, not a CI.
+        return {
+            nominal: Number((minHeight.nominal + count * 3.2).toFixed(3)),
+            lower: Number((minHeight.lower + count * 3.0).toFixed(3)),
+            upper: Number((minHeight.upper + count * 4.5).toFixed(3)),
+            source: 'osm-building-levels', estimated: true,
+            uncertainty: '3.0–4.5 m/storey literature sensitivity envelope', minHeight
+        };
+    }
+    // Missing-height buildings remain useful for candidate ray tests, but a
+    // broad 1–4 storey envelope prevents a nominal 6 m extrusion from being
+    // reported as certain shade near the decision boundary.
+    return {
+        nominal: Number((minHeight.nominal + 6).toFixed(3)),
+        lower: Number((minHeight.lower + 3).toFixed(3)),
+        upper: Number((minHeight.upper + 12).toFixed(3)),
+        source: 'missing-height-default', estimated: true,
+        uncertainty: '3–12 m conservative sensitivity envelope; not a statistical CI', minHeight
+    };
 }
 
 function hgtName(lat, lng) {
@@ -230,9 +339,23 @@ function parsePbf(file, onItem) {
 
 async function buildNodeIndex() {
     if (!fs.existsSync(PBF_PATH)) throw new Error(`missing OSM extract: ${PBF_PATH}`);
-    if (fs.existsSync(NODE_INDEX_PATH) && fs.statSync(NODE_INDEX_PATH).size % NODE_RECORD_SIZE === 0) {
-        console.log(`reuse node index: ${NODE_INDEX_PATH}`);
-        return;
+    const metadata = sourceMetadata();
+    const sourceFingerprint = {
+        pbfSha256: metadata.osm.pbfSha256,
+        bytes: metadata.osm.bytes
+    };
+    if (fs.existsSync(NODE_INDEX_PATH) && fs.existsSync(NODE_INDEX_METADATA_PATH)) {
+        const indexSize = fs.statSync(NODE_INDEX_PATH).size;
+        let indexMetadata = null;
+        try { indexMetadata = JSON.parse(fs.readFileSync(NODE_INDEX_METADATA_PATH, 'utf8')); } catch (error) { indexMetadata = null; }
+        const sourceMatches = indexMetadata &&
+            indexMetadata.pbfSha256 === sourceFingerprint.pbfSha256 &&
+            Number(indexMetadata.bytes) === Number(sourceFingerprint.bytes);
+        if (indexSize > 0 && indexSize % NODE_RECORD_SIZE === 0 && sourceMatches) {
+            console.log(`reuse node index: ${NODE_INDEX_PATH}`);
+            return;
+        }
+        console.log('discard stale or incomplete node index metadata; rebuilding');
     }
     console.log('pass 1/2: building compact sorted node index');
     const fd = fs.openSync(NODE_INDEX_PATH, 'w');
@@ -265,6 +388,14 @@ async function buildNodeIndex() {
         fs.closeSync(fd);
     }
     if (outOfOrder) throw new Error('OSM node IDs are not sorted; cannot use compact lookup index');
+    const metadataTemp = `${NODE_INDEX_METADATA_PATH}.tmp`;
+    fs.writeFileSync(metadataTemp, `${JSON.stringify({
+        ...sourceFingerprint,
+        records: count,
+        recordBytes: NODE_RECORD_SIZE,
+        createdAt: new Date().toISOString()
+    }, null, 2)}\n`);
+    fs.renameSync(metadataTemp, NODE_INDEX_METADATA_PATH);
     console.log(`node index complete: ${count.toLocaleString()} records`);
 }
 
@@ -427,11 +558,17 @@ async function collectWays(lookup) {
                 center.lat /= points.length;
                 center.lng /= points.length;
                 const key = tileKeyForCoordinate(center.lat, center.lng);
-                if (isBuilding) writer.append(key, {
+                if (isBuilding) {
+                    const heightModel = parseHeightModel(tags);
+                    writer.append(key, {
                     k: 'b', id: `way/${item.id}`, p: points,
-                    h: parseHeight(tags), he: !tags.height && !tags['building:levels'],
+                    h: heightModel.nominal, hl: heightModel.lower, hu: heightModel.upper,
+                    hs: heightModel.source, he: heightModel.estimated, hq: heightModel.uncertainty,
+                    mh: heightModel.minHeight.nominal, mhl: heightModel.minHeight.lower,
+                    mhu: heightModel.minHeight.upper, mhs: heightModel.minHeight.source,
                     g: null
-                });
+                    });
+                }
                 if (isTunnel) writer.append(key, { k: 't', id: `way/${item.id}`, p: points });
                 sceneWays++;
             }
@@ -463,6 +600,40 @@ function terrainGridForTile(key, hgt) {
     return points;
 }
 
+function reusableTileEntry(file, key, metadata) {
+    if (!RESUME_WRITE_TILES || !fs.existsSync(file)) return null;
+    try {
+        const tile = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const matches = Number(tile.schemaVersion || tile.schema) === SCENE_SCHEMA_VERSION
+            && tile.dataVersion === DATA_VERSION
+            && tile.region === REGION_LABEL
+            && tile.key === key
+            && Number(tile.tileSizeM) === TILE_SIZE_M
+            && Number(tile.grid?.latOrigin) === GRID_LAT_ORIGIN
+            && Number(tile.grid?.lngOrigin) === GRID_LNG_ORIGIN
+            && Number(tile.grid?.cosLat) === GRID_COS_LAT
+            && Number(tile.uncertaintyModel?.terrainRelativeVerticalErrorM) === TERRAIN_RELATIVE_VERTICAL_ERROR_M
+            && tile.source?.osmPbfSha256 === metadata.osm.pbfSha256
+            && tile.source?.demDataset === metadata.terrain.dataset
+            && (tile.source?.demDatasetVersion || null) === (metadata.terrain.datasetVersion || null)
+            && Array.isArray(tile.buildings)
+            && Array.isArray(tile.tunnels)
+            && Array.isArray(tile.terrain);
+        if (!matches) return null;
+        const stat = fs.statSync(file);
+        return {
+            key,
+            path: path.basename(file),
+            bytes: stat.size,
+            buildings: tile.buildings.length,
+            tunnels: tile.tunnels.length,
+            terrain: tile.terrain.length
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
 async function writeTiles() {
     const linesDir = path.join(WORK_DIR, 'lines');
     // Scene-only regional builds intentionally omit the full road coverage
@@ -473,13 +644,24 @@ async function writeTiles() {
         : [];
     const tileKeys = new Set(roadTiles);
     for (const file of fs.readdirSync(linesDir)) tileKeys.add(file.replace('.jsonl', '').replace('_', ':'));
-    fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
+    if (!RESUME_WRITE_TILES) fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
     ensureDir(OUTPUT_DIR);
     const metadata = sourceMetadata();
     const hgt = new HgtStore(HGT_DIR);
     const tileList = [];
     let index = 0;
+    let resumed = 0;
     for (const key of [...tileKeys].sort()) {
+        const fileName = `${key.replace(':', '_')}.json`;
+        const outputFile = path.join(OUTPUT_DIR, fileName);
+        const reusable = reusableTileEntry(outputFile, key, metadata);
+        if (reusable) {
+            tileList.push(reusable);
+            resumed++;
+            index++;
+            if (index % 100 === 0) console.log(`  tiles: ${index}/${tileKeys.size} (resumed: ${resumed})`);
+            continue;
+        }
         const records = readLineRecords(path.join(linesDir, `${key.replace(':', '_')}.jsonl`));
         const buildings = [];
         const tunnels = [];
@@ -489,14 +671,39 @@ async function writeTiles() {
                 const center = points.reduce((sum, point) => ({ lat: sum.lat + point[0], lng: sum.lng + point[1] }), { lat: 0, lng: 0 });
                 center.lat /= Math.max(1, points.length);
                 center.lng /= Math.max(1, points.length);
-                buildings.push({ id: record.id, polygon: points, height: record.h, heightEstimated: !!record.he, ground: hgt.sample(center.lat, center.lng) });
+                // OSM can contain contradictory height/min_height tags. Clamp
+                // only the lower opening envelope to the corresponding roof
+                // envelope so malformed data cannot create an inverted solid.
+                const minHeight = normalizeMinHeightEnvelope({
+                    nominal: record.mh,
+                    lower: record.mhl,
+                    upper: record.mhu,
+                    source: record.mhs
+                }, {
+                    nominal: record.h,
+                    lower: record.hl,
+                    upper: record.hu
+                });
+                buildings.push({
+                    id: record.id, polygon: points,
+                    height: record.h, heightLower: record.hl, heightUpper: record.hu,
+                    heightSource: record.hs, heightEstimated: !!record.he,
+                    heightUncertainty: record.hq,
+                    minHeight: minHeight.nominal,
+                    minHeightLower: minHeight.lower,
+                    minHeightUpper: minHeight.upper,
+                    minHeightSource: minHeight.source,
+                    minHeightAdjusted: minHeight.adjusted || undefined,
+                    ground: hgt.sample(center.lat, center.lng),
+                    groundVerticalErrorM: TERRAIN_RELATIVE_VERTICAL_ERROR_M
+                });
             } else if (record.k === 't') {
                 tunnels.push({ id: record.id, line: points });
             }
         }
         const tile = {
-            schema: 1,
-            schemaVersion: 1,
+            schema: SCENE_SCHEMA_VERSION,
+            schemaVersion: SCENE_SCHEMA_VERSION,
             region: REGION_LABEL,
             dataVersion: DATA_VERSION,
             key,
@@ -510,6 +717,17 @@ async function writeTiles() {
                 azimuthDeg: PROFILE_AZIMUTH_DEG,
                 sampleSpacingM: PROFILE_SAMPLE_SPACING_M,
                 maxDistanceM: MAX_SHADOW_RAY_DISTANCE_METERS
+            },
+            uncertaintyModel: {
+                version: 'scene-uncertainty-v1',
+                buildingHeight: 'source-aware deterministic envelope',
+                buildingMinimumHeight: 'OSM min_height or building:min_level vertical opening',
+                terrainRelativeVerticalErrorM: TERRAIN_RELATIVE_VERTICAL_ERROR_M,
+                terrainConfidenceLevel: 0.90,
+                references: {
+                    terrain: 'NASADEM/SRTM User Guide',
+                    levels: 'Usui 2023; Kleemann et al. 2020'
+                }
             },
             sceneCoverage: {
                 buildings: true,
@@ -528,15 +746,14 @@ async function writeTiles() {
                 demDatasetVersion: metadata.terrain.datasetVersion
             }
         };
-        const fileName = `${key.replace(':', '_')}.json`;
-        fs.writeFileSync(path.join(OUTPUT_DIR, fileName), JSON.stringify(tile));
-        tileList.push({ key, path: fileName, bytes: fs.statSync(path.join(OUTPUT_DIR, fileName)).size, buildings: buildings.length, tunnels: tunnels.length, terrain: tile.terrain.length });
+        fs.writeFileSync(outputFile, JSON.stringify(tile));
+        tileList.push({ key, path: fileName, bytes: fs.statSync(outputFile).size, buildings: buildings.length, tunnels: tunnels.length, terrain: tile.terrain.length });
         index++;
         if (index % 100 === 0) console.log(`  tiles: ${index}/${tileKeys.size}`);
     }
     const manifest = {
-        schema: 1,
-        schemaVersion: 1,
+        schema: SCENE_SCHEMA_VERSION,
+        schemaVersion: SCENE_SCHEMA_VERSION,
         region: REGION_LABEL,
         tileSizeM: TILE_SIZE_M,
         grid: { latOrigin: GRID_LAT_ORIGIN, lngOrigin: GRID_LNG_ORIGIN, cosLat: GRID_COS_LAT },
@@ -546,6 +763,19 @@ async function writeTiles() {
             azimuthDeg: PROFILE_AZIMUTH_DEG,
             sampleSpacingM: PROFILE_SAMPLE_SPACING_M,
             maxDistanceM: MAX_SHADOW_RAY_DISTANCE_METERS
+        },
+        uncertaintyModel: {
+            version: 'scene-uncertainty-v1',
+            buildingHeight: {
+                explicit: 'OSM height tag retained; tag accuracy unspecified',
+                levels: { nominalMetersPerStorey: 3.2, lower: 3.0, upper: 4.5 },
+                missing: { nominalMeters: 6, lower: 3, upper: 12 }
+            },
+            terrain: { relativeVerticalErrorM: TERRAIN_RELATIVE_VERTICAL_ERROR_M, confidenceLevel: 0.90 },
+            references: {
+                terrain: 'https://lpdaac.usgs.gov/documents/592/NASADEM_User_Guide_V1.pdf',
+                levels: 'https://doi.org/10.1177/23998083221116117'
+            }
         },
         dataVersion: DATA_VERSION,
         bounds: REGION_BOUNDS,
@@ -561,25 +791,35 @@ async function writeTiles() {
         tiles: tileList
     };
     fs.writeFileSync(path.join(OUTPUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));
-    console.log(`generated ${tileList.length} tiles in ${OUTPUT_DIR}`);
+    console.log(`generated ${tileList.length} tiles in ${OUTPUT_DIR} (resumed: ${resumed})`);
 }
 
 async function main() {
     ensureDir(SOURCE_DIR);
     ensureDir(WORK_DIR);
     ensureDir(HGT_DIR);
-    await buildNodeIndex();
-    const lookup = new NodeLookup(NODE_INDEX_PATH);
-    try {
-        if (String(process.env.SCENE_SKIP_COLLECT || '').toLowerCase() === 'true') {
-            console.log('skip pass 2/2: reusing existing scene line files');
-        } else {
+    const skipCollect = String(process.env.SCENE_SKIP_COLLECT || '').toLowerCase() === 'true';
+    if (skipCollect) {
+        console.log('skip pass 1/2 and pass 2/2: reusing existing scene line files');
+    } else {
+        await buildNodeIndex();
+        const lookup = new NodeLookup(NODE_INDEX_PATH);
+        try {
             await collectWays(lookup);
+        } finally {
+            lookup.close();
         }
-        await writeTiles();
-    } finally {
-        lookup.close();
+        if (DELETE_LOCAL_NODE_INDEX_AFTER_COLLECT) {
+            const relative = path.relative(WORK_DIR, NODE_INDEX_PATH);
+            if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+                throw new Error('SCENE_DELETE_NODE_INDEX_AFTER_COLLECT only permits an index inside SCENE_WORK_DIR');
+            }
+            fs.rmSync(NODE_INDEX_PATH, { force: true });
+            fs.rmSync(NODE_INDEX_METADATA_PATH, { force: true });
+            console.log(`removed completed temporary node index: ${NODE_INDEX_PATH}`);
+        }
     }
+    await writeTiles();
 }
 
 main().catch(error => {

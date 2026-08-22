@@ -22,6 +22,8 @@ import android.content.SharedPreferences;
  * no Google location SDK or background-location permission is required.
  */
 public final class LocationForegroundService extends Service implements LocationListener {
+    public static final float HORIZONTAL_ACCURACY_CONFIDENCE_LEVEL = 0.68f;
+    public static final String HORIZONTAL_ACCURACY_SOURCE = "android-location-horizontal-68";
     public static final String ACTION_LOCATION_UPDATE = "com.solaris.nav.LOCATION_UPDATE";
     public static final String ACTION_SERVICE_STATUS = "com.solaris.nav.LOCATION_SERVICE_STATUS";
     public static final String EXTRA_REASON = "reason";
@@ -152,6 +154,8 @@ public final class LocationForegroundService extends Service implements Location
             .putExtra("lat", location.getLatitude())
             .putExtra("lng", location.getLongitude())
             .putExtra("accuracy", location.hasAccuracy() ? location.getAccuracy() : -1f)
+            .putExtra("accuracyConfidenceLevel", HORIZONTAL_ACCURACY_CONFIDENCE_LEVEL)
+            .putExtra("accuracySource", HORIZONTAL_ACCURACY_SOURCE)
             .putExtra("timestamp", timestamp)
             .putExtra("source", location.getProvider() == null ? "native" : location.getProvider());
         if (location.hasSpeed()) event.putExtra("speed", location.getSpeed());

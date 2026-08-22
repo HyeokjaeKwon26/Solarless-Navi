@@ -208,27 +208,135 @@
         return best;
     }
 
-    function isTerrainRayOccluded(roadElevation, sunElevationDeg, distances, elevations, tolerance = 2) {
-        if (!finite(roadElevation) || !finite(sunElevationDeg) || sunElevationDeg <= 0) return false;
-        if (!Array.isArray(distances) || !Array.isArray(elevations)) return false;
+    const DEFAULT_TERRAIN_RELATIVE_VERTICAL_ERROR_M = 10;
+
+    function classifyTerrainRayOcclusion(roadElevation, sunElevationDeg, distances, elevations,
+        verticalErrorM = DEFAULT_TERRAIN_RELATIVE_VERTICAL_ERROR_M) {
+        if (!finite(roadElevation) || !finite(sunElevationDeg) || sunElevationDeg <= 0) {
+            return { state: 'clear', blocked: false, uncertain: false, maxClearanceM: -Infinity };
+        }
+        if (!Array.isArray(distances) || !Array.isArray(elevations)) {
+            return { state: 'unknown', blocked: false, uncertain: true, maxClearanceM: null };
+        }
         const tangent = Math.tan(sunElevationDeg * RAD);
+        const error = Math.max(0, Number(verticalErrorM) || 0);
+        let maxClearanceM = -Infinity;
+        let validSampleCount = 0;
         for (let i = 0; i < Math.min(distances.length, elevations.length); i++) {
             if (!finite(distances[i]) || !finite(elevations[i])) continue;
+            validSampleCount++;
             const lineElevation = roadElevation + tangent * Number(distances[i]);
-            if (Number(elevations[i]) > lineElevation + tolerance) return true;
+            maxClearanceM = Math.max(maxClearanceM, Number(elevations[i]) - lineElevation);
         }
-        return false;
+        if (validSampleCount === 0) {
+            return { state: 'unknown', blocked: false, uncertain: true, maxClearanceM: null };
+        }
+        if (maxClearanceM > error) return { state: 'blocked', blocked: true, uncertain: false, maxClearanceM };
+        if (maxClearanceM >= -error) return { state: 'uncertain', blocked: false, uncertain: true, maxClearanceM };
+        return { state: 'clear', blocked: false, uncertain: false, maxClearanceM };
+    }
+
+    function isTerrainRayOccluded(roadElevation, sunElevationDeg, distances, elevations, tolerance = 2) {
+        return classifyTerrainRayOcclusion(roadElevation, sunElevationDeg, distances, elevations, tolerance).blocked;
+    }
+
+    function parseOsmLengthMeters(value) {
+        const text = String(value || '').replace(',', '.').trim();
+        const match = text.match(/-?\d+(?:\.\d+)?/);
+        if (!match) return null;
+        const feetInches = text.match(/(\d+(?:\.\d+)?)\s*(?:ft|feet|foot|')\s*(\d+(?:\.\d+)?)?\s*(?:in|inch|inches|")?/i);
+        let meters = feetInches
+            ? Number(feetInches[1]) * 0.3048 + Number(feetInches[2] || 0) * 0.0254
+            : Number(match[0]);
+        if (!feetInches && (/\b(?:ft|feet|foot)\b|'/i.test(text))) meters *= 0.3048;
+        else if (!feetInches && (/\b(?:in|inch|inches)\b|"/i.test(text))) meters *= 0.0254;
+        return Number.isFinite(meters) ? Number(meters.toFixed(3)) : null;
+    }
+
+    function parseMinHeightModel(tags) {
+        const explicit = parseOsmLengthMeters(tags && tags.min_height);
+        if (finite(explicit) && Number(explicit) >= 0) {
+            return { minHeight: Number(explicit), minHeightLower: Number(explicit), minHeightUpper: Number(explicit), minHeightSource: 'osm-min-height' };
+        }
+        const match = String(tags && tags['building:min_level'] || '').replace(',', '.').match(/\d+(?:\.\d+)?/);
+        if (match) {
+            const levels = Number(match[0]);
+            return {
+                minHeight: Number((levels * 3.2).toFixed(3)),
+                minHeightLower: Number((levels * 3.0).toFixed(3)),
+                minHeightUpper: Number((levels * 4.5).toFixed(3)),
+                minHeightSource: 'osm-building-min-level'
+            };
+        }
+        return { minHeight: 0, minHeightLower: 0, minHeightUpper: 0, minHeightSource: 'ground' };
+    }
+
+    function normalizeMinHeightEnvelope(model) {
+        const minHeight = Math.min(Math.max(0, Number(model.minHeight) || 0), Math.max(0, Number(model.height) || 0));
+        const minHeightLower = Math.min(Math.max(0, Number(model.minHeightLower) || 0), Math.max(0, Number(model.heightLower) || 0));
+        const minHeightUpper = Math.min(Math.max(0, Number(model.minHeightUpper) || 0), Math.max(0, Number(model.heightUpper) || 0));
+        const adjusted = minHeight !== Number(model.minHeight || 0)
+            || minHeightLower !== Number(model.minHeightLower || 0)
+            || minHeightUpper !== Number(model.minHeightUpper || 0);
+        if (!adjusted) return model;
+        return {
+            ...model,
+            minHeight,
+            minHeightLower,
+            minHeightUpper,
+            minHeightSource: `${String(model.minHeightSource || 'unknown')}-clamped-to-height`,
+            minHeightAdjusted: true
+        };
+    }
+
+    function parseHeightModel(tags) {
+        tags = tags || {};
+        const minHeight = parseMinHeightModel(tags);
+        const heightText = String(tags.height || '').replace(',', '.');
+        const heightMatch = heightText.match(/-?\d+(?:\.\d+)?/);
+        if (heightMatch && Number(heightMatch[0]) > 0) {
+            const feetInches = heightText.match(/(\d+(?:\.\d+)?)\s*(?:ft|feet|foot|')\s*(\d+(?:\.\d+)?)?\s*(?:in|inch|inches|")?/i);
+            let height = feetInches
+                ? Number(feetInches[1]) * 0.3048 + Number(feetInches[2] || 0) * 0.0254
+                : Number(heightMatch[0]);
+            // OSM height is metres by default but explicitly permits common
+            // imperial suffixes. Keeping the source unit unconverted would
+            // turn e.g. `30 ft` into an implausible 30 metre building.
+            if (!feetInches && (/\b(?:ft|feet|foot)\b|'/i.test(heightText))) height *= 0.3048;
+            else if (!feetInches && (/\b(?:in|inch|inches)\b|"/i.test(heightText))) height *= 0.0254;
+            height = Number(height.toFixed(3));
+            return normalizeMinHeightEnvelope({
+                height, heightLower: height, heightUpper: height,
+                heightSource: 'osm-height', heightEstimated: false,
+                heightUncertainty: 'tag-value; source accuracy is not specified by OSM',
+                ...minHeight
+            });
+        }
+        const levelText = String(tags['building:levels'] || '').replace(',', '.');
+        const levelMatch = levelText.match(/\d+(?:\.\d+)?/);
+        if (levelMatch && Number(levelMatch[0]) > 0) {
+            const levels = Number(levelMatch[0]);
+            return normalizeMinHeightEnvelope({
+                height: Number((minHeight.minHeight + levels * 3.2).toFixed(3)),
+                heightLower: Number((minHeight.minHeightLower + levels * 3.0).toFixed(3)),
+                heightUpper: Number((minHeight.minHeightUpper + levels * 4.5).toFixed(3)),
+                heightSource: 'osm-building-levels', heightEstimated: true,
+                heightUncertainty: '3.0-4.5 m/storey literature sensitivity envelope',
+                ...minHeight
+            });
+        }
+        return normalizeMinHeightEnvelope({
+            height: Number((minHeight.minHeight + 6).toFixed(3)),
+            heightLower: Number((minHeight.minHeightLower + 3).toFixed(3)),
+            heightUpper: Number((minHeight.minHeightUpper + 12).toFixed(3)),
+            heightSource: 'missing-height-default', heightEstimated: true,
+            heightUncertainty: '3-12 m conservative sensitivity envelope; not a statistical CI',
+            ...minHeight
+        });
     }
 
     function parseHeight(tags) {
-        tags = tags || {};
-        const heightText = String(tags.height || '').replace(',', '.');
-        const heightMatch = heightText.match(/-?\d+(?:\.\d+)?/);
-        if (heightMatch && Number(heightMatch[0]) > 0) return Number(heightMatch[0]);
-        const levelText = String(tags['building:levels'] || '').replace(',', '.');
-        const levelMatch = levelText.match(/\d+(?:\.\d+)?/);
-        if (levelMatch && Number(levelMatch[0]) > 0) return Number(levelMatch[0]) * 3.2;
-        return 6;
+        return parseHeightModel(tags).height;
     }
 
     function routeBbox(coordinates, paddingMeters = 250) {
@@ -995,15 +1103,18 @@
             const buildingTag = tags.building || tags['building:part'];
             if (points.length >= 3 && buildingTag && !seenBuildings.has(id)) {
                 seenBuildings.add(id);
+                const heightModel = parseHeightModel(tags);
                 buildings.push({
                     id: element.id,
                     polygon: points,
                     bounds: computeBounds(points),
-                    height: parseHeight(tags),
-                    heightEstimated: !tags.height && !tags['building:levels'],
+                    ...heightModel,
                     ground: null,
                     relevantProfileIndices: [],
-                    tags: { building: buildingTag, height: tags.height || '', levels: tags['building:levels'] || '' }
+                    tags: {
+                        building: buildingTag, height: tags.height || '', levels: tags['building:levels'] || '',
+                        minHeight: tags.min_height || '', minLevel: tags['building:min_level'] || ''
+                    }
                 });
             }
         }
@@ -1298,6 +1409,10 @@
             precisionReady: !!overpass.available && terrainAvailable && buildingGroundAvailable &&
                 segmentCoverage.length > 0 && segmentCoverage.every(segment => segment.terrain && segment.buildingGround),
             source: 'OpenStreetMap Overpass + OpenTopoData ASTER30m',
+            uncertaintyModel: {
+                version: 'live-scene-uncertainty-v1',
+                terrain: { relativeVerticalErrorM: DEFAULT_TERRAIN_RELATIVE_VERTICAL_ERROR_M, confidenceLevel: 0.90 }
+            },
             sampleCount: terrainSamples.length
         };
         debugScene(sceneResult.precisionReady ? 'precision-ready' : 'precision-partial', {
@@ -1317,7 +1432,7 @@
             Math.max(...routeLatitudes) < Number(regionBounds.south) || Math.min(...routeLatitudes) > Number(regionBounds.north) ||
             Math.max(...routeLongitudes) < Number(regionBounds.west) || Math.min(...routeLongitudes) > Number(regionBounds.east)) return null;
         const manifest = await loadPrecomputedManifest(options);
-        if (!manifest || manifest.schema !== 2 || !manifest.tiles || !manifest.packs) {
+        if (!manifest || ![2, 3].includes(Number(manifest.schema)) || !manifest.tiles || !manifest.packs) {
             throw createSceneError('SCENE_MANIFEST_INVALID', 'scene manifest has an unsupported schema');
         }
         const plan = makeTerrainPlan(coordinates, options);
@@ -1371,8 +1486,20 @@
                         polygon: (building.polygon || []).filter(point => Array.isArray(point) && finite(point[0]) && finite(point[1]))
                             .map(point => projectPoint(Number(point[0]), Number(point[1]), origin)),
                         height: Number(building.height) || 6,
+                        heightLower: finite(building.heightLower) ? Number(building.heightLower) : (Number(building.height) || 6),
+                        heightUpper: finite(building.heightUpper) ? Number(building.heightUpper) : (Number(building.height) || 6),
+                        heightSource: building.heightSource || (building.heightEstimated ? 'legacy-estimated' : 'legacy-height'),
                         heightEstimated: !!building.heightEstimated,
+                        heightUncertainty: building.heightUncertainty || null,
+                        minHeight: finite(building.minHeight) ? Number(building.minHeight) : 0,
+                        minHeightLower: finite(building.minHeightLower) ? Number(building.minHeightLower) : 0,
+                        minHeightUpper: finite(building.minHeightUpper) ? Number(building.minHeightUpper) : 0,
+                        minHeightSource: building.minHeightSource || 'ground',
                         ground: finite(building.ground) ? Number(building.ground) : null,
+                        groundVerticalErrorM: finite(building.groundVerticalErrorM)
+                            ? Number(building.groundVerticalErrorM)
+                            : Number(manifest.uncertaintyModel && manifest.uncertaintyModel.terrain &&
+                                manifest.uncertaintyModel.terrain.relativeVerticalErrorM) || 2,
                         relevantProfileIndices: []
                     };
                     if (candidate.polygon.length < 3) continue;
@@ -1520,6 +1647,10 @@
             source: precomputedSourceLabel(manifest),
             dataVersion: manifest.dataVersion || null,
             profileResolution: manifest.profileResolution || null,
+            uncertaintyModel: manifest.uncertaintyModel || {
+                version: 'legacy-scene-no-explicit-uncertainty',
+                terrain: { relativeVerticalErrorM: 2, confidenceLevel: null }
+            },
             sceneCoverage: {
                 ...((manifest.sceneCoverage && typeof manifest.sceneCoverage === 'object') ? manifest.sceneCoverage : {}),
                 precomputedTiles: loadedTileKeys.size,
@@ -1595,6 +1726,22 @@
         const missingTiles = parts.reduce((sum, scene) => sum + Number(scene.coverage && scene.coverage.missingTiles || 0), 0);
         const requestedTiles = parts.reduce((sum, scene) => sum + Number(scene.coverage && scene.coverage.requestedTiles || 0), 0);
         const precomputedTiles = parts.reduce((sum, scene) => sum + Number(scene.coverage && scene.coverage.precomputedTiles || 0), 0);
+        const terrainErrors = parts.map(scene => Number(scene.uncertaintyModel && scene.uncertaintyModel.terrain &&
+            scene.uncertaintyModel.terrain.relativeVerticalErrorM)).filter(Number.isFinite);
+        // Cross-region routes may combine legacy and v3 releases. A shared
+        // final comparison must use the most conservative DEM error among all
+        // contributing regions instead of silently inheriting the first one.
+        const mergedTerrainErrorM = terrainErrors.length ? Math.max(...terrainErrors) : 2;
+        const uncertaintyModel = {
+            version: parts.length > 1 ? 'merged-scene-uncertainty-v1' :
+                (parts[0].uncertaintyModel && parts[0].uncertaintyModel.version || 'legacy-scene-no-explicit-uncertainty'),
+            terrain: {
+                relativeVerticalErrorM: mergedTerrainErrorM,
+                confidenceLevel: parts.every(scene => Number(scene.uncertaintyModel && scene.uncertaintyModel.terrain &&
+                    scene.uncertaintyModel.terrain.confidenceLevel) === 0.90) ? 0.90 : null
+            },
+            sourceModels: [...new Set(parts.map(scene => scene.uncertaintyModel && scene.uncertaintyModel.version || 'legacy'))]
+        };
         return {
             ...parts[0], origin, buildings: mergedBuildings, tunnels: [...tunnels.values()], terrainSamples: mergedTerrain,
             terrainProfiles,
@@ -1607,7 +1754,8 @@
             },
             diagnostics: { totalBuildings, relevantBuildings: buildings.size },
             sceneRegions: regions, precisionReady: complete, partial: !complete && coveredSegments > 0, source: regions.map(region => region.source).filter(Boolean).join(' + ') || 'GitHub precomputed scene tiles',
-            sceneCoverage: { regions: regions.map(region => region.region).filter(Boolean), partial: !complete, coveredSegments, segmentCount: segmentCoverage.length }
+            sceneCoverage: { regions: regions.map(region => region.region).filter(Boolean), partial: !complete, coveredSegments, segmentCount: segmentCoverage.length },
+            uncertaintyModel
         };
     }
 
@@ -1829,6 +1977,9 @@
         if (tunnel) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'tunnel', buildingBlocked: false, terrainBlocked: false, tunnel: true };
 
         let buildingBlocked = false;
+        let buildingUncertain = false;
+        let buildingClearanceMarginM = null;
+        let buildingGroundRelativeErrorM = null;
         if (segmentCoverage.buildings && segmentCoverage.buildingGround !== false) {
             const buildings = scene.buildings || [];
             const candidateIndices = rayBuildingCandidateIndices(point, direction, scene.buildingGrid, MAX_SHADOW_RAY_DISTANCE_METERS);
@@ -1846,28 +1997,76 @@
                 // first sample or an implicit zero for fetched buildings.
                 const roadZ = finite(roadElevation) ? Number(roadElevation) : Number(building.ground);
                 const lineZ = roadZ + Math.tan(Number(sunPosition.altitude) * RAD) * hitDistance;
-                if (Number(building.ground) + Number(building.height || 0) >= lineZ - 1.5) {
+                const heightLower = finite(building.heightLower) ? Number(building.heightLower) : Number(building.height || 0);
+                const heightUpper = finite(building.heightUpper) ? Number(building.heightUpper) : Number(building.height || 0);
+                const minHeightLower = finite(building.minHeightLower) ? Number(building.minHeightLower) : Number(building.minHeight || 0);
+                const minHeightUpper = finite(building.minHeightUpper) ? Number(building.minHeightUpper) : Number(building.minHeight || 0);
+                const lowerMargin = Number(building.ground) + heightLower - lineZ;
+                const upperMargin = Number(building.ground) + heightUpper - lineZ;
+                const sceneTerrainError = Number(scene.uncertaintyModel && scene.uncertaintyModel.terrain &&
+                    scene.uncertaintyModel.terrain.relativeVerticalErrorM);
+                const groundRelativeErrorM = finite(building.groundVerticalErrorM)
+                    ? Math.max(0, Number(building.groundVerticalErrorM))
+                    : (Number.isFinite(sceneTerrainError) ? Math.max(0, sceneTerrainError) : 0);
+                buildingGroundRelativeErrorM = buildingGroundRelativeErrorM === null
+                    ? groundRelativeErrorM : Math.max(buildingGroundRelativeErrorM, groundRelativeErrorM);
+                // `groundRelativeErrorM` represents uncertainty in the DEM
+                // height difference between road and building ground. Apply it
+                // once (not once per endpoint) to avoid double-counting the
+                // same relative-error specification.
+                const robustLowerMargin = lowerMargin - groundRelativeErrorM;
+                const possibleUpperMargin = upperMargin + groundRelativeErrorM;
+                const robustBottom = Number(building.ground) + minHeightUpper + groundRelativeErrorM;
+                const possibleBottom = Number(building.ground) + minHeightLower - groundRelativeErrorM;
+                const rayAboveRobustBottom = lineZ >= robustBottom - 1.5;
+                const rayAbovePossibleBottom = lineZ >= possibleBottom - 1.5;
+                buildingClearanceMarginM = buildingClearanceMarginM === null
+                    ? robustLowerMargin : Math.max(buildingClearanceMarginM, robustLowerMargin);
+                // A robust block must survive both the lower-height envelope
+                // and the relative DEM ground-height error.
+                if (rayAboveRobustBottom && robustLowerMargin >= 1.5) {
                     buildingBlocked = true;
                     break;
                 }
+                // The ray intersects the plausible height envelope, so neither
+                // clear nor shaded may be claimed from this building.
+                if (rayAbovePossibleBottom && possibleUpperMargin >= -1.5) buildingUncertain = true;
             }
         }
 
         let terrainBlocked = false;
+        let terrainUncertain = false;
+        let terrainClearanceMarginM = null;
         const profile = segmentCoverage.terrain ? getNearestProfile(point, Number(sunPosition.azimuth), segmentIndex, scene) : null;
         if (profile && finite(roadElevation)) {
-            terrainBlocked = isTerrainRayOccluded(Number(roadElevation), Number(sunPosition.altitude), profile.distances, profile.elevations, 2);
+            const terrainError = Number(scene.uncertaintyModel && scene.uncertaintyModel.terrain &&
+                scene.uncertaintyModel.terrain.relativeVerticalErrorM);
+            const terrainDecision = classifyTerrainRayOcclusion(
+                Number(roadElevation), Number(sunPosition.altitude), profile.distances, profile.elevations,
+                Number.isFinite(terrainError) ? terrainError : 2
+            );
+            terrainBlocked = terrainDecision.blocked;
+            terrainUncertain = terrainDecision.uncertain;
+            terrainClearanceMarginM = terrainDecision.maxClearanceM;
         }
-        if (buildingBlocked && terrainBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'building+terrain', buildingBlocked, terrainBlocked, tunnel: false };
-        if (buildingBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'building', buildingBlocked, terrainBlocked, tunnel: false };
-        if (terrainBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'terrain', buildingBlocked, terrainBlocked, tunnel: false };
+        const uncertainty = {
+            buildingUncertain, terrainUncertain,
+            buildingClearanceMarginM, buildingGroundRelativeErrorM, terrainClearanceMarginM,
+            model: scene.uncertaintyModel && scene.uncertaintyModel.version || 'legacy'
+        };
+        if (buildingBlocked && terrainBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'building+terrain', buildingBlocked, terrainBlocked, tunnel: false, uncertainty };
+        if (buildingBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'building', buildingBlocked, terrainBlocked, tunnel: false, uncertainty };
+        if (terrainBlocked) return { shadeScore: 1, occlusionRatio: 1, shadeState: 'confirmed-shade', source: 'terrain', buildingBlocked, terrainBlocked, tunnel: false, uncertainty };
+        if (buildingUncertain || terrainUncertain) {
+            return { shadeScore: null, occlusionRatio: null, shadeState: 'uncertain', source: 'scene-uncertain', buildingBlocked, terrainBlocked, tunnel: false, uncertainty };
+        }
         if (segmentCoverage.buildingGround === false && !terrainBlocked) {
-            return { shadeScore: null, occlusionRatio: null, shadeState: 'unknown', source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false };
+            return { shadeScore: null, occlusionRatio: null, shadeState: 'unknown', source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false, uncertainty };
         }
         if (segmentCoverage.buildings || segmentCoverage.terrain || segmentCoverage.tunnels) {
-            return { shadeScore: 0, occlusionRatio: 0, shadeState: 'confirmed-clear', source: 'scene-clear', buildingBlocked, terrainBlocked, tunnel: false };
+            return { shadeScore: 0, occlusionRatio: 0, shadeState: 'confirmed-clear', source: 'scene-clear', buildingBlocked, terrainBlocked, tunnel: false, uncertainty };
         }
-        return { shadeScore: null, occlusionRatio: null, shadeState: 'unknown', source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false };
+        return { shadeScore: null, occlusionRatio: null, shadeState: 'unknown', source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false, uncertainty };
     }
 
     return {
@@ -1876,6 +2075,8 @@
         pointInPolygon,
         intersectRayWithPolygon,
         isTerrainRayOccluded,
+        classifyTerrainRayOcclusion,
+        parseHeightModel,
         calculateDistanceMeters,
         routeBbox,
         bboxMetrics,

@@ -1566,6 +1566,31 @@ document.addEventListener('DOMContentLoaded', () => {
         stopVehicleMarkerAnimation();
     }
 
+    function calculateLiveGlareRisk(lat, lng, heading, at = new Date()) {
+        const analyzed = selectedRouteObj && selectedRouteObj.analyzed;
+        const coordinates = analyzed && analyzed.coordinates;
+        let segment = null;
+        if (Array.isArray(coordinates) && coordinates.length > 1 && Array.isArray(analyzed.segments)) {
+            const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, coordinates);
+            const index = Math.max(0, Math.min(analyzed.segments.length - 1, Number(snap.segmentIndex) || 0));
+            segment = analyzed.segments[index] || null;
+        }
+        const atmosphereOptions = segment && segment.atmosphereOptions || {};
+        const sunPos = SunCalc.getPosition(at, lat, lng, atmosphereOptions);
+        const irradiance = window.SolarPhysics && typeof window.SolarPhysics.birdClearSky === 'function'
+            ? window.SolarPhysics.birdClearSky(sunPos, at, atmosphereOptions)
+            : null;
+        const passTimeMs = segment && segment.passTime instanceof Date
+            ? segment.passTime.getTime() : new Date(segment && segment.passTime).getTime();
+        // A scene occlusion computed for the expected pass time remains useful
+        // for ordinary ETA drift. After a large delay, do not silently reuse a
+        // shadow cast for a materially different solar angle.
+        const occlusionFresh = Number.isFinite(passTimeMs) && Math.abs(at.getTime() - passTimeMs) <= 15 * 60 * 1000;
+        const occlusionRatio = occlusionFresh && Number.isFinite(Number(segment && segment.occlusionRatio))
+            ? Number(segment.occlusionRatio) : null;
+        return ShadowRouter.calculateSegmentGlare(heading, sunPos, irradiance, occlusionRatio);
+    }
+
     function restartWebGpsWatchAfterInterruption() {
         if (!isLiveNavActive || !navigator.geolocation || typeof window.__solarlessProcessNavigationPosition !== 'function') return false;
         const now = Date.now();
@@ -1626,7 +1651,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     coords: {
                         latitude: Number(last.lat), longitude: Number(last.lng),
                         accuracy: Number(last.accuracy), speed: Number.isFinite(Number(last.speed)) ? Number(last.speed) : null,
-                        heading: Number.isFinite(Number(last.heading)) ? Number(last.heading) : null
+                        heading: Number.isFinite(Number(last.heading)) ? Number(last.heading) : null,
+                        accuracyConfidenceLevel: Number(last.accuracyConfidenceLevel),
+                        accuracySource: String(last.accuracySource || 'android-location-horizontal-68')
                     },
                     timestamp: Number(last.timestamp)
                 }, `native-resume-${last.provider || 'location'}`);
@@ -1781,7 +1808,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         latitude: Number(event.lat), longitude: Number(event.lng),
                         accuracy: Number(event.accuracy),
                         speed: Number.isFinite(Number(event.speed)) ? Number(event.speed) : null,
-                        heading: Number.isFinite(Number(event.heading)) ? Number(event.heading) : null
+                        heading: Number.isFinite(Number(event.heading)) ? Number(event.heading) : null,
+                        accuracyConfidenceLevel: Number(event.accuracyConfidenceLevel),
+                        accuracySource: String(event.accuracySource || 'android-location-horizontal-68')
                     },
                     timestamp: Number(event.timestamp) || Date.now()
                 };
@@ -1947,6 +1976,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function getGpsAccuracyMetadata(coords, source = 'web') {
+        const explicitConfidence = Number(coords && coords.accuracyConfidenceLevel);
+        const explicitSource = String(coords && coords.accuracySource || '').trim();
+        const nativeSource = String(source || '').startsWith('native-');
+        return {
+            confidenceLevel: Number.isFinite(explicitConfidence) && explicitConfidence > 0 && explicitConfidence < 1
+                ? explicitConfidence : (nativeSource ? 0.68 : 0.95),
+            accuracySource: explicitSource || (nativeSource
+                ? 'android-location-horizontal-68'
+                : 'w3c-geolocation-horizontal-95')
+        };
+    }
+
     function applyGpsFix(pos, source = 'web') {
         const coords = pos && pos.coords;
         const lat = Number(coords && coords.latitude);
@@ -1958,7 +2000,12 @@ document.addEventListener('DOMContentLoaded', () => {
             hasValidGpsHeading = true;
         }
         const timestamp = Number(pos && pos.timestamp) > 0 ? Number(pos.timestamp) : Date.now();
-        currentStart = { lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null, timestamp };
+        const accuracyMetadata = getGpsAccuracyMetadata(coords, source);
+        currentStart = {
+            lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null, timestamp,
+            accuracyConfidenceLevel: accuracyMetadata.confidenceLevel,
+            accuracySource: accuracyMetadata.accuracySource
+        };
         gpsLastFixSource = source || 'web';
         gpsLastFixAt = timestamp;
         gpsPermissionState = gpsPermissionState === 'fine-granted' ? 'fine-granted' : 'coarse-granted';
@@ -2196,7 +2243,30 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedRouteObj.analyzed.segments.length === 0) return;
         const progressFloor = navigationRouteProgress.routeId === routeIdentity
             ? navigationRouteProgress.segmentIndex : 0;
-        const segIdx = Math.max(progressFloor, Math.max(0, Math.min(selectedRouteObj.analyzed.segments.length - 1, snap.segmentIndex || 0)));
+        const snappedSegmentIndex = Math.max(0, Math.min(
+            selectedRouteObj.analyzed.segments.length - 1,
+            Number.isFinite(Number(snap.segmentIndex)) ? Math.floor(Number(snap.segmentIndex)) : 0
+        ));
+        const segIdx = Math.max(progressFloor, snappedSegmentIndex);
+        // An unsnapped/noisy fix can geometrically match an older segment.
+        // The monotonic progress floor keeps guidance from moving backwards;
+        // when it does, start at the floor's segment boundary rather than
+        // applying the older segment's interpolation fraction to a new one.
+        const progressWasClamped = segIdx > snappedSegmentIndex;
+        const effectiveLat = progressWasClamped ? Number(coords[segIdx][1]) : Number(snap.lat);
+        const effectiveLng = progressWasClamped ? Number(coords[segIdx][0]) : Number(snap.lng);
+        const effectiveSegmentT = progressWasClamped ? 0 : snap.t;
+        if (!selectedRouteObj._remainingTimeLookup ||
+            selectedRouteObj._remainingTimeLookupCoordinates !== coords ||
+            selectedRouteObj._remainingTimeLookupSteps !== selectedRouteObj.routeSteps ||
+            selectedRouteObj._remainingTimeLookupDuration !== selectedRouteObj.durationSec) {
+            selectedRouteObj._remainingTimeLookup = ShadowRouter.buildStepTimeLookup(
+                coords, selectedRouteObj.routeSteps, selectedRouteObj.durationSec
+            );
+            selectedRouteObj._remainingTimeLookupCoordinates = coords;
+            selectedRouteObj._remainingTimeLookupSteps = selectedRouteObj.routeSteps;
+            selectedRouteObj._remainingTimeLookupDuration = selectedRouteObj.durationSec;
+        }
         const segments = selectedRouteObj.analyzed.segments;
         if (dynamicRemainingRouteId !== routeIdentity) {
             dynamicRemainingPolylineGroup.clearLayers();
@@ -2212,10 +2282,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // current segment; unchanged future layers keep their DOM/SVG path.
         if (dynamicRemainingSegmentIndex === segIdx && dynamicRemainingLayers.size > 0) {
             const currentLayer = dynamicRemainingLayers.get(segIdx);
-            if (currentLayer) currentLayer.setLatLngs([[snap.lat, snap.lng], segments[segIdx].p2]);
-            const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(snap.lat, snap.lng, coords, segIdx);
-            const totalDist = selectedRouteObj.distanceMeters || 1;
-            const remSec = Math.max(30, Math.round((remDistMeters / totalDist) * selectedRouteObj.durationSec));
+            if (currentLayer) currentLayer.setLatLngs([[effectiveLat, effectiveLng], segments[segIdx].p2]);
+            const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(effectiveLat, effectiveLng, coords, segIdx);
+            const remSec = Math.max(30, Math.round(ShadowRouter.calculateRemainingRouteDuration(
+                coords, selectedRouteObj.routeSteps, selectedRouteObj.durationSec, segIdx, effectiveSegmentT,
+                selectedRouteObj._remainingTimeLookup
+            )));
             updateRemainingSummary(remSec, remDistMeters);
             return;
         }
@@ -2230,15 +2302,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 dynamicRemainingLayers.set(i, layer);
             }
             if (i < segIdx) layer.setLatLngs([]);
-            else if (i === segIdx) layer.setLatLngs([[snap.lat, snap.lng], seg.p2]);
+            else if (i === segIdx) layer.setLatLngs([[effectiveLat, effectiveLng], seg.p2]);
             else layer.setLatLngs([seg.p1, seg.p2]);
         }
         dynamicRemainingSegmentIndex = segIdx;
 
         // 3. Dynamic remaining distance and ETA calculation
-        const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(snap.lat, snap.lng, coords, segIdx);
-        const totalDist = selectedRouteObj.distanceMeters || 1;
-        const remSec = Math.max(30, Math.round((remDistMeters / totalDist) * selectedRouteObj.durationSec));
+        const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(effectiveLat, effectiveLng, coords, segIdx);
+        const remSec = Math.max(30, Math.round(ShadowRouter.calculateRemainingRouteDuration(
+            coords, selectedRouteObj.routeSteps, selectedRouteObj.durationSec, segIdx, effectiveSegmentT,
+            selectedRouteObj._remainingTimeLookup
+        )));
         updateRemainingSummary(remSec, remDistMeters);
     }
 
@@ -2579,6 +2653,24 @@ document.addEventListener('DOMContentLoaded', () => {
         // Avoid the ambiguous single-letter "m", which is normally read as
         // metres in a driving HUD. Korean uses its full minute unit as well.
         if (durationEl) durationEl.innerText = `${Math.max(1, Math.round(seconds / 60))}${isKo ? '분' : ' min'}`;
+        const etaUncertainty = window.RouteState && typeof RouteState.estimateGpsEtaUncertainty === 'function'
+            ? RouteState.estimateGpsEtaUncertainty(currentStart && currentStart.accuracy, remainingMeters, seconds, {
+                confidenceLevel: currentStart && currentStart.accuracyConfidenceLevel,
+                accuracySource: currentStart && currentStart.accuracySource
+            })
+            : { seconds: null };
+        if (durationEl && Number.isFinite(Number(etaUncertainty.seconds))) {
+            const uncertaintySeconds = Math.max(1, Math.round(Number(etaUncertainty.seconds)));
+            const confidencePct = Number.isFinite(Number(etaUncertainty.confidenceLevel))
+                ? `${Math.round(Number(etaUncertainty.confidenceLevel) * 100)}% ` : '';
+            durationEl.dataset.gpsEtaUncertaintySec = String(uncertaintySeconds);
+            durationEl.title = isKo
+                ? `GPS 위치 정확도에 따른 ETA 영향 약 ±${uncertaintySeconds}초(${confidencePct}위치 반경만 반영; 교통 오차 제외)`
+                : `Approx. ±${uncertaintySeconds}s ETA effect from the ${confidencePct}GPS position radius only; traffic error excluded`;
+        } else if (durationEl) {
+            delete durationEl.dataset.gpsEtaUncertaintySec;
+            durationEl.title = '';
+        }
         if (destinationEl) {
             destinationEl.innerText = destinationName || (isKo ? '목적지' : 'Destination');
             destinationEl.title = destinationName || '';
@@ -2649,6 +2741,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     lat: Number(lastGpsPosition.lat),
                     lng: Number(lastGpsPosition.lng),
                     accuracy: currentStart && currentStart.accuracy,
+                    accuracyConfidenceLevel: currentStart && currentStart.accuracyConfidenceLevel,
+                    accuracySource: currentStart && currentStart.accuracySource,
                     timestamp: lastGpsTimestamp || Date.now()
                 };
             }
@@ -2936,7 +3030,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const mode = route && (route.analysisMode || analyzed.analysisMode);
             if (['scene', 'hybrid-scene'].includes(mode)) {
                 const confirmed = Math.round(Math.max(0, Math.min(1, Number(analyzed.confirmedShadeRatio) || 0)) * 100);
-                return isKo ? `확인된 그늘 ${confirmed}%` : `Confirmed shade ${confirmed}%`;
+                const uncertain = Math.round(Math.max(0, Math.min(1, Number(analyzed.uncertainOcclusionDistanceRatio) || 0)) * 100);
+                const uncertaintyText = uncertain > 0
+                    ? (isKo ? ` · 차광 불확실 ${uncertain}%` : ` · Occlusion uncertain ${uncertain}%`)
+                    : '';
+                return (isKo ? `확인된 그늘 ${confirmed}%` : `Confirmed shade ${confirmed}%`) + uncertaintyText;
             }
             const estimated = Math.round(Math.max(0, Math.min(1, Number(analyzed.estimatedShadeRatio ?? analyzed.avgShadeCoverage) || 0)) * 100);
             return isKo ? `추정 그늘 가능성 ${estimated}%` : `Estimated shade potential ${estimated}%`;
@@ -2954,7 +3052,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (fstTraffic) {
             fstTraffic.classList.remove('hidden');
             if (routeData.timeOfDayAdjustment > 1.3) {
-                fstTraffic.innerText = isKo ? "시간대 보정 🟡" : "Time-adjusted 🟡";
+                fstTraffic.innerText = isKo ? "OSRM 기본 예상" : "OSRM profile ETA";
                 fstTraffic.className = "traffic-chip mod";
             } else {
                 fstTraffic.innerText = isKo ? "기본 보정 🟢" : "Baseline 🟢";
@@ -4049,8 +4147,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             updateVehicleMarkerPosition(lat, lng, heading);
-            const sunPos = SunCalc.getPosition(new Date(), lat, lng);
-            const glareRisk = ShadowRouter.calculateSegmentGlare(currentHeading, sunPos);
+            const glareRisk = calculateLiveGlareRisk(lat, lng, currentHeading);
             const nextManeuver = findNextManeuver(lat, lng);
             updateTurnBannerText(nextManeuver, glareRisk);
             if (nextManeuver) TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar);
@@ -4161,8 +4258,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Marker rendering owns the throttled camera pan. Keeping a
                 // second animated setView here queues pans on every GPS fix.
 
-                const sunPos = SunCalc.getPosition(new Date(), lat, lng);
-                const glareRisk = ShadowRouter.calculateSegmentGlare(currentHeading, sunPos);
+                const glareRisk = calculateLiveGlareRisk(lat, lng, currentHeading);
 
                 // GPS turn-by-turn: find next maneuver and update banner + voice
                 const nextManeuver = findNextManeuver(lat, lng);

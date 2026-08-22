@@ -30,6 +30,8 @@ data/source/
 data/work/
 data/generated/
 data/release/
+.scene-v3-local/
+.gradle-local/
 logs/
 
 # OS / Editor Files

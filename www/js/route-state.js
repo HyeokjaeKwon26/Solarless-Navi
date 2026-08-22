@@ -253,6 +253,39 @@
         return { accepted: true, reason: 'RELIABLE_FIX', distanceMeters: distance, impliedSpeedKmh };
     }
 
+    function estimateGpsEtaUncertainty(accuracyMeters, remainingMeters, remainingSeconds, options = {}) {
+        const accuracy = Number(accuracyMeters);
+        const distance = Number(remainingMeters);
+        const duration = Number(remainingSeconds);
+        if (![accuracy, distance, duration].every(Number.isFinite) || accuracy <= 0 || distance <= 0 || duration <= 0) {
+            return { seconds: null, confidenceLevel: null, scope: 'unavailable' };
+        }
+        const reportedConfidence = Number(options && options.confidenceLevel);
+        const confidenceLevel = Number.isFinite(reportedConfidence) && reportedConfidence > 0 && reportedConfidence < 1
+            ? reportedConfidence : null;
+        const accuracySource = String(options && options.accuracySource || 'unspecified');
+        // Propagate the provider-reported horizontal accuracy radius through
+        // the current route-average speed. Web Geolocation defines a 95%
+        // radius, while Android Location.getAccuracy() uses a 68th-percentile
+        // radius; callers must provide that metadata rather than this helper
+        // silently labelling every provider as W3C 95%.
+        //
+        // This is GPS-position uncertainty only. It deliberately excludes
+        // traffic and OSRM speed-profile error and is not a full ETA CI.
+        const routeAverageMetersPerSecond = distance / duration;
+        return {
+            // Do not cap the computed effect at the remaining duration. If the
+            // radius exceeds remaining distance, that is useful evidence that
+            // the fix cannot constrain arrival time to the nominal trip time.
+            seconds: accuracy / routeAverageMetersPerSecond,
+            confidenceLevel,
+            scope: 'gps-position-only',
+            accuracyMeters: accuracy,
+            accuracySource,
+            routeAverageMetersPerSecond
+        };
+    }
+
     return {
         createRouteRequestKey,
         isRouteRequestKeyCurrent,
@@ -266,6 +299,7 @@
         shouldRefreshRoadRules,
         acquireInitialPosition,
         shouldRestartRouteForGpsFix,
-        evaluateNavigationFix
+        evaluateNavigationFix,
+        estimateGpsEtaUncertainty
     };
 });

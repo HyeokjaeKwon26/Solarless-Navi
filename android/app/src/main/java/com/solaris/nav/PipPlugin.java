@@ -49,6 +49,10 @@ public class PipPlugin extends Plugin {
                 data.put("lat", intent.getDoubleExtra("lat", Double.NaN));
                 data.put("lng", intent.getDoubleExtra("lng", Double.NaN));
                 data.put("accuracy", intent.getFloatExtra("accuracy", -1f));
+                data.put("accuracyConfidenceLevel", intent.getFloatExtra("accuracyConfidenceLevel",
+                    LocationForegroundService.HORIZONTAL_ACCURACY_CONFIDENCE_LEVEL));
+                data.put("accuracySource", intent.getStringExtra("accuracySource") == null
+                    ? LocationForegroundService.HORIZONTAL_ACCURACY_SOURCE : intent.getStringExtra("accuracySource"));
                 data.put("timestamp", intent.getLongExtra("timestamp", 0L));
                 data.put("source", intent.getStringExtra("source"));
                 if (intent.hasExtra("speed")) data.put("speed", intent.getFloatExtra("speed", -1f));
@@ -136,6 +140,8 @@ public class PipPlugin extends Plugin {
                 result.put("available", false);
             }
             result.put("accuracy", prefs.getFloat("accuracy", -1f));
+            result.put("accuracyConfidenceLevel", LocationForegroundService.HORIZONTAL_ACCURACY_CONFIDENCE_LEVEL);
+            result.put("accuracySource", LocationForegroundService.HORIZONTAL_ACCURACY_SOURCE);
             result.put("provider", prefs.getString("provider", "native"));
             if (prefs.contains("speed")) result.put("speed", prefs.getFloat("speed", -1f));
             if (prefs.contains("bearing")) result.put("heading", prefs.getFloat("bearing", -1f));

@@ -1,5 +1,5 @@
 /**
- * Solar Analysis Web Worker — Background thread for 4D spatio-temporal UV/glare route computation.
+ * Solar Analysis Web Worker — background thread for 4D direct-solar/glare route computation.
  * Contains inlined SunCalc getPosition + shadow-router physics to avoid blocking the UI thread.
  */
 'use strict';
@@ -7,7 +7,7 @@
 // The scene module is shared with the main thread.  If a WebView blocks
 // worker imports, the worker still completes with the documented heuristic
 // fallback instead of failing route analysis.
-try { importScripts('scene-shadow.js'); } catch (e) { /* optional scene data */ }
+try { importScripts('nrel-spa.js', 'solar-physics.js', 'scene-shadow.js'); } catch (e) { /* optional physics/scene data */ }
 
 /* ===== Inlined SunCalc getPosition (NOAA/AA+ Astronomical Algorithms) ===== */
 const PI = Math.PI, sin = Math.sin, cos = Math.cos, tan = Math.tan,
@@ -33,7 +33,10 @@ function sunCoords(d) {
     return { dec: declination(L, 0), ra: rightAscension(L, 0) };
 }
 
-function getSunPosition(dateMs, lat, lng) {
+function getSunPosition(dateMs, lat, lng, options = {}) {
+    if (self.SolarPhysics && typeof self.SolarPhysics.spaPosition === 'function') {
+        return self.SolarPhysics.spaPosition(new Date(dateMs), lat, lng, options);
+    }
     var lw = rad * -lng, phi = rad * lat, d = toDays(dateMs),
         c = sunCoords(d), H = siderealTime(d, lw) - c.ra;
     var azRad = azimuthFn(H, phi, c.dec);
@@ -64,30 +67,19 @@ function calculateBearing(lat1, lon1, lat2, lon2) {
 
 function calculateSolarUvIntensity(altitudeDeg) {
     if (!Number.isFinite(altitudeDeg)) return 0;
-    const apparentAltitude = altitudeDeg + 0.833;
-    const horizonDiffuseBaseline = sin(0.833 * rad);
-    if (apparentAltitude > 0) {
-        const directFactor = sin(apparentAltitude * rad);
-        return Math.min(1.0, directFactor + horizonDiffuseBaseline * (1.0 - directFactor));
-    } else if (altitudeDeg >= -6.0) {
-        const twilightSpan = 6.0 - 0.833;
-        const twilightFraction = Math.max(0, (altitudeDeg + 6.0) / twilightSpan);
-        return horizonDiffuseBaseline * Math.pow(twilightFraction, 2.0);
-    }
-    return 0;
+    return altitudeDeg > 0 ? Math.max(0, Math.min(1, sin(altitudeDeg * rad))) : 0;
 }
 
-function calculateSegmentGlare(segmentHeading, sunPos) {
+function calculateSegmentGlare(segmentHeading, sunPos, irradiance = null, occlusionRatio = 0) {
     if (!sunPos || !isFinite(sunPos.altitude) || !isFinite(sunPos.azimuth)) return 0;
     if (!isFinite(segmentHeading)) return 0;
-    if (sunPos.altitude <= -0.833) return 0;
-    if (sunPos.altitude > 45) return 0.04;
-    const sunElevationDeg = Math.max(0, sunPos.altitude + 0.833);
-    let angleDiff = Math.abs(((segmentHeading - sunPos.azimuth) % 360 + 540) % 360 - 180);
-    if (angleDiff <= 45 && sunElevationDeg < 25) {
-        return Math.min(1.0, (1 - angleDiff / 45) * (1 - sunElevationDeg / 25));
+    if (self.SolarPhysics && typeof self.SolarPhysics.disabilityGlare === 'function') {
+        return self.SolarPhysics.disabilityGlare(segmentHeading, sunPos,
+            irradiance || { dni: 1000 * calculateSolarUvIntensity(sunPos.altitude) }, occlusionRatio).normalizedPotential;
     }
-    return 0;
+    if (sunPos.altitude <= 0) return 0;
+    const angleDiff = Math.abs(((segmentHeading - sunPos.azimuth) % 360 + 540) % 360 - 180);
+    return angleDiff < 90 ? Math.max(0, Math.cos(angleDiff * rad) * Math.cos(sunPos.altitude * rad)) : 0;
 }
 
 function calculateDirectSolarExposure(sunIntensity, occlusionRatio = null) {
@@ -97,6 +89,27 @@ function calculateDirectSolarExposure(sunIntensity, occlusionRatio = null) {
         ? Math.max(0, Math.min(1, Number(occlusionRatio)))
         : 0;
     return Math.max(0, Math.min(1, intensity)) * (1 - occlusion);
+}
+
+function segmentAtmosphereOptions(p1, p2, scene) {
+    const options = { ...(scene && scene.atmosphere || {}) };
+    if (!scene || !scene.origin || !self.SceneShadow ||
+        typeof self.SceneShadow.projectPoint !== 'function' ||
+        typeof self.SceneShadow.findNearestTerrainSample !== 'function') return options;
+    const midpoint = self.SceneShadow.projectPoint(
+        (Number(p1[0]) + Number(p2[0])) / 2,
+        (Number(p1[1]) + Number(p2[1])) / 2,
+        scene.origin
+    );
+    const nearest = self.SceneShadow.findNearestTerrainSample(
+        midpoint, scene.terrainSamples, 500, scene.terrainGrid
+    );
+    const elevation = nearest && nearest.sample && Number(nearest.sample.elevation);
+    if (Number.isFinite(elevation)) {
+        options.elevationMeters = elevation;
+        if (!options.source) options.source = 'bird-standard-atmosphere+scene-dem-elevation';
+    }
+    return options;
 }
 
 function estimateSegmentShade(p1, p2, sunPos) {
@@ -151,9 +164,17 @@ self.onmessage = function (e) {
         timeLookup[n - 1] = durationSec;
     }
 
+    // Do not mix metres and seconds in a single weighted mean. Zero-duration
+    // geometry fragments have zero time weight whenever route timing exists;
+    // distance is the fallback only when the whole route has no timing data.
+    const hasRouteTiming = Number(timeLookup[n - 1]) > Number(timeLookup[0]);
+
     const segments = [];
-    let totalGlareWeighted = 0, totalShadeWeighted = 0, totalSolarExposureWeighted = 0, totalPathMeters = 0;
+    let totalGlareWeighted = 0, totalGlareWeight = 0, totalShadeWeighted = 0, totalSolarExposureWeighted = 0, totalPathMeters = 0;
+    let totalDirectSolarEnergyWhM2 = 0, clearSkyDirectEnergyWhM2 = 0, diffuseSkyEnergyWhM2 = 0, totalTimeSeconds = 0;
+    let sunlitTimeSeconds = 0, sunlitDistanceMeters = 0, confirmedShadeTimeSeconds = 0, confirmedSceneTimeSeconds = 0;
     let confirmedShadeDistance = 0, confirmedSceneDistance = 0;
+    let uncertainSceneDistance = 0, uncertainSceneTimeSeconds = 0;
     let estimatedShadeWeighted = 0, estimatedDistance = 0;
 
     for (let i = 0; i < n - 1; i++) {
@@ -168,10 +189,15 @@ self.onmessage = function (e) {
         const elapsedSec = Math.min(segMidTime, durationSec || 0);
         const passTimeMs = startTimestamp + elapsedSec * 1000;
 
-        const segSunPos = getSunPosition(passTimeMs, p1[0], p1[1]);
-        const sunIntensity = calculateSolarUvIntensity(segSunPos.altitude);
+        const atmosphereOptions = segmentAtmosphereOptions(p1, p2, scene);
+        const segSunPos = getSunPosition(passTimeMs, p1[0], p1[1], atmosphereOptions);
+        const clearSkyIrradiance = self.SolarPhysics && typeof self.SolarPhysics.birdClearSky === 'function'
+            ? self.SolarPhysics.birdClearSky(segSunPos, new Date(passTimeMs), atmosphereOptions)
+            : { dni: 1000 * calculateSolarUvIntensity(segSunPos.altitude), dhi: 0, ghi: 1000 * calculateSolarUvIntensity(segSunPos.altitude), directHorizontal: 1000 * calculateSolarUvIntensity(segSunPos.altitude), model: 'GEOMETRIC_FALLBACK', atmosphereSource: 'none' };
+        const sunIntensity = self.SolarPhysics && typeof self.SolarPhysics.normalizedDirectExposure === 'function'
+            ? self.SolarPhysics.normalizedDirectExposure(clearSkyIrradiance, 0)
+            : calculateSolarUvIntensity(segSunPos.altitude);
         const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
-        const glareRisk = calculateSegmentGlare(heading, segSunPos);
         const sceneResult = useScene && self.SceneShadow
             ? self.SceneShadow.getSegmentOcclusion(p1, p2, segSunPos, scene, i)
             : null;
@@ -182,8 +208,18 @@ self.onmessage = function (e) {
         const confirmedOcclusion = sceneResult && Number.isFinite(sceneResult.occlusionRatio)
             ? Math.max(0, Math.min(1, Number(sceneResult.occlusionRatio)))
             : null;
-        const directSolarExposure = calculateDirectSolarExposure(sunIntensity, confirmedOcclusion);
-        const shadeScore = confirmedOcclusion === null ? estimatedShadePotential : confirmedOcclusion;
+        const glareRisk = calculateSegmentGlare(heading, segSunPos, clearSkyIrradiance, confirmedOcclusion);
+        const directSolarExposure = self.SolarPhysics && typeof self.SolarPhysics.normalizedDirectExposure === 'function'
+            ? self.SolarPhysics.normalizedDirectExposure(clearSkyIrradiance, confirmedOcclusion)
+            : calculateDirectSolarExposure(sunIntensity, confirmedOcclusion);
+        const shadeScore = shadeState === 'uncertain'
+            ? 0
+            : (confirmedOcclusion === null ? estimatedShadePotential : confirmedOcclusion);
+        const segmentDurationSec = Math.max(0, Number(timeLookup[i + 1]) - Number(timeLookup[i]));
+        const directHorizontalWm2 = Math.max(0, Number(clearSkyIrradiance.directHorizontal) || 0);
+        const directEnergyWhM2 = directHorizontalWm2 * (1 - (confirmedOcclusion === null ? 0 : confirmedOcclusion)) * segmentDurationSec / 3600;
+        const clearDirectEnergyWhM2 = directHorizontalWm2 * segmentDurationSec / 3600;
+        const diffuseEnergyWhM2 = Math.max(0, Number(clearSkyIrradiance.dhi) || 0) * segmentDurationSec / 3600;
 
         segments.push({
             p1,
@@ -197,19 +233,43 @@ self.onmessage = function (e) {
             estimatedShadePotential,
             occlusionRatio: confirmedOcclusion,
             sunIntensity,
+            clearSkyIrradiance,
+            atmosphereOptions,
             directSolarExposure,
+            directHorizontalIrradianceWm2: directHorizontalWm2,
+            directSolarEnergyWhM2: directEnergyWhM2,
+            clearSkyDirectEnergyWhM2: clearDirectEnergyWhM2,
+            diffuseSkyEnergyWhM2: diffuseEnergyWhM2,
+            segmentDurationSec,
             shadeSource: sceneResult && sceneResult.source ? sceneResult.source : 'heuristic',
             sceneOcclusion: sceneResult || null,
             solarExposureScore: directSolarExposure,
             uvScore: directSolarExposure
         });
 
-        totalGlareWeighted += glareRisk * segDist;
+        const glareWeight = hasRouteTiming ? segmentDurationSec : segDist;
+        totalGlareWeighted += glareRisk * glareWeight;
+        totalGlareWeight += glareWeight;
         totalShadeWeighted += shadeScore * segDist;
         totalSolarExposureWeighted += directSolarExposure * segDist;
+        totalTimeSeconds += segmentDurationSec;
+        totalDirectSolarEnergyWhM2 += directEnergyWhM2;
+        clearSkyDirectEnergyWhM2 += clearDirectEnergyWhM2;
+        diffuseSkyEnergyWhM2 += diffuseEnergyWhM2;
+        if (directHorizontalWm2 > 0 && confirmedOcclusion !== 1) {
+            sunlitTimeSeconds += segmentDurationSec;
+            sunlitDistanceMeters += segDist;
+        }
         if (shadeState === 'confirmed-shade' || shadeState === 'confirmed-clear') {
             confirmedSceneDistance += segDist;
-            if (shadeState === 'confirmed-shade') confirmedShadeDistance += segDist;
+            confirmedSceneTimeSeconds += segmentDurationSec;
+            if (shadeState === 'confirmed-shade') {
+                confirmedShadeDistance += segDist;
+                confirmedShadeTimeSeconds += segmentDurationSec;
+            }
+        } else if (shadeState === 'uncertain') {
+            uncertainSceneDistance += segDist;
+            uncertainSceneTimeSeconds += segmentDurationSec;
         } else if (shadeState === 'estimated-shade') {
             estimatedDistance += segDist;
             estimatedShadeWeighted += estimatedShadePotential * segDist;
@@ -217,10 +277,15 @@ self.onmessage = function (e) {
     }
 
     const denom = totalPathMeters || 1;
-    const avgGlare = totalGlareWeighted / denom;
+    const avgGlare = totalGlareWeighted / (totalGlareWeight || denom);
     const avgShade = totalShadeWeighted / denom;
-    const totalSolarExposure = totalSolarExposureWeighted / denom;
+    const totalSolarExposure = totalTimeSeconds > 0
+        ? Math.max(0, Math.min(1.5, (totalDirectSolarEnergyWhM2 * 3600 / totalTimeSeconds) / 1000))
+        : totalSolarExposureWeighted / denom;
     const confirmedShadeRatio = confirmedSceneDistance > 0 ? confirmedShadeDistance / confirmedSceneDistance : 0;
+    const confirmedShadeTimeRatio = totalTimeSeconds > 0 ? confirmedShadeTimeSeconds / totalTimeSeconds : 0;
+    const confirmedShadeWithinSceneTimeRatio = confirmedSceneTimeSeconds > 0
+        ? confirmedShadeTimeSeconds / confirmedSceneTimeSeconds : 0;
     const estimatedShadeRatio = estimatedDistance > 0 ? estimatedShadeWeighted / estimatedDistance : 0;
 
     self.postMessage({
@@ -230,14 +295,27 @@ self.onmessage = function (e) {
             avgGlareRisk: isFinite(avgGlare) ? avgGlare : 0,
             avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
             totalDirectSolarExposureUnits: isFinite(totalSolarExposure) ? totalSolarExposure : 0,
+            directSolarEnergyWhM2: isFinite(totalDirectSolarEnergyWhM2) ? totalDirectSolarEnergyWhM2 : 0,
+            clearSkyDirectEnergyWhM2: isFinite(clearSkyDirectEnergyWhM2) ? clearSkyDirectEnergyWhM2 : 0,
+            diffuseSkyEnergyWhM2: isFinite(diffuseSkyEnergyWhM2) ? diffuseSkyEnergyWhM2 : 0,
+            sunlitDistanceRatio: totalPathMeters > 0 ? sunlitDistanceMeters / totalPathMeters : 0,
+            sunlitTimeRatio: totalTimeSeconds > 0 ? sunlitTimeSeconds / totalTimeSeconds : 0,
             totalUvExposureUnits: isFinite(totalSolarExposure) ? totalSolarExposure : 0,
             confirmedShadeRatio: isFinite(confirmedShadeRatio) ? confirmedShadeRatio : 0,
+            confirmedShadeTimeRatio: isFinite(confirmedShadeTimeRatio) ? confirmedShadeTimeRatio : 0,
+            confirmedShadeWithinSceneTimeRatio: isFinite(confirmedShadeWithinSceneTimeRatio) ? confirmedShadeWithinSceneTimeRatio : 0,
+            confirmedSceneTimeRatio: totalTimeSeconds > 0 ? confirmedSceneTimeSeconds / totalTimeSeconds : 0,
+            uncertainOcclusionDistanceRatio: totalPathMeters > 0 ? uncertainSceneDistance / totalPathMeters : 0,
+            uncertainOcclusionTimeRatio: totalTimeSeconds > 0 ? uncertainSceneTimeSeconds / totalTimeSeconds : 0,
             estimatedShadeRatio: isFinite(estimatedShadeRatio) ? estimatedShadeRatio : 0,
             confirmedSceneDistanceMeters: confirmedSceneDistance,
             sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
             segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
             sceneSource: useScene && scene.source ? scene.source : 'heuristic fallback',
-            analysisMode
+            analysisMode,
+            solarModelVersion: self.SolarPhysics ? self.SolarPhysics.MODEL_VERSION : 'legacy-fallback',
+            solarReferences: self.SolarPhysics ? self.SolarPhysics.REFERENCES : null,
+            atmosphereSource: segments[0] && segments[0].clearSkyIrradiance ? segments[0].clearSkyIrradiance.atmosphereSource : 'none'
         }
     });
 };

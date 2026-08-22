@@ -112,14 +112,18 @@ function normalizeSourceTiles(sourceManifest) {
         return sourceManifest.tiles.map(tile => ({
             key: String(tile.key),
             file: safeRelativeFile(tile.path || tile.file),
-            sourcePack: tile.pack || null
+            sourcePack: tile.pack || null,
+            sourceBytes: Number.isSafeInteger(Number(tile.bytes)) ? Number(tile.bytes) : null,
+            sourceSha256: tile.sha256 || null
         })).sort((a, b) => compareKeys(a.key, b.key));
     }
     if (sourceManifest.tiles && typeof sourceManifest.tiles === 'object') {
         return Object.entries(sourceManifest.tiles).map(([key, tile]) => ({
             key,
             file: safeRelativeFile(tile.file || tile.path),
-            sourcePack: tile.pack || null
+            sourcePack: tile.pack || null,
+            sourceBytes: Number.isSafeInteger(Number(tile.bytes)) ? Number(tile.bytes) : null,
+            sourceSha256: tile.sha256 || null
         })).sort((a, b) => compareKeys(a.key, b.key));
     }
     throw new Error('source manifest has no tiles');
@@ -235,7 +239,10 @@ function planCacheIdentity(sourceManifest, tiles) {
         schemaVersion: sourceManifest.schemaVersion || null,
         dataVersion: sourceManifest.dataVersion || null,
         releaseTag: sourceManifest.releaseTag || null,
-        tiles: tiles.map(tile => [tile.key, tile.file, tile.sourcePack]),
+        // Loose v3 tiles can be regenerated in place while keeping the same
+        // key/file. Include declared content metadata so an old compression
+        // cache cannot silently survive a changed tile payload.
+        tiles: tiles.map(tile => [tile.key, tile.file, tile.sourcePack, tile.sourceBytes, tile.sourceSha256]),
         packs
     };
     return sha256Buffer(Buffer.from(JSON.stringify(source)));
@@ -505,8 +512,13 @@ function assertTileCoverage(sourceTiles, outputTiles) {
 
 function createManifest(sourceManifest, config, packs, tiles) {
     const packValues = Object.values(packs);
+    const declaredSchemaVersion = Number(sourceManifest.schemaVersion);
+    const declaredSchema = Number(sourceManifest.schema);
+    const effectiveSchema = Number.isFinite(declaredSchemaVersion)
+        ? declaredSchemaVersion
+        : (Number.isFinite(declaredSchema) ? declaredSchema : 2);
     const manifest = {
-        schema: 2,
+        schema: effectiveSchema >= 3 ? 3 : 2,
         region: config.regionLabel,
         releaseTag: config.releaseTag,
         baseUrl: config.releaseBaseUrl,
@@ -524,10 +536,11 @@ function createManifest(sourceManifest, config, packs, tiles) {
         demDataset: sourceManifest.demDataset || null,
         demDatasetVersion: sourceManifest.demDatasetVersion || null,
         generatedAt: sourceManifest.generatedAt,
-        schemaVersion: sourceManifest.schemaVersion || sourceManifest.schema || null,
+        schemaVersion: effectiveSchema,
         packWidth: config.adaptive ? null : config.legacyPackWidth,
         maxPackBytes: config.maxPackBytes,
         profileResolution: sourceManifest.profileResolution || null,
+        uncertaintyModel: sourceManifest.uncertaintyModel || null,
         dataVersion: sourceManifest.dataVersion || null,
         bounds: sourceManifest.bounds || null,
         packaging: {

@@ -33,6 +33,10 @@ function sourceManifest(tiles) {
         tilePaddingMeters: 4500,
         terrainSpacingM: 100,
         grid: { latOrigin: 40, lngOrigin: -75, cosLat: 0.75 },
+        uncertaintyModel: {
+            version: 'scene-uncertainty-v1',
+            terrain: { relativeVerticalErrorM: 10, confidenceLevel: 0.90 }
+        },
         tiles
     };
 }
@@ -79,6 +83,12 @@ test('adaptive packaging preserves every 5 km tile exactly once and obeys hard l
     const manifest = packageSceneTiles(config);
 
     assert.equal(manifest.tileSizeM, 5000);
+    assert.equal(manifest.schema, 3);
+    assert.equal(manifest.schemaVersion, 3);
+    assert.deepEqual(manifest.uncertaintyModel, {
+        version: 'scene-uncertainty-v1',
+        terrain: { relativeVerticalErrorM: 10, confidenceLevel: 0.90 }
+    });
     assert.equal(manifest.packaging.mode, 'adaptive-compressed-size-v2');
     assert.equal(manifest.stats.tileCount, sourceTiles.length);
     assert.ok(manifest.stats.releaseAssetCount <= config.maxAssets);
@@ -107,6 +117,19 @@ test('adaptive pack names and checksums are deterministic', async t => {
     const secondHashes = Object.fromEntries(Object.values(second.packs).map(pack => [pack.path, sha256(path.join(config.outputDir, pack.path))]));
     assert.deepEqual(secondHashes, firstHashes);
     assert.equal(second.manifestHash, first.manifestHash);
+});
+
+test('compression-plan identity changes when a loose tile payload changes', async () => {
+    const { normalizeSourceTiles, planCacheIdentity } = await packageModule();
+    const beforeManifest = sourceManifest([
+        { key: '0:0', path: '0_0.json', bytes: 100 }
+    ]);
+    const afterManifest = sourceManifest([
+        { key: '0:0', path: '0_0.json', bytes: 101 }
+    ]);
+    const before = planCacheIdentity(beforeManifest, normalizeSourceTiles(beforeManifest));
+    const after = planCacheIdentity(afterManifest, normalizeSourceTiles(afterManifest));
+    assert.notEqual(after, before);
 });
 
 test('schema-2 v1 release ZIP assets can be repacked without extracted tile files', async t => {

@@ -1,7 +1,8 @@
 /**
  * SunCalc - Astronomical Sun position & Solar Sunrise/Sunset Times Calculator
  * Calculates real-time sun position (azimuth & elevation) and exact astronomical sunrise, solar noon, and sunset times
- * based on date, latitude, and longitude using NOAA / AA+ Astronomical algorithms.
+ * The public API delegates position calculations to NREL SPA when the bundled
+ * SolarPhysics module is available, with the legacy algorithm as a fallback.
  */
 (function (root, factory) {
     if (typeof define === 'function' && define.amd) {
@@ -66,7 +67,20 @@
     function solarTransitJ(ds, M, L) { return J2000 + ds + 0.0053 * sin(M) - 0.0069 * sin(2 * L); }
     function hourAngle(h, phi, dec) { return acos((sin(h) - sin(phi) * sin(dec)) / (cos(phi) * cos(dec))); }
 
-    SunCalc.getPosition = function (date, lat, lng) {
+    SunCalc.getPosition = function (date, lat, lng, options) {
+        var physicsRoot = typeof globalThis !== 'undefined' ? globalThis : null;
+        if (physicsRoot && physicsRoot.SolarPhysics && typeof physicsRoot.SolarPhysics.spaPosition === 'function') {
+            var spa = physicsRoot.SolarPhysics.spaPosition(date, lat, lng, options || {});
+            return {
+                azimuth: spa.azimuth,
+                altitude: spa.altitude,
+                azimuthRad: spa.azimuth * rad,
+                altitudeRad: spa.altitude * rad,
+                geometricAltitude: spa.geometricAltitude,
+                zenith: spa.zenith,
+                model: spa.model
+            };
+        }
         var lw = rad * -lng,
             phi = rad * lat,
             d = toDays(date),
@@ -87,6 +101,7 @@
             altitudeRad: altRad
         };
     };
+    SunCalc.__solarPhysicsDelegate = true;
 
     /* Exact Astronomical Sunrise, Solar Noon, and Sunset Times Calculation (Day Base 12:00 Normalized) */
     SunCalc.getTimes = function (date, lat, lng) {

@@ -1,6 +1,6 @@
 /**
  * ShadowRouter - solar exposure/glare possibility estimation over real OSRM routes.
- * Travel times use an explicit time-of-day adjustment, not live traffic data.
+ * Travel times use OSRM profile durations, not live traffic data.
  * Shade and exposure values are experimental; optional scene data adds bounded
  * building, tunnel, and terrain sun-ray checks, with a heuristic fallback.
  */
@@ -76,13 +76,12 @@ window.ShadowRouter = (function () {
     }
 
     function getTimeOfDayAdjustment(dateObj) {
-        const hour = dateObj.getHours();
-        const mins = dateObj.getMinutes();
-        const timeVal = hour + mins / 60;
-
-        if (timeVal >= 7.5 && timeVal <= 9.5) return 1.35;
-        if (timeVal >= 17.5 && timeVal <= 19.5) return 1.42;
-        if (timeVal > 9.5 && timeVal < 17.5) return 1.15;
+        // OSRM profile duration is the only defensible initial ETA without
+        // live or locally calibrated traffic observations. The former fixed
+        // 1.15/1.35/1.42 multipliers had no regional or empirical basis.
+        // During guidance app.js continues to update remaining time from
+        // measured route progress and speed.
+        void dateObj;
         return 1.0;
     }
 
@@ -247,63 +246,65 @@ window.ShadowRouter = (function () {
         return total;
     }
 
+    function calculateRemainingRouteDuration(coordinates, steps, totalDurationSec, segmentIndex, segmentT = 0, existingLookup = null) {
+        const duration = Number(totalDurationSec);
+        const validCoordinates = Array.isArray(coordinates) && coordinates.length >= 2 && coordinates.every(point =>
+            Array.isArray(point) && point.length >= 2 && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1]))
+        );
+        if (!validCoordinates || !Number.isFinite(duration) || duration <= 0) return 0;
+        const rawIndex = Number(segmentIndex);
+        const index = Number.isFinite(rawIndex)
+            ? Math.max(0, Math.min(coordinates.length - 2, Math.floor(rawIndex)))
+            : 0;
+        const rawFraction = Number(segmentT);
+        const fraction = Number.isFinite(rawFraction) ? Math.max(0, Math.min(1, rawFraction)) : 0;
+        // Navigation updates can arrive several times per second. Reuse the
+        // route's immutable lookup when supplied instead of rebuilding the
+        // O(coordinates x steps) mapping on every accepted GPS fix.
+        const lookup = existingLookup && existingLookup.length === coordinates.length
+            ? existingLookup
+            : buildStepTimeLookup(coordinates, steps, duration);
+        const startElapsed = Number(lookup[index]);
+        const endElapsed = Number(lookup[index + 1]);
+        if (!Number.isFinite(startElapsed) || !Number.isFinite(endElapsed)) return 0;
+        const elapsed = startElapsed + (endElapsed - startElapsed) * fraction;
+        return Math.max(0, Math.min(duration, duration - elapsed));
+    }
+
     function snapHeadingToRoad(carLat, carLng, rawHeading, coordinates) {
         return snapPositionAndHeadingToRoad(carLat, carLng, rawHeading, coordinates).heading;
     }
 
     /**
-     * Physics-based Solar UV Radiation Intensity Function (0.0 to 1.0)
-     * Incorporates solar elevation angle, atmospheric refraction at horizon (-0.833° / -50 arcminutes),
-     * and upper-atmosphere Rayleigh diffuse scattering during Civil Twilight (-6.0° <= altitude < -0.833°).
-     * 
-     * - Altitude >= -0.833°: Direct sun disk visible above apparent horizon + diffuse sky baseline
-     * - -6.0° <= Altitude < -0.833° (Civil Twilight): Sun center geometrically below horizon, but high-altitude
-     *   stratospheric ozone and tropospheric Rayleigh scattering send diffuse UV-A/UV-B to the ground.
-     * - Altitude < -6.0° (True Astronomical Night): Earth curvature completely blocks solar rays. UV = 0.
+     * Compatibility 0..1 clear-sky direct-horizontal factor.
+     *
+     * This is deliberately not called a UV dose: real UV requires spectral
+     * irradiance and erythemal weighting. Route analysis below uses the NREL
+     * Bird model in SolarPhysics and integrates W/m² over time. This helper is
+     * retained for older UI/cache fields and for a no-SolarPhysics fallback.
      */
     function calculateSolarUvIntensity(altitudeDeg) {
         if (!Number.isFinite(altitudeDeg)) return 0;
-        const apparentAltitude = altitudeDeg + 0.833; // Astronomical horizon refraction correction (-50 arcmin)
-        const horizonDiffuseBaseline = Math.sin(0.833 * Math.PI / 180); // ~0.0145 (Diffuse UV skylight at sunrise/sunset horizon)
-
-        if (apparentAltitude > 0) {
-            // Direct sun disk visible above horizon + sky diffuse baseline
-            const directFactor = Math.sin(apparentAltitude * Math.PI / 180);
-            return Math.min(1.0, directFactor + horizonDiffuseBaseline * (1.0 - directFactor));
-        } else if (altitudeDeg >= -6.0) {
-            // Civil Twilight zone (-6.0° <= altitude <= -0.833°):
-            // Stratospheric Rayleigh diffuse scattering with quadratic decay down to -6.0°
-            const twilightSpan = 6.0 - 0.833; // 5.167 degrees
-            const twilightFraction = Math.max(0, (altitudeDeg + 6.0) / twilightSpan);
-            return horizonDiffuseBaseline * Math.pow(twilightFraction, 2.0);
-        } else {
-            // True Astronomical Night (altitude < -6.0°): Complete darkness, UV = 0
-            return 0;
-        }
+        return altitudeDeg > 0 ? Math.max(0, Math.min(1, Math.sin(altitudeDeg * Math.PI / 180))) : 0;
     }
 
-    function calculateSegmentGlare(segmentHeading, sunPosition) {
+    function calculateSegmentGlare(segmentHeading, sunPosition, irradiance = null, occlusionRatio = 0) {
         // Guard: invalid inputs
         if (!sunPosition || !isFinite(sunPosition.altitude) || !isFinite(sunPosition.azimuth)) return 0;
         if (!isFinite(segmentHeading)) return 0;
-        // Direct windshield glare requires sun disc to be physically visible above horizon (altitude > -0.833°)
-        if (sunPosition.altitude <= -0.833) return 0;
-        // Sun high above roofline (>45 deg) rarely causes direct front windshield glare
-        if (sunPosition.altitude > 45) return 0.04;
-
-        const sunAzimuthDeg = sunPosition.azimuth;
-        const sunElevationDeg = Math.max(0, sunPosition.altitude + 0.833);
-
-        // 360° periodic minimum angular difference
-        let angleDiff = Math.abs(((segmentHeading - sunAzimuthDeg) % 360 + 540) % 360 - 180);
-
-        if (angleDiff <= 45 && sunElevationDeg < 25) {
-            const headingFactor = 1 - (angleDiff / 45);
-            const elevationFactor = 1 - (sunElevationDeg / 25);
-            return Math.min(1.0, headingFactor * elevationFactor);
+        if (window.SolarPhysics && typeof window.SolarPhysics.disabilityGlare === 'function') {
+            const clearSky = irradiance || {
+                // Geometry-only fallback for callers such as the live HUD.
+                // Route analysis always supplies Bird DNI.
+                dni: 1000 * calculateSolarUvIntensity(Number(sunPosition.altitude))
+            };
+            return window.SolarPhysics.disabilityGlare(
+                segmentHeading, sunPosition, clearSky, occlusionRatio
+            ).normalizedPotential;
         }
-
-        return 0;
+        if (sunPosition.altitude <= 0) return 0;
+        const angleDiff = Math.abs(((segmentHeading - sunPosition.azimuth) % 360 + 540) % 360 - 180);
+        return angleDiff < 90 ? Math.max(0, Math.cos(angleDiff * Math.PI / 180) * Math.cos(sunPosition.altitude * Math.PI / 180)) : 0;
     }
 
     function calculateDirectSolarExposure(sunIntensity, occlusionRatio = null) {
@@ -350,7 +351,10 @@ window.ShadowRouter = (function () {
      * Falls back to uniform speed assumption if steps data is unavailable.
      */
     function buildStepTimeLookup(coordinates, steps, totalDurationSec) {
+        if (!Array.isArray(coordinates) || coordinates.length === 0) return new Float64Array(0);
         const n = coordinates.length;
+        const normalizedDuration = Number.isFinite(Number(totalDurationSec))
+            ? Math.max(0, Number(totalDurationSec)) : 0;
         const timeLookup = new Float64Array(n); // timeLookup[i] = elapsed seconds at coordinate i
         // Build cumulative route distance once. Step geometry is often a
         // simplified/different point list, so coordinate indexes must not be
@@ -368,13 +372,13 @@ window.ShadowRouter = (function () {
         const uniformFallback = () => {
             for (let i = 0; i < n; i++) {
                 timeLookup[i] = routeTotalDistance > 0
-                    ? (routeDistances[i] / routeTotalDistance) * Math.max(0, totalDurationSec)
+                    ? (routeDistances[i] / routeTotalDistance) * normalizedDuration
                     : 0;
             }
             return timeLookup;
         };
 
-        if (!steps || steps.length === 0 || totalDurationSec <= 0 || routeTotalDistance <= 0) {
+        if (!steps || steps.length === 0 || normalizedDuration <= 0 || routeTotalDistance <= 0) {
             return uniformFallback();
         }
 
@@ -408,7 +412,7 @@ window.ShadowRouter = (function () {
 
         // Scale the OSRM base step durations to the time-of-day-adjusted
         // route duration, then interpolate by cumulative physical distance.
-        const durationScale = totalDurationSec / stepDurationTotal;
+        const durationScale = normalizedDuration / stepDurationTotal;
         const distanceScale = stepDistanceTotal / routeTotalDistance;
         let intervalStartDistance = 0;
         let intervalStartTime = 0;
@@ -433,12 +437,12 @@ window.ShadowRouter = (function () {
             const fraction = intervalEndDistance > intervalStartDistance
                 ? (targetDistance - intervalStartDistance) / (intervalEndDistance - intervalStartDistance)
                 : 0;
-            timeLookup[i] = Math.max(0, Math.min(totalDurationSec,
+            timeLookup[i] = Math.max(0, Math.min(normalizedDuration,
                 intervalStartTime + fraction * interval.duration * durationScale));
         }
         // Rounding and sparse step geometry must never leave the route ending
         // before the adjusted duration.
-        timeLookup[n - 1] = totalDurationSec;
+        timeLookup[n - 1] = normalizedDuration;
         return timeLookup;
     }
 
@@ -458,13 +462,45 @@ window.ShadowRouter = (function () {
         return sceneAnalysisMode(scene) !== 'heuristic';
     }
 
+    function segmentAtmosphereOptions(p1, p2, scene) {
+        const options = { ...(scene && scene.atmosphere || {}) };
+        if (!scene || !scene.origin || !window.SceneShadow ||
+            typeof window.SceneShadow.projectPoint !== 'function' ||
+            typeof window.SceneShadow.findNearestTerrainSample !== 'function') return options;
+        const midpoint = window.SceneShadow.projectPoint(
+            (Number(p1[0]) + Number(p2[0])) / 2,
+            (Number(p1[1]) + Number(p2[1])) / 2,
+            scene.origin
+        );
+        const nearest = window.SceneShadow.findNearestTerrainSample(
+            midpoint, scene.terrainSamples, 500, scene.terrainGrid
+        );
+        const elevation = nearest && nearest.sample && Number(nearest.sample.elevation);
+        if (Number.isFinite(elevation)) {
+            options.elevationMeters = elevation;
+            if (!options.source) options.source = 'bird-standard-atmosphere+scene-dem-elevation';
+        }
+        return options;
+    }
+
     function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null, scene = null) {
         const segments = [];
         let totalGlareWeighted = 0;
+        let totalGlareWeight = 0;
         let totalShadeWeighted = 0;
         let totalSolarExposureWeighted = 0;
+        let totalDirectSolarEnergyWhM2 = 0;
+        let clearSkyDirectEnergyWhM2 = 0;
+        let diffuseSkyEnergyWhM2 = 0;
+        let totalTimeSeconds = 0;
+        let sunlitTimeSeconds = 0;
+        let sunlitDistanceMeters = 0;
         let confirmedShadeDistance = 0;
+        let confirmedShadeTimeSeconds = 0;
         let confirmedSceneDistance = 0;
+        let confirmedSceneTimeSeconds = 0;
+        let uncertainSceneDistance = 0;
+        let uncertainSceneTimeSeconds = 0;
         let estimatedShadeWeighted = 0;
         let estimatedDistance = 0;
         let totalPathMeters = 0;
@@ -478,9 +514,15 @@ window.ShadowRouter = (function () {
             totalPathMeters += d;
         }
 
-        // 4D time estimate: use OSRM step durations, then apply only the
-        // documented time-of-day adjustment (not live traffic telemetry).
+        // 4D time estimate: scale OSRM step durations to the OSRM route
+        // duration. This is profile routing time, not live traffic telemetry.
         const timeLookup = buildStepTimeLookup(coordinates, steps, durationSec);
+        // Keep aggregate glare weights in one unit. If OSRM provides any route
+        // time, zero-duration geometry fragments contribute zero elapsed time;
+        // mixing their metre length with seconds can push the mean outside the
+        // physical 0..1 risk range. Distance is used only when the entire route
+        // has no usable timing information.
+        const hasRouteTiming = Number(timeLookup[timeLookup.length - 1]) > Number(timeLookup[0]);
         const startTimestamp = dateObj.getTime();
 
         for (let i = 0; i < coordinates.length - 1; i++) {
@@ -497,11 +539,16 @@ window.ShadowRouter = (function () {
             const segmentPassTime = new Date(startTimestamp + elapsedSec * 1000);
 
             // Dynamic solar azimuth & altitude for this specific geographic point at that exact future arrival time
-            const segSunPos = SunCalc.getPosition(segmentPassTime, p1[0], p1[1]);
-            const sunIntensity = calculateSolarUvIntensity(segSunPos.altitude);
+            const atmosphereOptions = segmentAtmosphereOptions(p1, p2, scene);
+            const segSunPos = SunCalc.getPosition(segmentPassTime, p1[0], p1[1], atmosphereOptions);
+            const clearSkyIrradiance = window.SolarPhysics && typeof window.SolarPhysics.birdClearSky === 'function'
+                ? window.SolarPhysics.birdClearSky(segSunPos, segmentPassTime, atmosphereOptions)
+                : { dni: 1000 * calculateSolarUvIntensity(segSunPos.altitude), dhi: 0, ghi: 1000 * calculateSolarUvIntensity(segSunPos.altitude), directHorizontal: 1000 * calculateSolarUvIntensity(segSunPos.altitude), model: 'GEOMETRIC_FALLBACK', atmosphereSource: 'none' };
+            const sunIntensity = window.SolarPhysics && typeof window.SolarPhysics.normalizedDirectExposure === 'function'
+                ? window.SolarPhysics.normalizedDirectExposure(clearSkyIrradiance, 0)
+                : calculateSolarUvIntensity(segSunPos.altitude);
 
             const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
-            const glareRisk = calculateSegmentGlare(heading, segSunPos);
             const sceneResult = useScene && window.SceneShadow
                 ? window.SceneShadow.getSegmentOcclusion(p1, p2, segSunPos, scene, i)
                 : null;
@@ -512,11 +559,25 @@ window.ShadowRouter = (function () {
             const confirmedOcclusion = sceneResult && Number.isFinite(sceneResult.occlusionRatio)
                 ? Math.max(0, Math.min(1, Number(sceneResult.occlusionRatio)))
                 : null;
+            const glareRisk = calculateSegmentGlare(heading, segSunPos, clearSkyIrradiance, confirmedOcclusion);
             // Solar exposure is independent of windshield glare. Confirmed
             // building/terrain/tunnel occlusion removes direct exposure;
             // uncovered/unknown segments conservatively remain exposed.
-            const directSolarExposure = calculateDirectSolarExposure(sunIntensity, confirmedOcclusion);
-            const shadeScore = confirmedOcclusion === null ? estimatedShadePotential : confirmedOcclusion;
+            const directSolarExposure = window.SolarPhysics && typeof window.SolarPhysics.normalizedDirectExposure === 'function'
+                ? window.SolarPhysics.normalizedDirectExposure(clearSkyIrradiance, confirmedOcclusion)
+                : calculateDirectSolarExposure(sunIntensity, confirmedOcclusion);
+            // An uncertainty envelope that crosses the solar ray is not
+            // evidence of shade. Keep direct exposure and the aggregate shade
+            // score conservative; only genuinely uncovered hybrid segments
+            // retain the heuristic estimate.
+            const shadeScore = shadeState === 'uncertain'
+                ? 0
+                : (confirmedOcclusion === null ? estimatedShadePotential : confirmedOcclusion);
+            const segmentDurationSec = Math.max(0, Number(timeLookup[i + 1]) - Number(timeLookup[i]));
+            const directHorizontalWm2 = Math.max(0, Number(clearSkyIrradiance.directHorizontal) || 0);
+            const directEnergyWhM2 = directHorizontalWm2 * (1 - (confirmedOcclusion === null ? 0 : confirmedOcclusion)) * segmentDurationSec / 3600;
+            const clearDirectEnergyWhM2 = directHorizontalWm2 * segmentDurationSec / 3600;
+            const diffuseEnergyWhM2 = Math.max(0, Number(clearSkyIrradiance.dhi) || 0) * segmentDurationSec / 3600;
 
             segments.push({
                 p1: p1,
@@ -530,19 +591,43 @@ window.ShadowRouter = (function () {
                 estimatedShadePotential,
                 occlusionRatio: confirmedOcclusion,
                 sunIntensity,
+                clearSkyIrradiance,
+                atmosphereOptions,
                 directSolarExposure,
+                directHorizontalIrradianceWm2: directHorizontalWm2,
+                directSolarEnergyWhM2: directEnergyWhM2,
+                clearSkyDirectEnergyWhM2: clearDirectEnergyWhM2,
+                diffuseSkyEnergyWhM2: diffuseEnergyWhM2,
+                segmentDurationSec,
                 shadeSource: sceneResult && sceneResult.source ? sceneResult.source : 'heuristic',
                 sceneOcclusion: sceneResult || null,
                 solarExposureScore: directSolarExposure,
                 uvScore: directSolarExposure
             });
 
-            totalGlareWeighted += glareRisk * segDist;
+            const glareWeight = hasRouteTiming ? segmentDurationSec : segDist;
+            totalGlareWeighted += glareRisk * glareWeight;
+            totalGlareWeight += glareWeight;
             totalShadeWeighted += shadeScore * segDist;
             totalSolarExposureWeighted += directSolarExposure * segDist;
+            totalTimeSeconds += segmentDurationSec;
+            totalDirectSolarEnergyWhM2 += directEnergyWhM2;
+            clearSkyDirectEnergyWhM2 += clearDirectEnergyWhM2;
+            diffuseSkyEnergyWhM2 += diffuseEnergyWhM2;
+            if (directHorizontalWm2 > 0 && confirmedOcclusion !== 1) {
+                sunlitTimeSeconds += segmentDurationSec;
+                sunlitDistanceMeters += segDist;
+            }
             if (shadeState === 'confirmed-shade' || shadeState === 'confirmed-clear') {
                 confirmedSceneDistance += segDist;
-                if (shadeState === 'confirmed-shade') confirmedShadeDistance += segDist;
+                confirmedSceneTimeSeconds += segmentDurationSec;
+                if (shadeState === 'confirmed-shade') {
+                    confirmedShadeDistance += segDist;
+                    confirmedShadeTimeSeconds += segmentDurationSec;
+                }
+            } else if (shadeState === 'uncertain') {
+                uncertainSceneDistance += segDist;
+                uncertainSceneTimeSeconds += segmentDurationSec;
             } else if (shadeState === 'estimated-shade') {
                 estimatedDistance += segDist;
                 estimatedShadeWeighted += estimatedShadePotential * segDist;
@@ -550,26 +635,44 @@ window.ShadowRouter = (function () {
         }
 
         const denom = totalPathMeters || 1;
-        const avgGlare = totalGlareWeighted / denom;
+        const avgGlare = totalGlareWeighted / (totalGlareWeight || denom);
         const avgShade = totalShadeWeighted / denom;
-        const totalSolarExposure = totalSolarExposureWeighted / denom;
+        const totalSolarExposure = totalTimeSeconds > 0
+            ? Math.max(0, Math.min(1.5, (totalDirectSolarEnergyWhM2 * 3600 / totalTimeSeconds) / 1000))
+            : totalSolarExposureWeighted / denom;
         const confirmedShadeRatio = confirmedSceneDistance > 0 ? confirmedShadeDistance / confirmedSceneDistance : 0;
+        const confirmedShadeTimeRatio = totalTimeSeconds > 0 ? confirmedShadeTimeSeconds / totalTimeSeconds : 0;
+        const confirmedShadeWithinSceneTimeRatio = confirmedSceneTimeSeconds > 0
+            ? confirmedShadeTimeSeconds / confirmedSceneTimeSeconds : 0;
         const estimatedShadeRatio = estimatedDistance > 0 ? estimatedShadeWeighted / estimatedDistance : 0;
         return {
             segments: segments,
             avgGlareRisk: isFinite(avgGlare) ? avgGlare : 0,
             avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
             totalDirectSolarExposureUnits: isFinite(totalSolarExposure) ? totalSolarExposure : 0,
-            // Compatibility alias for older UI/tests and cached route objects.
+            directSolarEnergyWhM2: isFinite(totalDirectSolarEnergyWhM2) ? totalDirectSolarEnergyWhM2 : 0,
+            clearSkyDirectEnergyWhM2: isFinite(clearSkyDirectEnergyWhM2) ? clearSkyDirectEnergyWhM2 : 0,
+            diffuseSkyEnergyWhM2: isFinite(diffuseSkyEnergyWhM2) ? diffuseSkyEnergyWhM2 : 0,
+            sunlitDistanceRatio: totalPathMeters > 0 ? sunlitDistanceMeters / totalPathMeters : 0,
+            sunlitTimeRatio: totalTimeSeconds > 0 ? sunlitTimeSeconds / totalTimeSeconds : 0,
+            // Deprecated compatibility alias. This value is not a measured UV dose.
             totalUvExposureUnits: isFinite(totalSolarExposure) ? totalSolarExposure : 0,
             confirmedShadeRatio: isFinite(confirmedShadeRatio) ? confirmedShadeRatio : 0,
+            confirmedShadeTimeRatio: isFinite(confirmedShadeTimeRatio) ? confirmedShadeTimeRatio : 0,
+            confirmedShadeWithinSceneTimeRatio: isFinite(confirmedShadeWithinSceneTimeRatio) ? confirmedShadeWithinSceneTimeRatio : 0,
+            confirmedSceneTimeRatio: totalTimeSeconds > 0 ? confirmedSceneTimeSeconds / totalTimeSeconds : 0,
+            uncertainOcclusionDistanceRatio: totalPathMeters > 0 ? uncertainSceneDistance / totalPathMeters : 0,
+            uncertainOcclusionTimeRatio: totalTimeSeconds > 0 ? uncertainSceneTimeSeconds / totalTimeSeconds : 0,
             estimatedShadeRatio: isFinite(estimatedShadeRatio) ? estimatedShadeRatio : 0,
             confirmedSceneDistanceMeters: confirmedSceneDistance,
             coordinates: coordinates,
             sceneCoverage: scene && scene.coverage ? scene.coverage : { buildings: false, terrain: false, tunnels: false },
             segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
             sceneSource: useScene && scene.source ? scene.source : 'heuristic fallback',
-            analysisMode
+            analysisMode,
+            solarModelVersion: window.SolarPhysics ? window.SolarPhysics.MODEL_VERSION : 'legacy-fallback',
+            solarReferences: window.SolarPhysics ? window.SolarPhysics.REFERENCES : null,
+            atmosphereSource: segments[0] && segments[0].clearSkyIrradiance ? segments[0].clearSkyIrradiance.atmosphereSource : 'none'
         };
     }
 
@@ -1000,6 +1103,12 @@ window.ShadowRouter = (function () {
     }
 
     function routeSolarExposure(analyzed) {
+        // Route choice is based on time-integrated incident energy. A mean
+        // irradiance score can make a longer detour look beneficial even when
+        // the occupant receives more total direct solar energy over the trip.
+        if (analyzed && Number.isFinite(Number(analyzed.directSolarEnergyWhM2))) {
+            return Number(analyzed.directSolarEnergyWhM2);
+        }
         if (analyzed && Number.isFinite(Number(analyzed.totalDirectSolarExposureUnits))) {
             return Number(analyzed.totalDirectSolarExposureUnits);
         }
@@ -1060,7 +1169,7 @@ window.ShadowRouter = (function () {
     const MAX_ALTERNATIVE_DETOUR_RATIO = 1.35;
     const MIN_GLARE_IMPROVEMENT = 0.05;
     const MIN_SHADE_IMPROVEMENT = 0.05;
-    const MIN_UV_REDUCTION_PCT = 5;
+    const MIN_SOLAR_EXPOSURE_REDUCTION_PCT = 5;
     const SCENE_ROUTE_CACHE_TTL_MS = 10 * 60 * 1000;
     const SCENE_ROUTE_CACHE_MAX = 24;
     const sceneRouteCache = new Map();
@@ -1094,7 +1203,7 @@ window.ShadowRouter = (function () {
         const candidateAnalyzed = candidate && candidate.analyzed || {};
         const fastestExposure = routeSolarExposure(fastestAnalyzed);
         const candidateExposure = routeSolarExposure(candidateAnalyzed);
-        const uvReductionPct = fastestExposure > 0.00001
+        const solarExposureReductionPct = fastestExposure > 0.00001
             ? ((fastestExposure - candidateExposure) / fastestExposure) * 100
             : 0;
         const tradeoff = {
@@ -1102,8 +1211,10 @@ window.ShadowRouter = (function () {
             extraDurationSec: Number.isFinite(candidateDuration) && Number.isFinite(fastestDuration)
                 ? Math.max(0, candidateDuration - fastestDuration) : Infinity,
             glareImprovement: (Number(fastestAnalyzed.avgGlareRisk) || 0) - (Number(candidateAnalyzed.avgGlareRisk) || 0),
-            uvReductionPct: Math.max(0, uvReductionPct),
-            solarExposureReductionPct: Math.max(0, uvReductionPct),
+            // uvReductionPct is retained only for older UI/state consumers.
+            // The value is broadband direct-solar energy reduction, not UV.
+            uvReductionPct: Math.max(0, solarExposureReductionPct),
+            solarExposureReductionPct: Math.max(0, solarExposureReductionPct),
             shadeImprovement: routeShadeMetric(candidateAnalyzed) - routeShadeMetric(fastestAnalyzed)
         };
         candidate.tradeoff = tradeoff;
@@ -1117,7 +1228,7 @@ window.ShadowRouter = (function () {
 
     function isMeaningfulShadeAlternative(tradeoff) {
         return tradeoff.detourRatio <= MAX_ALTERNATIVE_DETOUR_RATIO &&
-            (tradeoff.uvReductionPct >= MIN_UV_REDUCTION_PCT || tradeoff.shadeImprovement >= MIN_SHADE_IMPROVEMENT);
+            (tradeoff.solarExposureReductionPct >= MIN_SOLAR_EXPOSURE_REDUCTION_PCT || tradeoff.shadeImprovement >= MIN_SHADE_IMPROVEMENT);
     }
 
     function selectRouteRoles(routes) {
@@ -1141,8 +1252,8 @@ window.ShadowRouter = (function () {
         const shadePool = scored.filter(item => item.route.id !== glareFree.id && isMeaningfulShadeAlternative(item.tradeoff));
         const sameGlareShade = scored.find(item => item.route.id === glareFree.id && isMeaningfulShadeAlternative(item.tradeoff));
         const shade = shadePool.length > 0
-            ? stableSortRoutes(shadePool, (a, b) => a.tradeoff.uvReductionPct > b.tradeoff.uvReductionPct ? -1 :
-                (a.tradeoff.uvReductionPct < b.tradeoff.uvReductionPct ? 1 :
+            ? stableSortRoutes(shadePool, (a, b) => a.tradeoff.solarExposureReductionPct > b.tradeoff.solarExposureReductionPct ? -1 :
+                (a.tradeoff.solarExposureReductionPct < b.tradeoff.solarExposureReductionPct ? 1 :
                     routeShadeMetric(b.route.analyzed) - routeShadeMetric(a.route.analyzed))).map(item => item.route)[0]
             : (sameGlareShade ? glareFree : fastest);
         return { fastest, glareFree, shade };
@@ -1150,15 +1261,15 @@ window.ShadowRouter = (function () {
 
     function applyExposureReductions(fastestRoute, glareFreeRoute, shadeRoute, dateObj, start) {
         if (!fastestRoute) return;
-        const baseUvExposure = routeSolarExposure(fastestRoute.analyzed);
+        const baseSolarExposure = routeSolarExposure(fastestRoute.analyzed);
         const sunPos = SunCalc.getPosition(dateObj, start.lat, start.lng);
-        const hasSolarUv = calculateSolarUvIntensity(sunPos.altitude) > 0 || baseUvExposure > 0.0001;
+        const hasDirectSolar = calculateSolarUvIntensity(sunPos.altitude) > 0 || baseSolarExposure > 0.0001;
         fastestRoute.uvReductionPct = 0;
         fastestRoute.solarExposureReductionPct = 0;
-        fastestRoute.isNight = !hasSolarUv;
+        fastestRoute.isNight = !hasDirectSolar;
         [glareFreeRoute, shadeRoute].forEach(route => {
             if (!route) return;
-            if (!hasSolarUv) {
+            if (!hasDirectSolar) {
                 route.uvReductionPct = 0;
                 route.solarExposureReductionPct = 0;
                 route.isNight = true;
@@ -1166,8 +1277,8 @@ window.ShadowRouter = (function () {
                 route.uvReductionPct = 0;
                 route.solarExposureReductionPct = 0;
                 route.isNight = false;
-            } else if (baseUvExposure > 0.00001) {
-                const diffPct = ((baseUvExposure - routeSolarExposure(route.analyzed)) / baseUvExposure) * 100;
+            } else if (baseSolarExposure > 0.00001) {
+                const diffPct = ((baseSolarExposure - routeSolarExposure(route.analyzed)) / baseSolarExposure) * 100;
                 route.uvReductionPct = diffPct >= 1 ? Math.min(99, Math.round(diffPct)) : 0;
                 route.solarExposureReductionPct = route.uvReductionPct;
                 route.isNight = false;
@@ -1269,7 +1380,7 @@ window.ShadowRouter = (function () {
                 .sort((a, b) => a.route.analyzed.avgGlareRisk - b.route.analyzed.avgGlareRisk ||
                     a.tradeoff.extraDurationSec - b.tradeoff.extraDurationSec)
             : alternatives.filter(item => isMeaningfulShadeAlternative(item.tradeoff))
-                .sort((a, b) => b.tradeoff.uvReductionPct - a.tradeoff.uvReductionPct ||
+                .sort((a, b) => b.tradeoff.solarExposureReductionPct - a.tradeoff.solarExposureReductionPct ||
                     routeShadeMetric(b.route.analyzed) - routeShadeMetric(a.route.analyzed));
         if (pool.length) selected = pool[0].route;
         return { selected, baseline, mode, allReady, fallbackReason: roleFallbackReason, views };
@@ -1490,7 +1601,7 @@ window.ShadowRouter = (function () {
             const segments = route && route.analyzed && route.analyzed.segments;
             return Array.isArray(segments) && segments.length > 0 && segments.every(segment =>
                 segment && segment.passTime instanceof Date &&
-                SunCalc.getPosition(segment.passTime, segment.p1[0], segment.p1[1]).altitude <= -6);
+                SunCalc.getPosition(segment.passTime, segment.p1[0], segment.p1[1]).altitude <= 0);
         }
         const refineRoute = async route => {
             if (options.signal && options.signal.aborted) throw createAbortError();
@@ -1540,7 +1651,7 @@ window.ShadowRouter = (function () {
                         });
                     }
                 }
-                if (!scene && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
+                if (!scene && options.disableLiveSceneFallback !== true && window.SceneShadow && typeof window.SceneShadow.fetchSceneForRoute === 'function') {
                     try {
                         scene = await window.SceneShadow.fetchSceneForRoute(precisionCoordinates, sceneOptions);
                     } catch (liveError) {
@@ -1674,8 +1785,6 @@ window.ShadowRouter = (function () {
             ? 'scene'
             : (roleModes.every(mode => mode === 'hybrid-scene') ? 'hybrid-scene'
                 : (roleModes.every(mode => mode === 'heuristic') ? 'heuristic' : 'mixed-by-role'));
-                // True Astronomical Night (altitude < -6.0°): No solar UV radiation
-
         const finalResult = {
             timeOfDayAdjustment: timeOfDayAdjustment,
             analysisMode: finalAnalysisMode,
@@ -1903,9 +2012,11 @@ window.ShadowRouter = (function () {
         snapHeadingToRoad: snapHeadingToRoad,
         snapPositionAndHeadingToRoad: snapPositionAndHeadingToRoad,
         calculateRemainingRouteDistance: calculateRemainingRouteDistance,
+        calculateRemainingRouteDuration: calculateRemainingRouteDuration,
         calculateSegmentGlare: calculateSegmentGlare,
         calculateDirectSolarExposure: calculateDirectSolarExposure,
         estimateSegmentShade: estimateSegmentShade,
+        segmentAtmosphereOptions: segmentAtmosphereOptions,
         calculateSolarUvIntensity: calculateSolarUvIntensity,
         buildStepTimeLookup: buildStepTimeLookup,
         createRouteIdentity: createRouteIdentity,
