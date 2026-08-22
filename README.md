@@ -12,7 +12,7 @@
 
 - **빠른 경로**: OSRM 후보 중 기본 예상시간이 가장 짧은 실제 도로 경로입니다.
 - **눈부심 회피 경로**: 예상 통과시각의 태양 방향·고도, 차량 진행방향, 직접 일사와 차광을 이용해 전방 눈부심을 비교합니다.
-- **그늘 우선 경로**: OSM 건물·터널과 SRTM/DEM 지형 단면이 태양 광선을 차단하는지 2.5D로 계산합니다.
+- **그늘 우선 경로**: OSM 건물·터널과 SRTM/DEM 지형 단면이 태양 광선을 차단하는지 2.5D로 계산하고, 직사광선 노출 예상시간이 가장 짧은 유의미한 대안을 우선합니다.
 - **빠른 초기 결과**: 공통 휴리스틱 결과를 먼저 표시한 뒤, 필요한 장면 타일이 준비되면 같은 분석 등급끼리 다시 비교합니다.
 - **자동차용 안내**: 주소 우선 검색, 자동차 도로에 맞춘 목적지, 음성 회전 안내, 이탈 재탐색, heading-up, 자동 재중앙 정렬과 선택형 PiP를 제공합니다.
 - **부분 실패 보존**: 장면 API나 타일 일부가 실패해도 OSRM 도로 경로는 유지하며, 정밀값과 휴리스틱값을 조용히 섞지 않습니다.
@@ -25,7 +25,7 @@ OSRM 도로 후보
   → 빠른 경로와 목적별 유력 후보 선정
   → 필요한 5 km 장면 타일만 다운로드·로컬 캐시
   → 건물·터널·지형 차광과 구간별 태양 위치를 순차 계산
-  → 같은 분석 등급 안에서 총 직접 일사 에너지와 눈부심 비교
+  → 같은 분석 등급 안에서 직사광선 노출시간·총 직접 일사 에너지·눈부심 비교
 ```
 
 OSRM의 `duration`은 교통 프로필 기반 기본 예상시간이며 실시간 교통정보가 아닙니다. 앱은 근거가 없던 임의의 시간대 배율을 더 이상 적용하지 않습니다.
@@ -79,19 +79,23 @@ $$O_i=\begin{cases}1,&\text{오차 하한에서도 직달광 차단}\cr0,&\text{
 - Usui, [건물 용도별 층고 차이](https://doi.org/10.1177/23998083221116117)
 - Bocher et al., [GeoClimate의 누락 건물높이 추정 논의](https://doi.org/10.5194/gmd-15-7505-2022)
 
-### 5. 총 직접 일사 에너지
+### 5. 직사광선 노출시간과 총 직접 일사 에너지
 
-차광을 적용한 경로의 직접 일사 에너지는 **거리 평균이 아니라 시간 적분값**으로 비교합니다.
+구간의 직접수평일사가 0보다 크고 건물·지형·터널에 의해 확정 차광되지 않았다면 그 구간의 시간을 직사광선 노출 예상시간에 더합니다. 데이터가 없거나 차광 판정이 불확실한 구간은 그늘을 만들어내지 않도록 보수적으로 노출시간에 포함합니다.
+
+$$T_{sun}=\sum_i \mathbf{1}\!\left[I_{dir,i}>0\land O_i\ne1\right]\Delta t_i$$
+
+그늘 우선 경로는 허용 가능한 우회 후보 중 `T_sun`이 가장 짧은 경로를 먼저 선택합니다. 노출시간 차이가 30초 이내이면 구간 표본·시간 매핑의 작은 차이로 보아, **거리 평균이 아닌 시간 적분 직접 일사 에너지**가 더 낮은 경로를 선택합니다. 두 값도 같으면 주행시간이 짧은 경로를 사용합니다. 30초 기준은 의학적 임계값이 아니라 불필요한 우회를 막기 위한 제품상 잡음 방지 기준입니다.
 
 $$H_{dir}=\sum_i I_{dir,i}(1-O_i)\frac{\Delta t_i}{3600}\quad[Wh/m^2]$$
 
-태양이 머리 위에 있어 전방 눈부심이 낮더라도 차광물이 없으면 `H_dir`은 높습니다. 반대로 터널이나 건물·산이 직달광을 막으면 해당 구간의 직접 성분은 0이 됩니다. 산란광은 별도로 적분하지만, 현재 그늘 경로 선정의 핵심 값은 차광 가능한 직접 성분입니다.
+태양이 머리 위에 있어 전방 눈부심이 낮더라도 차광물이 없으면 `T_sun`과 `H_dir`에 모두 반영됩니다. 반대로 터널이나 건물·산이 직달광을 막으면 해당 구간은 노출시간에서 제외되고 직접 에너지 성분도 0이 됩니다. 산란광은 별도로 적분하지만 그늘 경로 선정에는 직접 성분만 사용합니다.
 
 대안 경로 감소율은 같은 분석 등급의 빠른 경로를 기준으로 합니다.
 
 $$R=100\left(1-\frac{H_{candidate}}{H_{fastest}}\right)$$
 
-더 긴 경로의 평균 조사강도가 낮더라도 총 누적 에너지가 더 크면 노출 감소 경로로 선택하지 않습니다.
+노출시간이 유의미하게 짧은 경로가 우선이며, 노출시간이 사실상 같을 때 누적 에너지가 더 큰 우회 경로는 선택하지 않습니다. 최대 우회비율과 최소 개선 기준도 계속 적용하므로 서로 다른 경로를 만들기 위해 열등한 대안을 억지로 추천하지 않습니다.
 
 ### 6. 눈부심
 
@@ -130,11 +134,11 @@ ETA는 OSRM step별 소요시간을 경로 geometry에 대응시켜 남은 구�
 
 ## 미국 전역 시뮬레이션
 
-[미국 단·중·장거리 맑은하늘 경로 시뮬레이션 보고서](docs/US_SOLAR_ROUTE_SIMULATION.md)는 미국 4개 권역에서 12개 OD와 네 출발시각, 총 48개 사례를 재현합니다.
+[미국 단·중·장거리 맑은하늘 경로 시뮬레이션 보고서](docs/US_SOLAR_ROUTE_SIMULATION.md)는 미국 4개 권역에서 12개 OD와 네 출발시각, 총 48개 사례를 재현한 2026-08-21 기준 스냅샷입니다. 이 실험은 이전의 누적 직접 일사 우선 정책으로 생성되었으므로, 아래 감소율은 현재의 직사광선 노출시간 우선 정책 결과로 해석하면 안 됩니다.
 
 - 48/48 사례에서 장면 또는 부분 장면 분석 완료
 - 전체 주행시간 중 평균 모델 확정 차광시간 비율: **6.0%**
-- 현재 OSRM 후보와 제품 우회 기준에서 빠른 경로 대비 선택된 그늘 경로의 추가 직접 일사 감소: **0.0%**
+- 당시 OSRM 후보와 누적 직접 일사 우선 기준에서 선택된 그늘 경로의 추가 직접 일사 감소: **0.0%**
 - 이는 “그늘이 없었다”가 아니라, 제한된 후보 중 총 누적 일사를 더 줄이는 합리적 대안이 없었다는 뜻입니다.
 - 실제 UV 선량·실내온도·연료/배터리 절감으로 변환하지 않았습니다.
 
@@ -220,11 +224,15 @@ SolarLess Navi is an experimental Android-focused navigation app that compares t
 2. **Solar position:** NREL SPA computes zenith and azimuth ([Reda & Andreas](https://doi.org/10.2172/15003974)).
 3. **Clear-sky irradiance:** the Bird model estimates DNI, DHI and GHI under a declared standard atmosphere ([Bird & Hulstrom](https://doi.org/10.2172/6510849)). It does not use live clouds or smoke.
 4. **Occlusion and uncertainty:** a sun ray is tested against 2.5D OSM buildings, tunnels and SRTM terrain profiles. A v3 scene confirms shade only when the obstruction remains under the lower height/elevation bound. `building:levels` uses 3.2 m/storey with a 3.0–4.5 m sensitivity envelope; missing heights use 6 m with a 3–12 m envelope. `min_height` and `building:min_level` preserve the open space below floating building parts. Terrain uses a ±10 m relative vertical-error test derived from the NASADEM/SRTM 90% guidance. DEM elevation also supplies the pressure correction used by SPA/Bird when a nearby sample exists. A marginal result is marked uncertain and receives no shade credit. These envelopes are sensitivity bounds, not statistical confidence intervals. Missing buildings, way-only preprocessing of complex multipolygon relations, trees and finite horizontal resolution remain limitations ([NASADEM guide](https://lpdaac.usgs.gov/documents/592/NASADEM_User_Guide_V1.pdf), [Usui](https://doi.org/10.1177/23998083221116117), [GeoClimate](https://doi.org/10.5194/gmd-15-7505-2022)).
-5. **Energy integration:** route choice uses time-integrated direct horizontal energy,
+5. **Direct-sun duration and energy integration:** a segment contributes to expected direct-sun duration when direct horizontal irradiance is positive and scene data does not confirm occlusion. Missing or uncertain occlusion is conservatively counted as exposed:
+
+$$T_{sun}=\sum_i \mathbf{1}[I_{dir,i}>0\land O_i\ne1]\Delta t_i.$$
+
+The shade-priority route first minimizes `T_sun` among alternatives that pass the detour and minimum-benefit guards. When two routes are within 30 seconds, the app uses time-integrated direct horizontal energy as the tie-breaker,
 
 $$H_{dir}=\sum_i DNI_i\max(0,\cos z_i)(1-O_i)\frac{\Delta t_i}{3600}.$$
 
-A longer route with lower mean irradiance is not considered beneficial when its total integrated energy is higher.
+and then uses driving duration if both exposure measures are tied. The 30-second band is a product noise guard, not a medical threshold. Overhead sun therefore still counts as direct exposure when no building, terrain or tunnel blocks it; glare remains a separate directional metric.
 
 6. **Disability glare:** the direct component follows the CIE/Stiles–Holladay veiling-luminance relation `Lveil = 10 Eeye / θ²` ([CIE 146:2002](https://www.cie.co.at/publications/cie-collection-glare-2002)). The displayed normalized score is not a crash or medical-risk probability.
 
@@ -236,7 +244,7 @@ The model does **not** calculate UV Index or erythemal UV dose. Spectral irradia
 
 ### Reproducible U.S. simulation
 
-The [research-style report](docs/US_SOLAR_ROUTE_SIMULATION.md) evaluates 12 U.S. short/medium/long OD pairs at four local departure times (48 cases). Scene or hybrid-scene analysis completed in every case and found a 6.0% mean confirmed shade-time share over total driving time, but the product selected no alternative with lower total direct energy than the fastest route among the limited OSRM candidates. This negative result is reported as-is; it is not converted into a UV, temperature or energy-saving claim. The public manifests and Release assets use schema v3 uncertainty envelopes.
+The [research-style report](docs/US_SOLAR_ROUTE_SIMULATION.md) is a 2026-08-21 snapshot of 12 U.S. short/medium/long OD pairs at four local departure times (48 cases). It used the previous integrated-energy-first policy, not the current direct-sun-duration-first selector. Scene or hybrid-scene analysis completed in every case and found a 6.0% mean confirmed shade-time share over total driving time, but that historical run selected no alternative with lower total direct energy than the fastest route among the limited OSRM candidates. This negative result is reported as-is; it is not converted into a UV, temperature or energy-saving claim. The public manifests and Release assets use schema v3 uncertainty envelopes.
 
 ### Safety disclaimer
 

@@ -823,6 +823,8 @@ test('solar worker handles heuristic and precision scene messages without scope 
     assert.ok(Math.abs(workerScene.avgShadeCoverage - mainScene.avgShadeCoverage) < 1e-12);
     assert.ok(Math.abs(workerScene.totalUvExposureUnits - mainScene.totalUvExposureUnits) < 1e-12);
     assert.ok(Math.abs(workerScene.totalDirectSolarExposureUnits - mainScene.totalDirectSolarExposureUnits) < 1e-12);
+    assert.equal(workerScene.sunlitTimeSeconds, mainScene.sunlitTimeSeconds);
+    assert.equal(workerScene.totalTimeSeconds, mainScene.totalTimeSeconds);
     assert.ok(Math.abs(workerScene.confirmedShadeRatio - mainScene.confirmedShadeRatio) < 1e-12);
     assert.ok(Math.abs(workerScene.estimatedShadeRatio - mainScene.estimatedShadeRatio) < 1e-12);
 
@@ -1278,6 +1280,64 @@ test('precision shade selection uses direct exposure and confirmed shade, not gl
     assert.equal(roles.shade.id, 'shaded');
     assert.ok(shaded.tradeoff.solarExposureReductionPct > 30);
     assert.ok(shaded.tradeoff.shadeImprovement >= 0.4);
+});
+
+test('shade selection prioritizes less direct-sun time before integrated energy', () => {
+    const fastest = {
+        id: 'fast', durationSec: 600, baseDurationSec: 600, candidateIndex: 0,
+        analyzed: { avgGlareRisk: 0.1, sunlitTimeSeconds: 500, totalTimeSeconds: 600,
+            directSolarEnergyWhM2: 50, avgShadeCoverage: 0.1 }
+    };
+    const lowerEnergyButLongerSun = {
+        id: 'lower-energy', durationSec: 620, baseDurationSec: 620, candidateIndex: 1,
+        analyzed: { avgGlareRisk: 0.1, sunlitTimeSeconds: 460, totalTimeSeconds: 620,
+            directSolarEnergyWhM2: 35, avgShadeCoverage: 0.2 }
+    };
+    const lessSunButMoreEnergy = {
+        id: 'less-sun', durationSec: 630, baseDurationSec: 630, candidateIndex: 2,
+        analyzed: { avgGlareRisk: 0.1, sunlitTimeSeconds: 300, totalTimeSeconds: 630,
+            directSolarEnergyWhM2: 55, avgShadeCoverage: 0.4 }
+    };
+    const roles = ShadowRouter.selectRouteRoles([fastest, lowerEnergyButLongerSun, lessSunButMoreEnergy]);
+    assert.equal(roles.shade.id, 'less-sun');
+    assert.equal(lessSunButMoreEnergy.tradeoff.sunlitTimeReductionSec, 200);
+});
+
+test('shade selection uses integrated energy inside the direct-sun time tie band', () => {
+    const fastest = {
+        id: 'fast', durationSec: 600, baseDurationSec: 600, candidateIndex: 0,
+        analyzed: { avgGlareRisk: 0.1, sunlitTimeSeconds: 300, totalTimeSeconds: 600,
+            directSolarEnergyWhM2: 20, avgShadeCoverage: 0.1 }
+    };
+    const slightlyLessSunButMoreEnergy = {
+        id: 'slightly-less-sun', durationSec: 610, baseDurationSec: 610, candidateIndex: 1,
+        analyzed: { avgGlareRisk: 0.1, sunlitTimeSeconds: 280, totalTimeSeconds: 610,
+            directSolarEnergyWhM2: 21, avgShadeCoverage: 0.2 }
+    };
+    const lowerEnergy = {
+        id: 'lower-energy', durationSec: 620, baseDurationSec: 620, candidateIndex: 2,
+        analyzed: { avgGlareRisk: 0.1, sunlitTimeSeconds: 285, totalTimeSeconds: 620,
+            directSolarEnergyWhM2: 15, avgShadeCoverage: 0.2 }
+    };
+    const roles = ShadowRouter.selectRouteRoles([fastest, slightlyLessSunButMoreEnergy, lowerEnergy]);
+    assert.equal(roles.shade.id, 'lower-energy');
+    assert.ok(ShadowRouter.compareShadeRoutes(slightlyLessSunButMoreEnergy, lowerEnergy) > 0);
+});
+
+test('shade selection rejects a detour when direct-sun and energy changes are noise', () => {
+    const fastest = {
+        id: 'fast', durationSec: 600, baseDurationSec: 600, candidateIndex: 0,
+        analyzed: { avgGlareRisk: 0.1, sunlitTimeSeconds: 300, totalTimeSeconds: 600,
+            directSolarEnergyWhM2: 20, avgShadeCoverage: 0.1 }
+    };
+    const noise = {
+        id: 'noise', durationSec: 630, baseDurationSec: 630, candidateIndex: 1,
+        analyzed: { avgGlareRisk: 0.1, sunlitTimeSeconds: 280, totalTimeSeconds: 630,
+            directSolarEnergyWhM2: 19.5, avgShadeCoverage: 0.2 }
+    };
+    const roles = ShadowRouter.selectRouteRoles([fastest, noise]);
+    assert.equal(roles.shade.id, 'fast');
+    assert.equal(noise.tradeoff.sunlitTimeReductionSec, 20);
 });
 
 test('route solar tradeoff uses integrated energy instead of lower mean irradiance', () => {

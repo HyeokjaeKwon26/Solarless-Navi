@@ -3039,14 +3039,29 @@ document.addEventListener('DOMContentLoaded', () => {
             const estimated = Math.round(Math.max(0, Math.min(1, Number(analyzed.estimatedShadeRatio ?? analyzed.avgShadeCoverage) || 0)) * 100);
             return isKo ? `추정 그늘 가능성 ${estimated}%` : `Estimated shade potential ${estimated}%`;
         };
+        const routeSunlitTimeText = route => {
+            const analyzed = route && route.analyzed || {};
+            const seconds = Number.isFinite(Number(analyzed.sunlitTimeSeconds))
+                ? Math.max(0, Number(analyzed.sunlitTimeSeconds))
+                : Math.max(0, Number(analyzed.sunlitTimeRatio) || 0) * Math.max(0, Number(route && route.durationSec) || 0);
+            const totalSeconds = Number.isFinite(Number(analyzed.totalTimeSeconds)) && Number(analyzed.totalTimeSeconds) > 0
+                ? Number(analyzed.totalTimeSeconds) : Math.max(0, Number(route && route.durationSec) || 0);
+            const timeText = seconds > 0 && seconds < 60
+                ? (isKo ? '1분 미만' : '<1 min')
+                : `${Math.round(seconds / 60)}${isKo ? '분' : ' min'}`;
+            const ratio = totalSeconds > 0 ? Math.round(Math.min(1, seconds / totalSeconds) * 100) : 0;
+            return isKo
+                ? `직사광선 노출 예상 ${timeText} (${ratio}%)`
+                : `Estimated direct-sun exposure ${timeText} (${ratio}%)`;
+        };
 
         // 1. Fastest Route (OSRM baseline: estimated glare and solar exposure)
         document.getElementById('eta-fastest').innerText = `⏱️ ${fstMin}${isKo ? '분' : 'm'} (${fstKm}km)`;
         const fstDesc = document.getElementById('desc-fastest');
         if (fstDesc) {
             fstDesc.innerText = isKo
-                ? `역광 위험 추정 ${fstGlarePct}% | 태양 노출 기준 | ${routeShadeText(fst)}`
-                : `Estimated glare ${fstGlarePct}% | Solar exposure baseline | ${routeShadeText(fst)}`;
+                ? `역광 위험 추정 ${fstGlarePct}% | ${routeSunlitTimeText(fst)} | ${routeShadeText(fst)}`
+                : `Estimated glare ${fstGlarePct}% | ${routeSunlitTimeText(fst)} | ${routeShadeText(fst)}`;
         }
         const fstTraffic = document.getElementById('traffic-fastest');
         if (fstTraffic) {
@@ -3082,11 +3097,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const shdDesc = document.getElementById('desc-shade');
         if (shdDesc) {
             if (shd.isNight) {
-                shdDesc.innerText = `${shdDiffText} | ${isKo ? '역광 위험 추정 0% | 야간 (태양 노출 0% 🌙)' : 'Estimated glare 0% | Night (solar exposure 0% 🌙)'}`;
+                shdDesc.innerText = `${shdDiffText} | ${isKo ? '야간 · 직사광선 노출 예상 0분 🌙' : 'Night · estimated direct-sun exposure 0 min 🌙'}`;
             } else if (shdUvCut > 0) {
-                shdDesc.innerText = `${shdDiffText} | ${isKo ? `태양 노출 ${shdUvCut}% 감소 | ${routeShadeText(shd)} ☂️` : `Solar exposure -${shdUvCut}% | ${routeShadeText(shd)} ☂️`}`;
+                shdDesc.innerText = `${shdDiffText} | ${isKo ? `${routeSunlitTimeText(shd)} | 누적 직접 일사 ${shdUvCut}% 감소 | ${routeShadeText(shd)} ☂️` : `${routeSunlitTimeText(shd)} | Integrated direct solar -${shdUvCut}% | ${routeShadeText(shd)} ☂️`}`;
             } else {
-                shdDesc.innerText = `${shdDiffText} | ${isKo ? `태양 노출 기준 | ${routeShadeText(shd)} ☂️` : `Solar exposure baseline | ${routeShadeText(shd)} ☂️`}`;
+                shdDesc.innerText = `${shdDiffText} | ${isKo ? `${routeSunlitTimeText(shd)} | 누적 직접 일사 기준 | ${routeShadeText(shd)} ☂️` : `${routeSunlitTimeText(shd)} | Integrated direct solar baseline | ${routeShadeText(shd)} ☂️`}`;
             }
         }
 

@@ -2,6 +2,8 @@
 
 Generated: 2026-08-21T21:08:59.184Z
 
+> **Policy snapshot:** this report was generated with the former integrated-direct-energy-first shade selector. The current app minimizes expected direct-sun duration first, uses integrated direct energy within a 30-second tie band, and then prefers shorter driving time. The numerical route-selection results below are retained as a reproducible historical run and have not been relabeled as results of the newer policy.
+
 ## 초록
 
 미국 4개 장면 데이터 권역에서 단·중·장거리 12개 출발지–목적지 조합을 선정하고, 각 경로를 2026년 하지의 08:00·13:00·18:00 및 동지의 13:00 현지시각에 분석하여 총 48개 사례를 만들었다. 후보는 앱과 같은 라우터 흐름(직접 OSRM 대안, 필요할 때 최대 2개의 측면 경유점 요청, 형상 중복 제거, 최단시간 대비 60% 초과 후보 제외)으로 수집하고 네 시각에 재사용했다. 구간별 태양 위치는 NREL SPA, 맑은하늘 광대역 일사는 Bird 모델, 건물·터널·지형 차광은 사전계산 OSM/SRTM 장면으로 계산했다. 제품의 우회·최소개선 정책을 적용한 그늘 경로의 빠른 경로 대비 총 직접 일사 감소율은 평균 **0.0%**였다. 제한된 후보를 사후적으로 모두 비교한 최대 가능 감소율은 평균 **0.0%**였고, 전체 주행시간 중 장면이 확정한 평균 차광시간 비율은 **6.0%**, 전체 경로 중 차광 판정 불확실 시간은 평균 **3.0%**였다. 12개 OD 중 앱 흐름을 거친 뒤에도 후보가 하나뿐인 OD는 0개였다. 0% 감소는 계산 실패를 뜻하지 않으며, 최단 경로가 최선이거나 대안이 제품의 우회·최소개선 기준을 통과하지 못할 때 발생한다. 실제 UV 선량, 실내온도, 연료·배터리 절감 또는 의학적 효과는 추정하지 않았다.

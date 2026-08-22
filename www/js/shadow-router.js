@@ -653,6 +653,8 @@ window.ShadowRouter = (function () {
             directSolarEnergyWhM2: isFinite(totalDirectSolarEnergyWhM2) ? totalDirectSolarEnergyWhM2 : 0,
             clearSkyDirectEnergyWhM2: isFinite(clearSkyDirectEnergyWhM2) ? clearSkyDirectEnergyWhM2 : 0,
             diffuseSkyEnergyWhM2: isFinite(diffuseSkyEnergyWhM2) ? diffuseSkyEnergyWhM2 : 0,
+            sunlitTimeSeconds: isFinite(sunlitTimeSeconds) ? sunlitTimeSeconds : 0,
+            totalTimeSeconds: isFinite(totalTimeSeconds) ? totalTimeSeconds : 0,
             sunlitDistanceRatio: totalPathMeters > 0 ? sunlitDistanceMeters / totalPathMeters : 0,
             sunlitTimeRatio: totalTimeSeconds > 0 ? sunlitTimeSeconds / totalTimeSeconds : 0,
             // Deprecated compatibility alias. This value is not a measured UV dose.
@@ -1115,6 +1117,32 @@ window.ShadowRouter = (function () {
         return Number(analyzed && analyzed.totalUvExposureUnits) || 0;
     }
 
+    function routeSunlitTimeSeconds(route) {
+        const analyzed = route && route.analyzed || {};
+        const exactSeconds = Number(analyzed.sunlitTimeSeconds);
+        if (Number.isFinite(exactSeconds) && exactSeconds >= 0) return exactSeconds;
+        const ratio = Number(analyzed.sunlitTimeRatio);
+        const analyzedDuration = Number(analyzed.totalTimeSeconds);
+        if (Number.isFinite(ratio) && ratio >= 0) {
+            const duration = Number.isFinite(analyzedDuration) && analyzedDuration >= 0
+                ? analyzedDuration : routeDurationForSelection(route);
+            if (Number.isFinite(duration)) return Math.max(0, ratio) * Math.max(0, duration);
+        }
+        // Older cached/test route objects may not carry the explicit metric.
+        // Treat a daylight route as exposed for its full duration so missing
+        // evidence can never fabricate shade; zero direct energy remains night.
+        const duration = routeDurationForSelection(route);
+        return Number.isFinite(duration) && routeSolarExposure(analyzed) > 0 ? Math.max(0, duration) : 0;
+    }
+
+    function compareShadeRoutes(a, b) {
+        const sunlitDifference = routeSunlitTimeSeconds(a) - routeSunlitTimeSeconds(b);
+        if (Math.abs(sunlitDifference) > SUNLIT_TIME_TIE_TOLERANCE_SEC) return sunlitDifference;
+        const energyDifference = routeSolarExposure(a.analyzed) - routeSolarExposure(b.analyzed);
+        if (Math.abs(energyDifference) > 0.000001) return energyDifference;
+        return routeDurationForSelection(a) - routeDurationForSelection(b);
+    }
+
     function routeShadeMetric(analyzed) {
         const mode = analyzed && analyzed.analysisMode;
         if (['scene', 'hybrid-scene'].includes(mode) && Number.isFinite(Number(analyzed.confirmedShadeRatio))) {
@@ -1138,7 +1166,7 @@ window.ShadowRouter = (function () {
             isMeaningfulGlareAlternative(calculateRouteTradeoff(fastest, route))),
         (a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk).slice(0, 2);
         const shadeCandidates = stableSortRoutes(routes.filter(route => route.id === fastest.id ||
-            isMeaningfulShadeAlternative(calculateRouteTradeoff(fastest, route))), (a, b) => {
+            isPromisingShadePrecisionCandidate(calculateRouteTradeoff(fastest, route))), (a, b) => {
             const exposureDifference = routeSolarExposure(a.analyzed) - routeSolarExposure(b.analyzed);
             return Math.abs(exposureDifference) > 0.001
                 ? exposureDifference
@@ -1146,7 +1174,14 @@ window.ShadowRouter = (function () {
         }).slice(0, 2);
         const heuristicRoles = selectRouteRoles(routes);
         const role = normalizePreferredRouteRole(preferredRole);
-        const preferred = heuristicRoles[role];
+        // A conservative heuristic pass counts unknown daylight as exposed, so
+        // its final shade role can legitimately remain the fastest route. Still
+        // refine the best purpose-specific shade signal first; otherwise the
+        // scene analysis needed to discover a shorter sunlit duration would be
+        // delayed behind the baseline it is meant to challenge.
+        const preferred = role === 'shade'
+            ? (shadeCandidates.find(route => route.id !== fastest.id) || heuristicRoles.shade)
+            : heuristicRoles[role];
         const otherPurpose = role === 'shade' ? heuristicRoles.glareFree : heuristicRoles.shade;
         const selected = [];
         const seen = new Set();
@@ -1164,12 +1199,18 @@ window.ShadowRouter = (function () {
 
     // A detour must provide a measurable purpose benefit before it can replace
     // the fastest route. These conservative thresholds are noise guards, not
-    // medical protection claims: 5 percentage points is above normal heuristic
-    // variation, while a 35% time increase is the maximum acceptable detour.
+    // medical protection claims: 30 seconds is a sampling/timing noise band,
+    // 5 percentage points guards energy ties, and a 35% time increase is the
+    // maximum acceptable detour.
     const MAX_ALTERNATIVE_DETOUR_RATIO = 1.35;
     const MIN_GLARE_IMPROVEMENT = 0.05;
     const MIN_SHADE_IMPROVEMENT = 0.05;
     const MIN_SOLAR_EXPOSURE_REDUCTION_PCT = 5;
+    // Direct-sun duration is the primary user-facing shade objective. A
+    // 30-second band prevents sampling/timing noise from selecting a detour;
+    // within that band integrated direct energy is the tie-breaker.
+    const SUNLIT_TIME_TIE_TOLERANCE_SEC = 30;
+    const MIN_SUNLIT_TIME_REDUCTION_SEC = 30;
     const SCENE_ROUTE_CACHE_TTL_MS = 10 * 60 * 1000;
     const SCENE_ROUTE_CACHE_MAX = 24;
     const sceneRouteCache = new Map();
@@ -1203,6 +1244,9 @@ window.ShadowRouter = (function () {
         const candidateAnalyzed = candidate && candidate.analyzed || {};
         const fastestExposure = routeSolarExposure(fastestAnalyzed);
         const candidateExposure = routeSolarExposure(candidateAnalyzed);
+        const fastestSunlitTimeSec = routeSunlitTimeSeconds(fastest);
+        const candidateSunlitTimeSec = routeSunlitTimeSeconds(candidate);
+        const sunlitTimeReductionSec = fastestSunlitTimeSec - candidateSunlitTimeSec;
         const solarExposureReductionPct = fastestExposure > 0.00001
             ? ((fastestExposure - candidateExposure) / fastestExposure) * 100
             : 0;
@@ -1215,7 +1259,12 @@ window.ShadowRouter = (function () {
             // The value is broadband direct-solar energy reduction, not UV.
             uvReductionPct: Math.max(0, solarExposureReductionPct),
             solarExposureReductionPct: Math.max(0, solarExposureReductionPct),
-            shadeImprovement: routeShadeMetric(candidateAnalyzed) - routeShadeMetric(fastestAnalyzed)
+            shadeImprovement: routeShadeMetric(candidateAnalyzed) - routeShadeMetric(fastestAnalyzed),
+            fastestSunlitTimeSec,
+            candidateSunlitTimeSec,
+            sunlitTimeReductionSec,
+            sunlitTimeReductionPct: fastestSunlitTimeSec > 0.5
+                ? Math.max(0, (sunlitTimeReductionSec / fastestSunlitTimeSec) * 100) : 0
         };
         candidate.tradeoff = tradeoff;
         return tradeoff;
@@ -1227,8 +1276,17 @@ window.ShadowRouter = (function () {
     }
 
     function isMeaningfulShadeAlternative(tradeoff) {
+        if (tradeoff.detourRatio > MAX_ALTERNATIVE_DETOUR_RATIO) return false;
+        if (tradeoff.sunlitTimeReductionSec >= MIN_SUNLIT_TIME_REDUCTION_SEC) return true;
+        const sunlitTimeIsTied = Math.abs(tradeoff.sunlitTimeReductionSec) <= SUNLIT_TIME_TIE_TOLERANCE_SEC;
+        return sunlitTimeIsTied && tradeoff.solarExposureReductionPct >= MIN_SOLAR_EXPOSURE_REDUCTION_PCT;
+    }
+
+    function isPromisingShadePrecisionCandidate(tradeoff) {
         return tradeoff.detourRatio <= MAX_ALTERNATIVE_DETOUR_RATIO &&
-            (tradeoff.solarExposureReductionPct >= MIN_SOLAR_EXPOSURE_REDUCTION_PCT || tradeoff.shadeImprovement >= MIN_SHADE_IMPROVEMENT);
+            (isMeaningfulShadeAlternative(tradeoff) ||
+                tradeoff.solarExposureReductionPct >= MIN_SOLAR_EXPOSURE_REDUCTION_PCT ||
+                tradeoff.shadeImprovement >= MIN_SHADE_IMPROVEMENT);
     }
 
     function selectRouteRoles(routes) {
@@ -1240,7 +1298,12 @@ window.ShadowRouter = (function () {
             extraDurationSec: 0,
             glareImprovement: 0,
             uvReductionPct: 0,
-            shadeImprovement: 0
+            solarExposureReductionPct: 0,
+            shadeImprovement: 0,
+            fastestSunlitTimeSec: routeSunlitTimeSeconds(fastest),
+            candidateSunlitTimeSec: routeSunlitTimeSeconds(fastest),
+            sunlitTimeReductionSec: 0,
+            sunlitTimeReductionPct: 0
         };
         if (alternatives.length === 0) return { fastest, glareFree: fastest, shade: fastest };
         const scored = alternatives.map(route => ({ route, tradeoff: calculateRouteTradeoff(fastest, route) }));
@@ -1249,13 +1312,10 @@ window.ShadowRouter = (function () {
             ? stableSortRoutes(glarePool, (a, b) => a.route.analyzed.avgGlareRisk - b.route.analyzed.avgGlareRisk ||
                 a.tradeoff.extraDurationSec - b.tradeoff.extraDurationSec).map(item => item.route)[0]
             : fastest;
-        const shadePool = scored.filter(item => item.route.id !== glareFree.id && isMeaningfulShadeAlternative(item.tradeoff));
-        const sameGlareShade = scored.find(item => item.route.id === glareFree.id && isMeaningfulShadeAlternative(item.tradeoff));
+        const shadePool = scored.filter(item => isMeaningfulShadeAlternative(item.tradeoff));
         const shade = shadePool.length > 0
-            ? stableSortRoutes(shadePool, (a, b) => a.tradeoff.solarExposureReductionPct > b.tradeoff.solarExposureReductionPct ? -1 :
-                (a.tradeoff.solarExposureReductionPct < b.tradeoff.solarExposureReductionPct ? 1 :
-                    routeShadeMetric(b.route.analyzed) - routeShadeMetric(a.route.analyzed))).map(item => item.route)[0]
-            : (sameGlareShade ? glareFree : fastest);
+            ? stableSortRoutes(shadePool, (a, b) => compareShadeRoutes(a.route, b.route)).map(item => item.route)[0]
+            : fastest;
         return { fastest, glareFree, shade };
     }
 
@@ -1380,8 +1440,7 @@ window.ShadowRouter = (function () {
                 .sort((a, b) => a.route.analyzed.avgGlareRisk - b.route.analyzed.avgGlareRisk ||
                     a.tradeoff.extraDurationSec - b.tradeoff.extraDurationSec)
             : alternatives.filter(item => isMeaningfulShadeAlternative(item.tradeoff))
-                .sort((a, b) => b.tradeoff.solarExposureReductionPct - a.tradeoff.solarExposureReductionPct ||
-                    routeShadeMetric(b.route.analyzed) - routeShadeMetric(a.route.analyzed));
+                .sort((a, b) => compareShadeRoutes(a.route, b.route));
         if (pool.length) selected = pool[0].route;
         return { selected, baseline, mode, allReady, fallbackReason: roleFallbackReason, views };
     }
@@ -2031,6 +2090,8 @@ window.ShadowRouter = (function () {
         buildHeuristicProgressResult: buildHeuristicProgressResult,
         calculateRouteTradeoff: calculateRouteTradeoff,
         routeSolarExposure: routeSolarExposure,
+        routeSunlitTimeSeconds: routeSunlitTimeSeconds,
+        compareShadeRoutes: compareShadeRoutes,
         routeShadeMetric: routeShadeMetric,
         applyExposureReductions: applyExposureReductions,
         routeContainsToll: routeContainsToll,

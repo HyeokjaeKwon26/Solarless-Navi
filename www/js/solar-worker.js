@@ -298,6 +298,8 @@ self.onmessage = function (e) {
             directSolarEnergyWhM2: isFinite(totalDirectSolarEnergyWhM2) ? totalDirectSolarEnergyWhM2 : 0,
             clearSkyDirectEnergyWhM2: isFinite(clearSkyDirectEnergyWhM2) ? clearSkyDirectEnergyWhM2 : 0,
             diffuseSkyEnergyWhM2: isFinite(diffuseSkyEnergyWhM2) ? diffuseSkyEnergyWhM2 : 0,
+            sunlitTimeSeconds: isFinite(sunlitTimeSeconds) ? sunlitTimeSeconds : 0,
+            totalTimeSeconds: isFinite(totalTimeSeconds) ? totalTimeSeconds : 0,
             sunlitDistanceRatio: totalPathMeters > 0 ? sunlitDistanceMeters / totalPathMeters : 0,
             sunlitTimeRatio: totalTimeSeconds > 0 ? sunlitTimeSeconds / totalTimeSeconds : 0,
             totalUvExposureUnits: isFinite(totalSolarExposure) ? totalSolarExposure : 0,
