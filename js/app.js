@@ -83,6 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let endMarker = null;
 
     let isLiveNavActive = false;
+    let isFreeDriveMode = false;
     let isPipMode = false;
     let gpsWatchId = null;
     let lastGpsWatchRestartAt = 0;
@@ -113,6 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastProcessedNavigationAccuracy = Infinity;
     let lastGpsUncertainNoticeAt = 0;
     const NAVIGATION_LOCATION_DEDUPE_WINDOW_MS = 1500;
+    const LIVE_DESTINATION_ROUTE_TIMEOUT_MS = 15000;
     let routeAbortController = null;
     let sceneRefinementAbortController = null;
     let pendingRouteRequestKey = null;
@@ -158,21 +160,66 @@ document.addEventListener('DOMContentLoaded', () => {
         // If the user changes the destination again while a replacement is
         // pending, keep the last actually guided destination as the rollback
         // target rather than treating the uncommitted destination as active.
-        if (liveDestinationBackup && liveDestinationBackup.end) {
+        if (liveDestinationBackup) {
             return {
-                end: { lat: Number(liveDestinationBackup.end.lat), lng: Number(liveDestinationBackup.end.lng) },
+                freeDrive: !!liveDestinationBackup.freeDrive,
+                end: liveDestinationBackup.end
+                    ? { lat: Number(liveDestinationBackup.end.lat), lng: Number(liveDestinationBackup.end.lng) }
+                    : null,
                 name: liveDestinationBackup.name,
                 verifiedRouteRequestKey: liveDestinationBackup.verifiedRouteRequestKey,
                 verifiedRouteOriginProvisional: !!liveDestinationBackup.verifiedRouteOriginProvisional
             };
         }
+        if (isFreeDriveMode) {
+            return {
+                freeDrive: true,
+                end: null,
+                name: '',
+                verifiedRouteRequestKey: null,
+                verifiedRouteOriginProvisional: false
+            };
+        }
         if (!currentEnd) return null;
         return {
+            freeDrive: false,
             end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
             name: destinationName,
             verifiedRouteRequestKey,
             verifiedRouteOriginProvisional
         };
+    }
+
+    function destinationChangedFromBackup(backup, nextEnd) {
+        if (!backup || backup.freeDrive || !backup.end || !nextEnd) return true;
+        return ShadowRouter.calculateDistanceMeters(
+            backup.end.lat, backup.end.lng,
+            Number(nextEnd.lat), Number(nextEnd.lng)
+        ) > 5;
+    }
+
+    function restoreLiveDestinationBackup(backup) {
+        if (!backup) return;
+        liveDestinationBackup = null;
+        if (backup.freeDrive) {
+            currentEnd = null;
+            destinationName = '';
+            verifiedRouteRequestKey = null;
+            verifiedRouteOriginProvisional = false;
+            isFreeDriveMode = true;
+            setFreeDriveUi(true);
+            const input = document.getElementById('destination-input');
+            if (input) input.value = '';
+            return;
+        }
+        currentEnd = backup.end;
+        destinationName = backup.name;
+        verifiedRouteRequestKey = backup.verifiedRouteRequestKey;
+        verifiedRouteOriginProvisional = !!backup.verifiedRouteOriginProvisional;
+        const input = document.getElementById('destination-input');
+        const bar = document.getElementById('bar-dest-text');
+        if (input) input.value = destinationName;
+        if (bar) bar.innerText = destinationName;
     }
 
     function clearActiveNavigationSession() {
@@ -2450,6 +2497,76 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function setFreeDriveUi(active) {
+        const enabled = !!active;
+        const isKo = I18n.getLanguage().startsWith('ko');
+        document.body.classList.toggle('free-drive-active', enabled);
+        const destinationBar = document.getElementById('bar-dest-text');
+        const originChip = document.getElementById('orig-chip-text');
+        if (enabled) {
+            if (originChip) originChip.innerText = isKo ? '🚘 현재 위치' : '🚘 Current location';
+            if (destinationBar) destinationBar.innerText = isKo ? '자유 주행' : 'Free drive';
+            const banner = document.getElementById('mobile-turn-banner');
+            const bannerIcon = document.getElementById('banner-turn-icon');
+            const bannerDistance = document.getElementById('banner-dist');
+            const bannerDescription = document.getElementById('banner-desc');
+            if (banner) banner.classList.add('active');
+            if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-gauge-high"></i>';
+            if (bannerDistance) bannerDistance.textContent = isKo ? '자유 주행' : 'Free drive';
+            if (bannerDescription) bannerDescription.textContent = isKo
+                ? '목적지 없이 현재 위치와 주행 정보를 표시합니다.'
+                : 'Showing your live position and driving information without a destination.';
+        } else {
+            if (originChip) originChip.innerText = I18n.getText('origChip');
+            if (destinationBar && !currentEnd) destinationBar.innerText = I18n.getText('barDestDefault');
+        }
+        const freeButtons = [
+            document.getElementById('btn-start-free-drive'),
+            document.getElementById('btn-drawer-free-drive')
+        ];
+        freeButtons.forEach(button => {
+            if (!button) return;
+            button.classList.toggle('active', enabled);
+            button.innerHTML = enabled
+                ? `<i class="fa-solid fa-square"></i> ${isKo ? '자유 주행 종료' : 'Stop free drive'}`
+                : `<i class="fa-solid fa-gauge-high"></i> ${isKo ? '목적지 없이 자유 주행' : 'Free drive without destination'}`;
+        });
+    }
+
+    async function startFreeDriveMode() {
+        if (isLiveNavActive) {
+            if (isFreeDriveMode) await toggleLiveGpsNavigation();
+            else {
+                const isKo = I18n.getLanguage().startsWith('ko');
+                const confirmed = confirm(isKo
+                    ? '현재 목적지 안내를 종료하고 자유 주행으로 전환하시겠습니까?'
+                    : 'Stop the current route guidance and switch to free drive?');
+                if (confirmed) {
+                    await toggleLiveGpsNavigation();
+                    await startFreeDriveMode();
+                }
+            }
+            return;
+        }
+        const isKo = I18n.getLanguage().startsWith('ko');
+        if (!currentStart) {
+            try {
+                await requestUserGpsLocation(false);
+            } catch (error) {
+                alert(isKo
+                    ? '현재 GPS 위치를 아직 받지 못했습니다. 잠시 후 다시 시도해 주세요.'
+                    : 'The current GPS fix is not ready yet. Please try again shortly.');
+                return;
+            }
+        }
+        if (routeAbortController) routeAbortController.abort();
+        if (sceneRefinementAbortController) sceneRefinementAbortController.abort();
+        clearActiveNavigationSession();
+        clearRouteFromMap();
+        document.getElementById('start-search-modal').classList.add('hidden');
+        await toggleLiveGpsNavigation({ freeDrive: true });
+    }
+
     function applyDestinationSelection(coords, name, options = {}) {
         const lat = Number(coords && coords.lat);
         const lng = Number(coords && coords.lng);
@@ -2459,10 +2576,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const nextEnd = { lat, lng };
         const nextName = String(name || '').trim() || (I18n.getLanguage().startsWith('ko') ? '선택한 목적지' : 'Selected destination');
         if (isLiveNavActive && previousLiveDestination) {
-            const changed = ShadowRouter.calculateDistanceMeters(
-                previousLiveDestination.end.lat, previousLiveDestination.end.lng,
-                nextEnd.lat, nextEnd.lng
-            ) > 5;
+            const changed = destinationChangedFromBackup(previousLiveDestination, nextEnd);
             if (!changed) {
                 document.getElementById('start-search-modal').classList.add('hidden');
                 return false;
@@ -2533,11 +2647,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (isLiveNavActive) {
-            const changed = !previousLiveDestination || !currentEnd ||
-                ShadowRouter.calculateDistanceMeters(
-                    previousLiveDestination.end.lat, previousLiveDestination.end.lng,
-                    currentEnd.lat, currentEnd.lng
-                ) > 5;
+            const changed = destinationChangedFromBackup(previousLiveDestination, currentEnd);
             if (!changed) {
                 document.getElementById('start-search-modal').classList.add('hidden');
                 return;
@@ -2546,11 +2656,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? '주행 중 목적지를 변경하고 현재 위치에서 새 경로를 계산하시겠습니까?'
                 : 'Change the destination and calculate a new route from the current position?');
             if (!confirmed) {
-                currentEnd = previousLiveDestination.end;
-                destinationName = previousLiveDestination.name;
-                verifiedRouteRequestKey = previousLiveDestination.verifiedRouteRequestKey;
-                verifiedRouteOriginProvisional = !!previousLiveDestination.verifiedRouteOriginProvisional;
-                if (destInput) destInput.value = destinationName;
+                restoreLiveDestinationBackup(previousLiveDestination);
                 return;
             }
             liveDestinationBackup = previousLiveDestination;
@@ -2840,6 +2946,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const rerouteReason = String(routeOptions.reason || (isMidDrive ? 'off-route' : 'planning'));
         const destinationBackup = isMidDrive && rerouteReason === 'destination-change' ? liveDestinationBackup : null;
         let liveRerouteCommitted = false;
+        let liveDestinationWatchdog = null;
 
         // A mid-drive request is an explicit reroute. It is the only path
         // allowed to replace the route frozen at navigation start.
@@ -2901,6 +3008,30 @@ document.addEventListener('DOMContentLoaded', () => {
         setNavigationButtonsEnabled(false);
         markRouteCalculationPending(true);
         const sunPos = updateSunInfo();
+
+        if (destinationBackup && isLiveNavActive) {
+            liveDestinationWatchdog = setTimeout(() => {
+                if (routeAbortController !== requestController || liveRerouteCommitted || !liveDestinationBackup) return;
+                requestController.abort();
+                restoreLiveDestinationBackup(destinationBackup);
+                pendingRouteRequestKey = null;
+                activeRouteRequestKey = null;
+                routeRefinementPending = false;
+                markRouteCalculationPending(false);
+                const isKo = I18n.getLanguage().startsWith('ko');
+                showApiNotice(isKo
+                    ? '새 목적지의 도로 경로를 제시간에 받지 못해 이전 주행 상태로 돌아왔습니다. 다른 목적지를 다시 선택할 수 있습니다.'
+                    : 'The new road route timed out, so the previous driving state was restored. You can choose another destination now.');
+                if (destinationBackup.freeDrive) {
+                    setFreeDriveUi(true);
+                } else if (currentStart && selectedRouteObj) {
+                    updateTurnBannerText(
+                        findNextManeuver(currentStart.lat, currentStart.lng),
+                        calculateLiveGlareRisk(currentStart.lat, currentStart.lng, currentHeading)
+                    );
+                }
+            }, LIVE_DESTINATION_ROUTE_TIMEOUT_MS);
+        }
 
         const routeStartedAt = Date.now();
         try {
@@ -3002,7 +3133,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             // is safe to remove the old remaining polyline.
                             liveRerouteCommitted = true;
                             if (rerouteReason === 'destination-change') {
+                                if (liveDestinationWatchdog !== null) {
+                                    clearTimeout(liveDestinationWatchdog);
+                                    liveDestinationWatchdog = null;
+                                }
                                 liveDestinationBackup = null;
+                                isFreeDriveMode = false;
+                                setFreeDriveUi(false);
+                                ensureRouteSummaryCycling();
                                 saveActiveNavigationSession();
                             }
                             if (rerouteReason === 'gps-origin-refinement') {
@@ -3025,6 +3163,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             dynamicRemainingSegmentIndex = null;
                             lastPrecisionSwitchRouteId = null;
                             resetNavigationRouteProgress(selectedRouteObj);
+                            // The direct OSRM route is already usable. Scene
+                            // and weather refinement may continue, but must
+                            // not leave the turn banner stuck on “calculating”.
+                            markRouteCalculationPending(false);
+                            if (currentStart) {
+                                updateTurnBannerText(
+                                    findNextManeuver(currentStart.lat, currentStart.lng),
+                                    calculateLiveGlareRisk(currentStart.lat, currentStart.lng, currentHeading)
+                                );
+                            }
                             if (window.DebugLogger) window.DebugLogger.log('route-reroute-committed', {
                                 reason: rerouteReason, routeId: navigationSessionRouteId || 'geometry-session'
                             });
@@ -3075,21 +3223,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 setNavigationButtonsEnabled(false);
             }
             if (destinationBackup && isLiveNavActive) {
-                currentEnd = destinationBackup.end;
-                destinationName = destinationBackup.name;
-                liveDestinationBackup = null;
-                const destinationInput = document.getElementById('destination-input');
-                const destinationBar = document.getElementById('bar-dest-text');
-                if (destinationInput) destinationInput.value = destinationName;
-                if (destinationBar) destinationBar.innerText = destinationName;
-                verifiedRouteRequestKey = destinationBackup.verifiedRouteRequestKey;
-                verifiedRouteOriginProvisional = !!destinationBackup.verifiedRouteOriginProvisional;
+                restoreLiveDestinationBackup(destinationBackup);
                 setNavigationButtonsEnabled(true);
             }
             showRouteFailureMessage(e, hadPreviousRoute);
             if (window.DebugLogger) window.DebugLogger.log('route-enrichment-failure', { message: String(e && e.message || e), keptPreviousRoute: hadPreviousRoute });
             return;
         } finally {
+            if (liveDestinationWatchdog !== null) clearTimeout(liveDestinationWatchdog);
             if (rerouteReason === 'precision-refresh') precisionReroutePending = false;
             if (rerouteReason === 'gps-origin-refinement') gpsOriginReroutePending = false;
             if (routeAbortController === requestController) {
@@ -3704,11 +3845,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? '주행 중 목적지를 변경하고 현재 위치에서 새 경로를 계산하시겠습니까?'
             : 'Change the destination and calculate a new route from the current position?');
         if (!confirmed) {
-            currentEnd = previousLiveDestination.end;
-            destinationName = previousLiveDestination.name;
-            verifiedRouteRequestKey = previousLiveDestination.verifiedRouteRequestKey;
-            verifiedRouteOriginProvisional = !!previousLiveDestination.verifiedRouteOriginProvisional;
-            document.getElementById('destination-input').value = destinationName;
+            restoreLiveDestinationBackup(previousLiveDestination);
             return;
         }
         liveDestinationBackup = previousLiveDestination;
@@ -3719,6 +3856,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('btn-confirm-destination').addEventListener('click', resolveAndStartNavigation);
+    ['btn-start-free-drive', 'btn-drawer-free-drive'].forEach(id => {
+        const button = document.getElementById(id);
+        if (button) button.addEventListener('click', startFreeDriveMode);
+    });
     document.getElementById('btn-open-search-modal').addEventListener('click', openSearchModal);
     document.getElementById('btn-top-bar-change').addEventListener('click', openSearchModal);
     document.getElementById('btn-close-drawer').addEventListener('click', () => {
@@ -4062,12 +4203,12 @@ document.addEventListener('DOMContentLoaded', () => {
         recenterMapToVehicle();
     }
 
-    async function toggleLiveGpsNavigation() {
+    async function toggleLiveGpsNavigation(options = {}) {
         if (navigationTransitionPending) return;
         const transitionGeneration = ++navigationTransitionGeneration;
         setNavigationTransitionPending(true);
         try {
-            return await performLiveGpsNavigationToggle();
+            return await performLiveGpsNavigationToggle(options);
         } finally {
             if (transitionGeneration === navigationTransitionGeneration) {
                 setNavigationTransitionPending(false);
@@ -4075,16 +4216,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function performLiveGpsNavigationToggle() {
+    async function performLiveGpsNavigationToggle(options = {}) {
         const btn = document.getElementById('live-gps-nav-btn');
         const directMapBtn = document.getElementById('btn-map-start-nav');
         const isKo = I18n.getLanguage().startsWith('ko');
+        const requestedFreeDrive = options.freeDrive === true;
 
         if (isLiveNavActive) {
+            const wasFreeDrive = isFreeDriveMode;
             stopGpsWatch();
             isLiveNavActive = false;
+            isFreeDriveMode = false;
             stopRouteSummaryCycling();
             setLiveNavigationMapMode(false);
+            setFreeDriveUi(false);
             if (window.PipController) window.PipController.setNavigationActive(false);
             recenterMapToVehicle();
 
@@ -4110,11 +4255,13 @@ document.addEventListener('DOMContentLoaded', () => {
             window.__solarlessProcessNavigationPosition = null;
             compassModeUserOverride = false;
             setCompassMode('north-up');
-            TTSVoice.speak(isKo ? "안내를 종료합니다." : "Ending navigation guidance.");
+            TTSVoice.speak(wasFreeDrive
+                ? (isKo ? '자유 주행을 종료합니다.' : 'Ending free drive.')
+                : (isKo ? '안내를 종료합니다.' : 'Ending navigation guidance.'));
             return;
         }
 
-        if (!isCurrentRouteReady()) {
+        if (!requestedFreeDrive && !isCurrentRouteReady()) {
             // The direct/live guidance buttons can be pressed while the first
             // GPS fix is still pending. Route-start owns that wait and will
             // calculate the road route once coordinates arrive; do not show a
@@ -4130,7 +4277,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        if (!currentEnd) {
+        if (!requestedFreeDrive && !currentEnd) {
             alert(isKo ? "목적지를 먼저 선택해 주세요." : "Please select a destination first.");
             openSearchModal();
             return;
@@ -4142,7 +4289,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         isLiveNavActive = true;
-        ensureRouteSummaryCycling();
+        isFreeDriveMode = requestedFreeDrive;
+        setFreeDriveUi(isFreeDriveMode);
+        if (!isFreeDriveMode) ensureRouteSummaryCycling();
         setLiveNavigationMapMode(true);
         // Planning/preview stays north-up. Once a valid movement heading is
         // available, guidance switches to heading-up; manual compass changes
@@ -4174,7 +4323,7 @@ document.addEventListener('DOMContentLoaded', () => {
         navigationSessionStartedAt = navStartTime;
         navigationSessionStartDistanceMeters = navStartDistanceMeters;
         navigationSessionArrived = false;
-        saveActiveNavigationSession();
+        if (!isFreeDriveMode) saveActiveNavigationSession();
         precisionReroutePending = false;
         precisionRerouteCooldownUntil = 0;
         lastRerouteTime = 0;
@@ -4184,17 +4333,17 @@ document.addEventListener('DOMContentLoaded', () => {
         // Anchor GPS validation to the verified route origin. This prevents
         // the first indoor/network watch fix from teleporting guidance to a
         // nearby block before there is a prior watch sample to compare.
-        lastProcessedNavigationPosition = currentStart && Number.isFinite(Number(currentStart.lat)) && Number.isFinite(Number(currentStart.lng))
+        lastProcessedNavigationPosition = !isFreeDriveMode && currentStart && Number.isFinite(Number(currentStart.lat)) && Number.isFinite(Number(currentStart.lng))
             ? { lat: Number(currentStart.lat), lng: Number(currentStart.lng) }
             : null;
-        lastProcessedNavigationTimestamp = Date.now();
+        lastProcessedNavigationTimestamp = isFreeDriveMode ? 0 : Date.now();
         lastProcessedNavigationAccuracy = currentStart && Number(currentStart.accuracy) > 0
             ? Number(currentStart.accuracy)
             : 50;
-        navigationRouteNeedsReliableOrigin = verifiedRouteOriginProvisional ||
+        navigationRouteNeedsReliableOrigin = !isFreeDriveMode && (verifiedRouteOriginProvisional ||
             (window.RouteState && typeof window.RouteState.isProvisionalRouteOrigin === 'function'
                 ? window.RouteState.isProvisionalRouteOrigin(currentStart, Date.now())
-                : Number(currentStart && currentStart.accuracy) > 50);
+                : Number(currentStart && currentStart.accuracy) > 50));
         gpsOriginReroutePending = false;
         navigationSessionRouteId = getRouteGeometryIdentity(selectedRouteObj);
         navigationSessionRouteGeometry = selectedRouteObj && selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
@@ -4205,18 +4354,33 @@ document.addEventListener('DOMContentLoaded', () => {
         let consecutiveOffRouteCount = 0;
 
         if (btn) {
-            btn.innerHTML = `<i class="fa-solid fa-square"></i> ${I18n.getText('liveNavStop')}`;
+            btn.innerHTML = `<i class="fa-solid fa-square"></i> ${isFreeDriveMode
+                ? (isKo ? '자유 주행 종료' : 'Stop free drive')
+                : I18n.getText('liveNavStop')}`;
             btn.classList.add('active');
             btn.classList.remove('reroute-mode');
         }
         if (directMapBtn) {
-            directMapBtn.innerHTML = `<i class="fa-solid fa-square"></i> ${I18n.getText('mapStopNav')}`;
+            directMapBtn.innerHTML = `<i class="fa-solid fa-square"></i> ${isFreeDriveMode
+                ? (isKo ? '자유 주행 종료' : 'Stop free drive')
+                : I18n.getText('mapStopNav')}`;
             directMapBtn.classList.add('active');
             directMapBtn.classList.remove('reroute-mode');
         }
 
         const banner = document.getElementById('mobile-turn-banner');
         if (banner) banner.classList.add('active');
+
+        if (isFreeDriveMode) {
+            const bannerIcon = document.getElementById('banner-turn-icon');
+            const bannerDistance = document.getElementById('banner-dist');
+            const bannerDescription = document.getElementById('banner-desc');
+            if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-gauge-high"></i>';
+            if (bannerDistance) bannerDistance.textContent = isKo ? '자유 주행' : 'Free drive';
+            if (bannerDescription) bannerDescription.textContent = isKo
+                ? '목적지 없이 현재 위치와 주행 정보를 표시합니다.'
+                : 'Showing your live position and driving information without a destination.';
+        }
 
         if (navigationRouteNeedsReliableOrigin) {
             // A coarse/stale fix may be used to keep startup responsive, but
@@ -4239,7 +4403,9 @@ document.addEventListener('DOMContentLoaded', () => {
         setSidebarOpen(false);
 
         // Dynamically announce exact selected route mode ("최단 시간 경로", "눈부심 방지 역광 회피 경로", "그늘 우선 경로")
-        TTSVoice.speak(getRouteAnnouncementText(currentMode, false));
+        TTSVoice.speak(isFreeDriveMode
+            ? (isKo ? '자유 주행을 시작합니다.' : 'Starting free drive.')
+            : getRouteAnnouncementText(currentMode, false));
 
         // WebView geolocation and the Android foreground service feed the same
         // navigation pipeline. The active callback below returns immediately

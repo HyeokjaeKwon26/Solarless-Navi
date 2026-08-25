@@ -29,6 +29,8 @@ window.I18n = (function () {
             recentTitle: "최근 검색한 장소",
             clearHistoryBtn: "전체 삭제",
             confirmStartBtn: "내비게이션 탐색 시작",
+            freeDriveStart: "목적지 없이 자유 주행",
+            freeDriveStop: "자유 주행 종료",
             addFavBtn: "즐겨찾기 추가",
             aboutTitle: "앱 정보 (About App)",
             lblAppName: "어플리케이션 이름",
@@ -171,6 +173,8 @@ window.I18n = (function () {
             recentTitle: "Recent Searches",
             clearHistoryBtn: "Clear All",
             confirmStartBtn: "Start Navigation",
+            freeDriveStart: "Free drive without destination",
+            freeDriveStop: "Stop free drive",
             addFavBtn: "Add Favorite",
             aboutTitle: "About App",
             lblAppName: "Application Name",
@@ -362,6 +366,14 @@ window.I18n = (function () {
         setElemHtml('recent-title-text', `<i class="fa-solid fa-clock-rotate-left"></i> ${dict.recentTitle}`);
         setElemText('btn-clear-history', dict.clearHistoryBtn);
         setElemHtml('btn-confirm-destination', `<i class="fa-solid fa-route"></i> ${dict.confirmStartBtn}`);
+        ['btn-start-free-drive', 'btn-drawer-free-drive'].forEach(id => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            const active = button.classList.contains('active');
+            button.innerHTML = active
+                ? `<i class="fa-solid fa-square"></i> ${dict.freeDriveStop}`
+                : `<i class="fa-solid fa-gauge-high"></i> ${dict.freeDriveStart}`;
+        });
         
         setElemText('about-title-text', dict.aboutTitle);
         setElemText('lbl-app-name', dict.lblAppName);
@@ -473,16 +485,18 @@ window.I18n = (function () {
         const directMapBtn = document.getElementById('btn-map-start-nav');
         if (directMapBtn) {
             const isLive = directMapBtn.classList.contains('active');
+            const isFreeDrive = document.body.classList.contains('free-drive-active');
             directMapBtn.innerHTML = isLive ?
-                `<i class="fa-solid fa-square"></i> ${dict.mapStopNav}` :
+                `<i class="fa-solid fa-square"></i> ${isFreeDrive ? dict.freeDriveStop : dict.mapStopNav}` :
                 `<i class="fa-solid fa-play"></i> ${dict.mapStartNav}`;
         }
 
         const liveNavBtn = document.getElementById('live-gps-nav-btn');
         if (liveNavBtn) {
             const isLive = liveNavBtn.classList.contains('active');
+            const isFreeDrive = document.body.classList.contains('free-drive-active');
             liveNavBtn.innerHTML = isLive ?
-                `<i class="fa-solid fa-square"></i> ${dict.liveNavStop}` :
+                `<i class="fa-solid fa-square"></i> ${isFreeDrive ? dict.freeDriveStop : dict.liveNavStop}` :
                 `<i class="fa-solid fa-location-arrow"></i> ${dict.liveNavStart}`;
         }
 

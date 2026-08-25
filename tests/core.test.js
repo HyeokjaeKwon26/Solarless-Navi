@@ -2861,11 +2861,12 @@ test('live glare guidance reuses Bird irradiance and fresh scene occlusion', () 
 test('navigation start-stop is serialized and destination changes use a safe live reroute', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('if (navigationTransitionPending) return'));
-    assert.ok(appSource.includes('return await performLiveGpsNavigationToggle()'));
+    assert.ok(appSource.includes('return await performLiveGpsNavigationToggle(options)'));
     assert.ok(appSource.includes("updateRoute(true, { reason: 'destination-change' })"));
     assert.ok(appSource.includes('liveDestinationBackup = previousLiveDestination'));
-    assert.ok(appSource.includes('currentEnd = destinationBackup.end'));
-    assert.ok(appSource.includes('verifiedRouteRequestKey = destinationBackup.verifiedRouteRequestKey'));
+    assert.ok(appSource.includes('function restoreLiveDestinationBackup(backup)'));
+    assert.ok(appSource.includes('currentEnd = backup.end'));
+    assert.ok(appSource.includes('verifiedRouteRequestKey = backup.verifiedRouteRequestKey'));
     assert.ok(appSource.includes('function captureLiveDestinationBackup()'));
     assert.ok(appSource.includes('function applyDestinationSelection(coords, name, options = {})'));
     assert.ok(appSource.includes('applyDestinationSelection(fav.coords, targetName)'));
@@ -2879,6 +2880,31 @@ test('navigation start-stop is serialized and destination changes use a safe liv
     assert.ok(appSource.includes('const completedRequestKey = requestKey'));
     assert.equal(appSource.includes('navigationSessionRouteId = selectedRouteObj.id || null'), false);
     assert.ok(appSource.includes('getRouteGeometryIdentity(enrichedSelection) === navigationSessionRouteId'));
+    assert.ok(appSource.includes('LIVE_DESTINATION_ROUTE_TIMEOUT_MS = 15000'));
+    assert.ok(appSource.includes('restoreLiveDestinationBackup(destinationBackup)'));
+    assert.ok(appSource.includes('requestController.abort();'));
+    assert.ok(appSource.includes('markRouteCalculationPending(false);'));
+    assert.ok(appSource.includes('The new road route timed out'));
+});
+
+test('free drive starts without a destination and can transition into routed guidance', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+    const i18n = fs.readFileSync(path.join(root, 'js/i18n.js'), 'utf8');
+    assert.ok(html.includes('id="btn-start-free-drive"'));
+    assert.ok(html.includes('id="btn-drawer-free-drive"'));
+    assert.ok(appSource.includes('async function startFreeDriveMode()'));
+    assert.ok(appSource.includes('toggleLiveGpsNavigation({ freeDrive: true })'));
+    assert.ok(appSource.includes('const requestedFreeDrive = options.freeDrive === true'));
+    assert.ok(appSource.includes('if (!requestedFreeDrive && !isCurrentRouteReady())'));
+    assert.ok(appSource.includes('if (!requestedFreeDrive && !currentEnd)'));
+    assert.ok(appSource.includes('navigationRouteNeedsReliableOrigin = !isFreeDriveMode'));
+    assert.ok(appSource.includes('freeDrive: true'));
+    assert.ok(appSource.includes('isFreeDriveMode = false;\n                                setFreeDriveUi(false);'));
+    assert.ok(css.includes('body.free-drive-active .route-summary-floating .summary-stats-wrapper'));
+    assert.ok(i18n.includes('freeDriveStart: "목적지 없이 자유 주행"'));
+    assert.ok(i18n.includes('freeDriveStart: "Free drive without destination"'));
 });
 
 test('provisional route geometry is hidden until a reliable live GPS origin is rerouted', () => {
@@ -2886,7 +2912,7 @@ test('provisional route geometry is hidden until a reliable live GPS origin is r
     assert.ok(appSource.includes('let verifiedRouteOriginProvisional = false'));
     assert.ok(appSource.includes('snapToRoute: !verifiedRouteOriginProvisional'));
     assert.ok(appSource.includes('if (verifiedRouteOriginProvisional) return;'));
-    assert.ok(appSource.includes('navigationRouteNeedsReliableOrigin = verifiedRouteOriginProvisional'));
+    assert.ok(appSource.includes('navigationRouteNeedsReliableOrigin = !isFreeDriveMode && (verifiedRouteOriginProvisional'));
     assert.ok(appSource.includes("updateRoute(true, { reason: 'gps-origin-refinement' })"));
     assert.ok(appSource.includes("? 'GPS 보정 중' : 'Refining GPS'"));
 });

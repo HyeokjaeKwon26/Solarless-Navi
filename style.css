@@ -958,6 +958,35 @@ body.pip-mode .map-attribution {
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
+.free-drive-start-btn {
+    width: 100%;
+    margin-top: 10px;
+    padding: 13px 16px;
+    border: 1px solid #38bdf8;
+    border-radius: 12px;
+    background: rgba(3, 105, 161, 0.2);
+    color: #7dd3fc;
+    font-size: 14px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.free-drive-start-btn.active,
+.nav-btn.free-drive.active {
+    border-color: #f87171;
+    background: rgba(185, 28, 28, 0.28);
+    color: #fecaca;
+}
+
+body.free-drive-active .route-summary-floating .summary-stats-wrapper {
+    display: none;
+}
+
+body.free-drive-active .route-summary-floating {
+    min-width: 0;
+    padding: 8px;
+}
+
 .api-status-banner:not(.active) { display: none; }
 .api-status-banner.active { opacity: 1; transform: translateY(0); pointer-events: auto; }
 
