@@ -30,7 +30,7 @@ sandbox.window = sandbox;
 sandbox.self = sandbox;
 vm.createContext(sandbox);
 
-for (const file of ['js/nrel-spa.js', 'js/solar-physics.js', 'js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/geocoder.js', 'js/offline-map.js', 'js/app-version.js']) {
+for (const file of ['js/nrel-spa.js', 'js/solar-physics.js', 'js/weather-radiation.js', 'js/suncalc.js', 'js/route-state.js', 'js/scene-shadow.js', 'js/shadow-router.js', 'js/geocoder.js', 'js/offline-map.js', 'js/app-version.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), sandbox, { filename: file });
 }
 
@@ -1093,6 +1093,34 @@ test('initial GPS acquisition replaces a coarse indoor fix with a precise fix', 
     assert.equal(requests, 2);
 });
 
+test('initial GPS acquisition permits the best coarse fix instead of blocking startup', async () => {
+    const positions = [
+        { coords: { latitude: 42.4, longitude: -71.1, accuracy: 220 }, timestamp: Date.now() },
+        { coords: { latitude: 42.4002, longitude: -71.1002, accuracy: 140 }, timestamp: Date.now() + 1000 }
+    ];
+    let requests = 0;
+    const geolocation = {
+        getCurrentPosition(success) { success(positions[requests++]); }
+    };
+    const result = await RouteState.acquireInitialPosition(geolocation);
+    assert.equal(result, positions[1]);
+    assert.equal(requests, 2);
+});
+
+test('coarse quick GPS remains usable when the precise follow-up times out', async () => {
+    const quick = { coords: { latitude: 42.4, longitude: -71.1, accuracy: 180 }, timestamp: Date.now() };
+    let requests = 0;
+    const geolocation = {
+        getCurrentPosition(success, error) {
+            requests += 1;
+            if (requests === 1) success(quick);
+            else { const timeout = new Error('timeout'); timeout.code = 3; error(timeout); }
+        }
+    };
+    assert.equal(await RouteState.acquireInitialPosition(geolocation), quick);
+    assert.equal(requests, 2);
+});
+
 test('navigation rejects low-accuracy and implausible indoor GPS jumps', () => {
     const distanceMeters = (lat1, lng1, lat2, lng2) => ShadowRouter.calculateDistanceMeters(lat1, lng1, lat2, lng2);
     const previous = { lat: 42.4, lng: -71.1, timestamp: 10000, accuracy: 12 };
@@ -1723,7 +1751,7 @@ test('identical route groups invoke scene analysis once and return scene-tier re
     }
 });
 
-test('partial scene failure keeps a valid precision baseline and excludes failed alternatives', async () => {
+test('partial scene failure preserves diagnostics but downgrades every final comparison to one tier', async () => {
     const originalFetch = sandbox.fetch;
     const originalSceneFetch = SceneShadow.fetchSceneForRoute;
     const originalPrecomputedFetch = SceneShadow.fetchPrecomputedSceneForRoute;
@@ -1752,12 +1780,12 @@ test('partial scene failure keeps a valid precision baseline and excludes failed
             { candidates: rawRoutes, preferredRouteRole: 'fastest' }
         ));
         assert.ok(sceneCalls > 1);
-        assert.equal(result.analysisMode, 'scene');
-        assert.equal(result.routes.fastest.analysisMode, 'scene');
-        assert.equal(result.routes.glareFree.analysisMode, 'scene');
-        assert.equal(result.routes.shade.analysisMode, 'scene');
-        assert.equal(result.routes.glareFree.id, result.routes.fastest.id);
-        assert.equal(result.routes.shade.id, result.routes.fastest.id);
+        assert.equal(result.analysisMode, 'heuristic');
+        assert.equal(result.routes.fastest.analysisMode, 'heuristic');
+        assert.equal(result.routes.glareFree.analysisMode, 'heuristic');
+        assert.equal(result.routes.shade.analysisMode, 'heuristic');
+        assert.ok([result.routes.fastest, result.routes.glareFree, result.routes.shade]
+            .every(route => route.analysisMode === result.routes.fastest.analysisMode));
         assert.ok(result.routes.all.some(route => route.sceneAnalysis));
     } finally {
         sandbox.fetch = originalFetch;
@@ -2386,7 +2414,18 @@ test('map summary exposes destination, arrival clock, remaining time, and distan
     assert.ok(remainingPath.includes('buildStepTimeLookup'));
     assert.ok(remainingPath.includes('selectedRouteObj._remainingTimeLookup'));
     assert.ok(remainingPath.includes('updateRemainingSummary(remSec, remDistMeters)'));
-    assert.ok(appSource.includes('new Date(Date.now() + Math.max(0, Number(remainingSec) || 0) * 1000)'));
+    assert.ok(appSource.includes('RouteState.formatArrivalDateTime(Date.now(), remainingSec, I18n.getLanguage())'));
+});
+
+test('arrival summary includes a date after midnight and condenses multi-day duration', () => {
+    const now = new Date(2026, 7, 25, 22, 0, 0).getTime();
+    const sameDay = RouteState.formatArrivalDateTime(now, 60 * 60, 'en-US');
+    const multiDay = RouteState.formatArrivalDateTime(now, 3200 * 60, 'en-US');
+    assert.equal(sameDay.includes('Aug'), false);
+    assert.equal(multiDay.includes('Aug'), true);
+    assert.equal(RouteState.formatRemainingDuration(3218 * 60, false), '2d 5h');
+    assert.equal(RouteState.formatRemainingDuration(3218 * 60, true), '2일 5시간');
+    assert.equal(RouteState.formatRemainingDuration(67 * 60, false), '1h 7min');
 });
 
 test('planning mode changes reuse the current analysis without aborting scene downloads', () => {
@@ -2892,4 +2931,189 @@ test('Android location service activation is permission/provider-aware and repor
     assert.ok(plugin.includes('hasEnabledLocationProvider(activity)'));
     assert.ok(plugin.includes('result.put("locationServiceStarted", locationServiceStarted)'));
     assert.ok(plugin.includes('navigationActive = locationServiceStarted;'));
+});
+
+function createForecastProfile(date, values = {}) {
+    const center = new Date(date).getTime();
+    const times = [center - 3600000, center, center + 3600000];
+    const repeat = (value, fallback) => [0, 1, 2].map(() => Number(value ?? fallback));
+    return {
+        available: true,
+        weatherMode: 'forecast',
+        weatherSource: 'mock-open-meteo',
+        weatherRetrievedAt: center - 60000,
+        weatherResolutionMinutes: 15,
+        coverage: 1,
+        maxNearestSampleMeters: 20000,
+        locations: [{
+            lat: 42.35, lng: -71.10, requestedLat: 42.35, requestedLng: -71.10,
+            radiation: {
+                times,
+                dni: repeat(values.dni, 800),
+                direct: repeat(values.direct, 650),
+                diffuse: repeat(values.diffuse, 100),
+                shortwave: repeat(values.shortwave, 750)
+            },
+            cloud: {
+                times,
+                total: repeat(values.cloud, 10), low: repeat(values.cloudLow, 5),
+                mid: repeat(values.cloudMid, 5), high: repeat(values.cloudHigh, 0)
+            }
+        }]
+    };
+}
+
+test('weather DNI changes direct-sun time and energy without changing route geometry', () => {
+    const at = new Date('2026-06-21T16:00:00Z');
+    const coordinates = [[-71.10, 42.35], [-71.09, 42.35]];
+    const clear = ShadowRouter.analyzeRouteSegments(coordinates, at, 600, null, null,
+        createForecastProfile(at, { dni: 800, direct: 650, diffuse: 100, shortwave: 750 }));
+    const cloudy = ShadowRouter.analyzeRouteSegments(coordinates, at, 600, null, null,
+        createForecastProfile(at, { dni: 40, direct: 25, diffuse: 180, shortwave: 205, cloud: 100 }));
+    assert.equal(clear.weatherMode, 'forecast');
+    assert.equal(clear.analysisTier, 'weather-heuristic');
+    assert.equal(clear.sunlitTimeSeconds, 600);
+    assert.equal(cloudy.sunlitTimeSeconds, 0);
+    assert.ok(cloudy.directSolarEnergyWhM2 < clear.directSolarEnergyWhM2);
+    assert.deepEqual(Array.from(cloudy.coordinates), Array.from(clear.coordinates));
+});
+
+test('confirmed building shade removes direct weather exposure but retains diffuse sky energy', () => {
+    const at = new Date('2026-06-21T16:00:00Z');
+    const originalOcclusion = SceneShadow.getSegmentOcclusion;
+    SceneShadow.getSegmentOcclusion = () => ({
+        shadeState: 'confirmed-shade', occlusionRatio: 1, source: 'building'
+    });
+    try {
+        const scene = { precisionReady: true, source: 'test-building', coverage: { buildings: true, terrain: true, tunnels: true } };
+        const result = ShadowRouter.analyzeRouteSegments(
+            [[-71.10, 42.35], [-71.09, 42.35]], at, 600, null, scene,
+            createForecastProfile(at, { dni: 850, direct: 700, diffuse: 160, shortwave: 860 })
+        );
+        assert.equal(result.analysisTier, 'weather-scene');
+        assert.equal(result.sunlitTimeSeconds, 0);
+        assert.equal(result.directSolarEnergyWhM2, 0);
+        assert.ok(result.diffuseSkyEnergyWhM2 > 0);
+    } finally {
+        SceneShadow.getSegmentOcclusion = originalOcclusion;
+    }
+});
+
+test('weather route analysis stays identical between worker and main thread', () => {
+    const at = new Date('2026-06-21T16:00:00Z');
+    const coordinates = [[-71.10, 42.35], [-71.095, 42.35], [-71.09, 42.35]];
+    const profile = createForecastProfile(at, { dni: 620, direct: 480, diffuse: 130, shortwave: 610 });
+    const main = ShadowRouter.analyzeRouteSegments(coordinates, at, 600, null, null, profile);
+    const worker = runSolarWorkerMessage({
+        id: 91,
+        coordinates,
+        startTimestamp: at.getTime(),
+        durationSec: 600,
+        timeLookup: [0, 300, 600],
+        scene: null,
+        weatherProfile: profile
+    });
+    assert.equal(worker.weatherMode, 'forecast');
+    assert.equal(worker.analysisTier, main.analysisTier);
+    assert.ok(Math.abs(worker.directSolarEnergyWhM2 - main.directSolarEnergyWhM2) < 1e-9);
+    assert.equal(worker.sunlitTimeSeconds, main.sunlitTimeSeconds);
+    assert.ok(Math.abs(worker.avgGlareRisk - main.avgGlareRisk) < 1e-12);
+});
+
+test('all unique short-route candidates are precision candidates even when one is heuristically weak', () => {
+    const route = (id, duration, distance, glare, energy) => ({
+        id, candidateIndex: duration, durationSec: duration, baseDurationSec: duration,
+        distanceMeters: distance,
+        analyzed: {
+            avgGlareRisk: glare, directSolarEnergyWhM2: energy, totalDirectSolarExposureUnits: energy,
+            sunlitTimeSeconds: duration, avgShadeCoverage: 0.1, analysisMode: 'heuristic'
+        }
+    });
+    const routes = [
+        route('fast', 600, 9000, 0.1, 40),
+        route('glare', 630, 9500, 0.02, 38),
+        route('weak-before-scene', 660, 10000, 0.5, 60)
+    ];
+    const selected = ShadowRouter.selectPrecisionCandidates(routes, 5, 'shade');
+    assert.deepEqual(new Set(Array.from(selected.precisionCandidates, item => item.id)),
+        new Set(['fast', 'glare', 'weak-before-scene']));
+});
+
+test('partial scene failure uses one forecast-heuristic tier for every final role', async () => {
+    const at = new Date('2026-06-21T16:00:00Z');
+    const originalWeatherFetch = sandbox.WeatherRadiation.fetchForecastForRoutes;
+    const originalPrecomputed = SceneShadow.fetchPrecomputedSceneForRoute;
+    let sceneCalls = 0;
+    sandbox.WeatherRadiation.fetchForecastForRoutes = async () => createForecastProfile(at, {
+        dni: 700, direct: 550, diffuse: 120, shortwave: 670
+    });
+    SceneShadow.fetchPrecomputedSceneForRoute = async coordinates => {
+        sceneCalls++;
+        if (sceneCalls > 1) throw new Error('mock missing scene tile');
+        return {
+            precisionReady: true,
+            origin: { lat: 42.35, lng: -71.10 },
+            coverage: { buildings: true, terrain: true, tunnels: true },
+            segmentCoverage: Array.from({ length: Math.max(1, coordinates.length - 1) }, () => ({
+                buildings: true, terrain: true, tunnels: true, buildingGround: true
+            })),
+            buildings: [], tunnels: [], terrainSamples: [], terrainProfiles: [], source: 'mock-scene'
+        };
+    };
+    const routes = [
+        { distance: 9000, duration: 600, geometry: { coordinates: [[-71.10, 42.35], [-71.00, 42.35]] }, legs: [{ steps: [] }] },
+        { distance: 9500, duration: 630, geometry: { coordinates: [[-71.10, 42.35], [-71.05, 42.38], [-71.00, 42.35]] }, legs: [{ steps: [] }] },
+        { distance: 10000, duration: 660, geometry: { coordinates: [[-71.10, 42.35], [-71.05, 42.32], [-71.00, 42.35]] }, legs: [{ steps: [] }] }
+    ];
+    try {
+        const result = await suppressExpectedWarnings(() => ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 42.35, lng: -71.10 }, { lat: 42.35, lng: -71.00 }, at, false,
+            { candidates: routes, disableLiveSceneFallback: true }
+        ));
+        assert.ok(sceneCalls > 1);
+        assert.equal(result.weatherMode, 'forecast');
+        [result.routes.fastest, result.routes.glareFree, result.routes.shade].forEach(selected => {
+            assert.equal(selected.analysisMode, 'heuristic');
+            assert.equal(selected.analysisTier, 'weather-heuristic');
+            assert.equal(selected.weatherMode, 'forecast');
+        });
+        assert.ok(result.routes.all.some(candidate => candidate.sceneAnalysis), 'successful scene remains diagnostic');
+    } finally {
+        sandbox.WeatherRadiation.fetchForecastForRoutes = originalWeatherFetch;
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputed;
+    }
+});
+
+test('weather outage never prevents a valid OSRM candidate from returning with Bird fallback', async () => {
+    const at = new Date('2026-06-21T16:00:00Z');
+    const originalWeatherFetch = sandbox.WeatherRadiation.fetchForecastForRoutes;
+    const originalPrecomputed = SceneShadow.fetchPrecomputedSceneForRoute;
+    sandbox.WeatherRadiation.fetchForecastForRoutes = async () => { throw new Error('mock weather outage'); };
+    SceneShadow.fetchPrecomputedSceneForRoute = async () => null;
+    const raw = {
+        distance: 1000, duration: 100,
+        geometry: { coordinates: [[-71.10, 42.35], [-71.09, 42.35]] },
+        legs: [{ steps: [] }]
+    };
+    try {
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes(
+            { lat: 42.35, lng: -71.10 }, { lat: 42.35, lng: -71.09 }, at, false,
+            { candidates: [raw], disableLiveSceneFallback: true }
+        );
+        assert.ok(result.routes.fastest);
+        assert.equal(result.weatherMode, 'clear-sky-fallback');
+        assert.equal(result.weatherFallbackReason, 'WEATHER_DATA_UNAVAILABLE');
+        assert.equal(result.routes.fastest.analyzed.weatherMode, 'clear-sky-fallback');
+    } finally {
+        sandbox.WeatherRadiation.fetchForecastForRoutes = originalWeatherFetch;
+        SceneShadow.fetchPrecomputedSceneForRoute = originalPrecomputed;
+    }
+});
+
+test('identical purpose routes are labeled as no meaningful alternative', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('유의미한 대안 경로 없음'));
+    assert.ok(appSource.includes('No meaningful alternative route'));
+    assert.ok(appSource.includes('glr.id === fst.id'));
+    assert.ok(appSource.includes('shd.id === fst.id'));
 });

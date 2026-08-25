@@ -27,3 +27,17 @@ THIS SOFTWARE IS PROVIDED BY THE CONTRACTOR "AS IS" AND ANY EXPRESS OR IMPLIED W
 Reference: Reda, I., Andreas, A. (2004). "Solar Position Algorithm for Solar Radiation Applications." Solar Energy, 76(5), 577-589.
 
 Original source: https://midcdmz.nrel.gov/spa/
+
+## Open-Meteo Weather Forecast API
+
+SolarLess Navi optionally requests forecast direct-normal, direct-horizontal,
+diffuse and shortwave radiation plus cloud cover from Open-Meteo. Weather data
+is attributed to Open-Meteo and the national weather services/models selected
+by its Best Match service. Open-Meteo publishes weather data under CC BY 4.0;
+API availability and commercial/non-commercial usage conditions are governed
+by the provider's current terms.
+
+- Documentation: https://open-meteo.com/en/docs
+- Licence: https://open-meteo.com/en/license
+- Terms: https://open-meteo.com/en/terms
+- Creative Commons Attribution 4.0: https://creativecommons.org/licenses/by/4.0/

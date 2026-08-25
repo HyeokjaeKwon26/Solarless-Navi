@@ -7,7 +7,7 @@
 // The scene module is shared with the main thread.  If a WebView blocks
 // worker imports, the worker still completes with the documented heuristic
 // fallback instead of failing route analysis.
-try { importScripts('nrel-spa.js', 'solar-physics.js', 'scene-shadow.js'); } catch (e) { /* optional physics/scene data */ }
+try { importScripts('nrel-spa.js', 'solar-physics.js', 'weather-radiation.js', 'scene-shadow.js'); } catch (e) { /* optional physics/scene data */ }
 
 /* ===== Inlined SunCalc getPosition (NOAA/AA+ Astronomical Algorithms) ===== */
 const PI = Math.PI, sin = Math.sin, cos = Math.cos, tan = Math.tan,
@@ -127,7 +127,7 @@ function estimateSegmentShade(p1, p2, sunPos) {
 /* ===== Worker Message Handler ===== */
 
 self.onmessage = function (e) {
-    const { id, coordinates, startTimestamp, durationSec, timeLookup: timeLookupArr, scene } = e.data;
+    const { id, coordinates, startTimestamp, durationSec, timeLookup: timeLookupArr, scene, weatherProfile } = e.data;
 
     // Keep scene capability checks outside the segment loop.  The previous
     // implementation declared `useScene` inside the loop and then referenced
@@ -176,6 +176,7 @@ self.onmessage = function (e) {
     let confirmedShadeDistance = 0, confirmedSceneDistance = 0;
     let uncertainSceneDistance = 0, uncertainSceneTimeSeconds = 0;
     let estimatedShadeWeighted = 0, estimatedDistance = 0;
+    let forecastSegmentCount = 0;
 
     for (let i = 0; i < n - 1; i++) {
         const p1 = [coordinates[i][1], coordinates[i][0]];
@@ -194,8 +195,25 @@ self.onmessage = function (e) {
         const clearSkyIrradiance = self.SolarPhysics && typeof self.SolarPhysics.birdClearSky === 'function'
             ? self.SolarPhysics.birdClearSky(segSunPos, new Date(passTimeMs), atmosphereOptions)
             : { dni: 1000 * calculateSolarUvIntensity(segSunPos.altitude), dhi: 0, ghi: 1000 * calculateSolarUvIntensity(segSunPos.altitude), directHorizontal: 1000 * calculateSolarUvIntensity(segSunPos.altitude), model: 'GEOMETRIC_FALLBACK', atmosphereSource: 'none' };
+        const weather = weatherProfile && self.WeatherRadiation && typeof self.WeatherRadiation.interpolateAt === 'function'
+            ? self.WeatherRadiation.interpolateAt(weatherProfile, p1[0], p1[1], passTimeMs) : null;
+        const altitudeRad = Math.max(0, Number(segSunPos.altitude) || 0) * Math.PI / 180;
+        const irradiance = weather ? {
+            dni: Math.max(0, Number(weather.dni) || 0),
+            directHorizontal: Number.isFinite(Number(weather.directRadiation))
+                ? Math.max(0, Number(weather.directRadiation))
+                : Math.max(0, Number(weather.dni) || 0) * Math.sin(altitudeRad),
+            dhi: Math.max(0, Number(weather.diffuseRadiation) || 0),
+            ghi: Number.isFinite(Number(weather.shortwaveRadiation))
+                ? Math.max(0, Number(weather.shortwaveRadiation))
+                : Math.max(0, Number(weather.directRadiation) || 0) + Math.max(0, Number(weather.diffuseRadiation) || 0),
+            model: 'OPEN_METEO_FORECAST',
+            atmosphereSource: clearSkyIrradiance.atmosphereSource,
+            weather
+        } : clearSkyIrradiance;
+        if (weather) forecastSegmentCount++;
         const sunIntensity = self.SolarPhysics && typeof self.SolarPhysics.normalizedDirectExposure === 'function'
-            ? self.SolarPhysics.normalizedDirectExposure(clearSkyIrradiance, 0)
+            ? self.SolarPhysics.normalizedDirectExposure(irradiance, 0)
             : calculateSolarUvIntensity(segSunPos.altitude);
         const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
         const sceneResult = useScene && self.SceneShadow
@@ -208,18 +226,18 @@ self.onmessage = function (e) {
         const confirmedOcclusion = sceneResult && Number.isFinite(sceneResult.occlusionRatio)
             ? Math.max(0, Math.min(1, Number(sceneResult.occlusionRatio)))
             : null;
-        const glareRisk = calculateSegmentGlare(heading, segSunPos, clearSkyIrradiance, confirmedOcclusion);
+        const glareRisk = calculateSegmentGlare(heading, segSunPos, irradiance, confirmedOcclusion);
         const directSolarExposure = self.SolarPhysics && typeof self.SolarPhysics.normalizedDirectExposure === 'function'
-            ? self.SolarPhysics.normalizedDirectExposure(clearSkyIrradiance, confirmedOcclusion)
+            ? self.SolarPhysics.normalizedDirectExposure(irradiance, confirmedOcclusion)
             : calculateDirectSolarExposure(sunIntensity, confirmedOcclusion);
         const shadeScore = shadeState === 'uncertain'
             ? 0
             : (confirmedOcclusion === null ? estimatedShadePotential : confirmedOcclusion);
         const segmentDurationSec = Math.max(0, Number(timeLookup[i + 1]) - Number(timeLookup[i]));
-        const directHorizontalWm2 = Math.max(0, Number(clearSkyIrradiance.directHorizontal) || 0);
+        const directHorizontalWm2 = Math.max(0, Number(irradiance.directHorizontal) || 0);
         const directEnergyWhM2 = directHorizontalWm2 * (1 - (confirmedOcclusion === null ? 0 : confirmedOcclusion)) * segmentDurationSec / 3600;
-        const clearDirectEnergyWhM2 = directHorizontalWm2 * segmentDurationSec / 3600;
-        const diffuseEnergyWhM2 = Math.max(0, Number(clearSkyIrradiance.dhi) || 0) * segmentDurationSec / 3600;
+        const clearDirectEnergyWhM2 = Math.max(0, Number(clearSkyIrradiance.directHorizontal) || 0) * segmentDurationSec / 3600;
+        const diffuseEnergyWhM2 = Math.max(0, Number(irradiance.dhi) || 0) * segmentDurationSec / 3600;
 
         segments.push({
             p1,
@@ -234,6 +252,8 @@ self.onmessage = function (e) {
             occlusionRatio: confirmedOcclusion,
             sunIntensity,
             clearSkyIrradiance,
+            irradiance,
+            weather,
             atmosphereOptions,
             directSolarExposure,
             directHorizontalIrradianceWm2: directHorizontalWm2,
@@ -256,7 +276,9 @@ self.onmessage = function (e) {
         totalDirectSolarEnergyWhM2 += directEnergyWhM2;
         clearSkyDirectEnergyWhM2 += clearDirectEnergyWhM2;
         diffuseSkyEnergyWhM2 += diffuseEnergyWhM2;
-        if (directHorizontalWm2 > 0 && confirmedOcclusion !== 1) {
+        const directSunThreshold = self.WeatherRadiation
+            ? self.WeatherRadiation.DIRECT_SUN_DNI_THRESHOLD_WM2 : 120;
+        if (segSunPos.altitude > 0 && Number(irradiance.dni) >= directSunThreshold && confirmedOcclusion !== 1) {
             sunlitTimeSeconds += segmentDurationSec;
             sunlitDistanceMeters += segDist;
         }
@@ -274,6 +296,13 @@ self.onmessage = function (e) {
             estimatedDistance += segDist;
             estimatedShadeWeighted += estimatedShadePotential * segDist;
         }
+    }
+
+    // A partially covered forecast must not be mixed with clear-sky values.
+    // Ask the main thread to retry this route uniformly with Bird data.
+    if (weatherProfile && segments.length && forecastSegmentCount !== segments.length) {
+        self.postMessage({ id, result: { weatherFallbackRequired: true } });
+        return;
     }
 
     const denom = totalPathMeters || 1;
@@ -315,6 +344,16 @@ self.onmessage = function (e) {
             segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
             sceneSource: useScene && scene.source ? scene.source : 'heuristic fallback',
             analysisMode,
+            analysisTier: weatherProfile
+                ? (analysisMode === 'scene' ? 'weather-scene' :
+                    (analysisMode === 'hybrid-scene' ? 'weather-hybrid-scene' : 'weather-heuristic'))
+                : (analysisMode === 'scene' ? 'clear-sky-scene' :
+                    (analysisMode === 'hybrid-scene' ? 'clear-sky-hybrid-scene' : 'clear-sky-heuristic')),
+            weatherMode: weatherProfile ? 'forecast' : 'clear-sky-fallback',
+            weatherCoverage: segments.length ? forecastSegmentCount / segments.length : 0,
+            weatherRetrievedAt: weatherProfile && weatherProfile.weatherRetrievedAt || null,
+            weatherResolutionMinutes: weatherProfile && weatherProfile.weatherResolutionMinutes || null,
+            weatherSource: weatherProfile && weatherProfile.weatherSource || 'bird-clear-sky',
             solarModelVersion: self.SolarPhysics ? self.SolarPhysics.MODEL_VERSION : 'legacy-fallback',
             solarReferences: self.SolarPhysics ? self.SolarPhysics.REFERENCES : null,
             atmosphereSource: segments[0] && segments[0].clearSkyIrradiance ? segments[0].clearSkyIrradiance.atmosphereSource : 'none'

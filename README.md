@@ -24,7 +24,7 @@ OSRM 도로 후보
   → 모든 후보를 같은 경량 모델로 예비 분석
   → 빠른 경로와 목적별 유력 후보 선정
   → 필요한 5 km 장면 타일만 다운로드·로컬 캐시
-  → 건물·터널·지형 차광과 구간별 태양 위치를 순차 계산
+  → Open-Meteo 기상예보와 건물·터널·지형 차광을 순차 계산
   → 같은 분석 등급 안에서 직사광선 노출시간·총 직접 일사 에너지·눈부심 비교
 ```
 
@@ -47,7 +47,7 @@ $$T_i=T_0+\frac{t_i}{\sum_j t_j}T_{route}$$
 
 ### 3. 맑은하늘 일사: Bird 모델
 
-Bird clear-sky 모델로 직접법선일사 `DNI_i`, 산란수평일사 `DHI_i`, 전천수평일사 `GHI_i`를 추정합니다. 현재 앱은 실제 기상 관측값 대신 다음 표준 대기 가정을 사용합니다.
+Bird clear-sky 모델로 직접법선일사 `DNI_i`, 산란수평일사 `DHI_i`, 전천수평일사 `GHI_i`의 맑은하늘 기준값을 추정합니다. 경로를 즉시 표시하는 1차 계산과 기상예보를 사용할 수 없는 경우에는 다음 표준 대기 가정을 사용합니다.
 
 | 입력 | 기본값 |
 |:--|--:|
@@ -62,7 +62,16 @@ $$I_{dir,i}=DNI_i\max(0,\cos z_i)$$
 
 - Bird & Hulstrom, [A Simplified Clear Sky Model](https://doi.org/10.2172/6510849)
 
-따라서 구름, 연기, 적설, 실제 습도·에어로졸 변화는 현재 값에 반영되지 않습니다.
+### 3-1. 기상예보 직접일사 보정
+
+백그라운드 보정에서는 경로를 약 10 km 또는 15분 통과 간격으로 표본화하고 Open-Meteo의 15분별 `direct_normal_irradiance`, `direct_radiation`, `diffuse_radiation`, `shortwave_radiation`과 시간별 운량을 조회합니다. 겹치는 경로의 위치 셀은 한 번만 조회하고, 각 구간의 예상 통과시각에 선형 보간합니다. 예보가 완전히 확보된 비교 후보에만 같은 기상 등급을 적용합니다.
+
+예보 범위 밖의 날짜, 응답 누락, 시간초과 또는 네트워크 장애에서는 모든 후보가 Bird 맑은하늘 기준으로 함께 돌아갑니다. 일부 구간만 예보값을 쓰고 나머지를 맑은하늘 값으로 채워 한 점수에 섞지 않습니다. 성공 예보는 25분, 실패 결과는 약 90초만 메모리에 보관하며 취소된 요청은 캐시에 남기지 않습니다.
+
+이 예보는 미래의 실제 구름을 확정하는 관측값이 아니며 연기, 국지 안개, 건물 주변 미기후와 급격한 구름 변화가 다를 수 있습니다. 사용 시점의 모델·공간격자·발행시각에 따른 불확실성이 있습니다.
+
+- Open-Meteo [Weather Forecast API](https://open-meteo.com/en/docs)
+- Open-Meteo [요금·이용 조건](https://open-meteo.com/en/pricing)
 
 ### 4. 건물·지형·터널 차광
 
@@ -81,9 +90,9 @@ $$O_i=\begin{cases}1,&\text{오차 하한에서도 직달광 차단}\cr0,&\text{
 
 ### 5. 직사광선 노출시간과 총 직접 일사 에너지
 
-구간의 직접수평일사가 0보다 크고 건물·지형·터널에 의해 확정 차광되지 않았다면 그 구간의 시간을 직사광선 노출 예상시간에 더합니다. 데이터가 없거나 차광 판정이 불확실한 구간은 그늘을 만들어내지 않도록 보수적으로 노출시간에 포함합니다.
+태양이 지평선 위에 있고 예보 또는 Bird 기준 `DNI_i`가 120 W/m² 이상이며 건물·지형·터널에 의해 확정 차광되지 않았다면 그 구간의 시간을 직사광선 노출 예상시간에 더합니다. 데이터가 없거나 차광 판정이 불확실한 구간은 그늘을 만들어내지 않도록 보수적으로 노출시간에 포함합니다. 120 W/m²는 일조시간 판정에 쓰이는 복사 기준이며 의학적 보호 임계값이 아닙니다.
 
-$$T_{sun}=\sum_i \mathbf{1}\!\left[I_{dir,i}>0\land O_i\ne1\right]\Delta t_i$$
+$$T_{sun}=\sum_i \mathbf{1}\!\left[\alpha_i>0\land DNI_i\ge120\land O_i\ne1\right]\Delta t_i$$
 
 그늘 우선 경로는 허용 가능한 우회 후보 중 `T_sun`이 가장 짧은 경로를 먼저 선택합니다. 노출시간 차이가 30초 이내이면 구간 표본·시간 매핑의 작은 차이로 보아, **거리 평균이 아닌 시간 적분 직접 일사 에너지**가 더 낮은 경로를 선택합니다. 두 값도 같으면 주행시간이 짧은 경로를 사용합니다. 30초 기준은 의학적 임계값이 아니라 불필요한 우회를 막기 위한 제품상 잡음 방지 기준입니다.
 
@@ -169,6 +178,7 @@ CSV, JSON과 SVG 그래프도 보고서와 함께 저장됩니다. 재현 명령
 | 장면 fallback | OSM Overpass, OpenTopoData |
 | 지도 | CARTO Voyager, OpenStreetMap contributors |
 | 사전계산 장면 | GitHub Releases |
+| 기상예보·직접일사 | Open-Meteo |
 
 공개 서비스는 장애·속도제한·정책 변경이 있을 수 있습니다. 다운로드한 장면은 재사용하지만 새 도로 경로의 오프라인 계산은 지원하지 않습니다.
 
@@ -203,6 +213,7 @@ SolarLess Navi는 연구·연습 목적의 실험용 소프트웨어입니다. �
 - 도로·건물·터널: OpenStreetMap ODbL
 - 태양 위치: `nrel-spa`와 NREL SPA — 자세한 조건은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - 지형: SRTM 및 fallback ASTER30m
+- 기상예보: Open-Meteo Forecast API — 공급자 표시와 이용 조건은 해당 서비스 정책을 따름
 
 ## 개발자
 
@@ -222,17 +233,19 @@ SolarLess Navi is an experimental Android-focused navigation app that compares t
 
 1. **Time mapping:** OSRM step durations are scaled to the route duration to estimate each segment pass time.
 2. **Solar position:** NREL SPA computes zenith and azimuth ([Reda & Andreas](https://doi.org/10.2172/15003974)).
-3. **Clear-sky irradiance:** the Bird model estimates DNI, DHI and GHI under a declared standard atmosphere ([Bird & Hulstrom](https://doi.org/10.2172/6510849)). It does not use live clouds or smoke.
+3. **Clear-sky irradiance and weather:** the Bird model provides the immediate clear-sky baseline ([Bird & Hulstrom](https://doi.org/10.2172/6510849)). Background refinement samples the route at approximately 10 km or 15-minute intervals and obtains 15-minute DNI/direct/diffuse/shortwave radiation plus hourly cloud cover from the [Open-Meteo Forecast API](https://open-meteo.com/en/docs). Overlapping route cells share requests. Forecast values are interpolated to segment pass times. Forecasts are predictions rather than observations and may miss smoke, fog, rapid cloud changes and street-scale microclimate.
 4. **Occlusion and uncertainty:** a sun ray is tested against 2.5D OSM buildings, tunnels and SRTM terrain profiles. A v3 scene confirms shade only when the obstruction remains under the lower height/elevation bound. `building:levels` uses 3.2 m/storey with a 3.0–4.5 m sensitivity envelope; missing heights use 6 m with a 3–12 m envelope. `min_height` and `building:min_level` preserve the open space below floating building parts. Terrain uses a ±10 m relative vertical-error test derived from the NASADEM/SRTM 90% guidance. DEM elevation also supplies the pressure correction used by SPA/Bird when a nearby sample exists. A marginal result is marked uncertain and receives no shade credit. These envelopes are sensitivity bounds, not statistical confidence intervals. Missing buildings, way-only preprocessing of complex multipolygon relations, trees and finite horizontal resolution remain limitations ([NASADEM guide](https://lpdaac.usgs.gov/documents/592/NASADEM_User_Guide_V1.pdf), [Usui](https://doi.org/10.1177/23998083221116117), [GeoClimate](https://doi.org/10.5194/gmd-15-7505-2022)).
-5. **Direct-sun duration and energy integration:** a segment contributes to expected direct-sun duration when direct horizontal irradiance is positive and scene data does not confirm occlusion. Missing or uncertain occlusion is conservatively counted as exposed:
+5. **Direct-sun duration and energy integration:** a segment contributes to expected direct-sun duration when the sun is above the horizon, forecast or Bird DNI is at least 120 W/m², and scene data does not confirm occlusion. Missing or uncertain occlusion is conservatively counted as exposed:
 
-$$T_{sun}=\sum_i \mathbf{1}[I_{dir,i}>0\land O_i\ne1]\Delta t_i.$$
+$$T_{sun}=\sum_i \mathbf{1}[\alpha_i>0\land DNI_i\ge120\land O_i\ne1]\Delta t_i.$$
 
 The shade-priority route first minimizes `T_sun` among alternatives that pass the detour and minimum-benefit guards. When two routes are within 30 seconds, the app uses time-integrated direct horizontal energy as the tie-breaker,
 
 $$H_{dir}=\sum_i DNI_i\max(0,\cos z_i)(1-O_i)\frac{\Delta t_i}{3600}.$$
 
 and then uses driving duration if both exposure measures are tied. The 30-second band is a product noise guard, not a medical threshold. Overhead sun therefore still counts as direct exposure when no building, terrain or tunnel blocks it; glare remains a separate directional metric.
+
+Forecast coverage is all-or-nothing for a comparison tier. If a candidate lacks the required weather interval, every compared route falls back to the common Bird clear-sky tier. Successful forecasts are cached for 25 minutes, failures for about 90 seconds, and aborted requests are not cached. Diffuse irradiance is integrated separately and is not removed by building shade because the app does not model sky-view factor. Open-Meteo attribution and usage conditions apply; see its [pricing and licence information](https://open-meteo.com/en/pricing).
 
 6. **Disability glare:** the direct component follows the CIE/Stiles–Holladay veiling-luminance relation `Lveil = 10 Eeye / θ²` ([CIE 146:2002](https://www.cie.co.at/publications/cie-collection-glare-2002)). The displayed normalized score is not a crash or medical-risk probability.
 

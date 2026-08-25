@@ -2048,6 +2048,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const source = pos && pos.coords && Number.isFinite(Number(pos.coords.accuracy)) && Number(pos.coords.accuracy) < 100
                     ? 'high-accuracy' : 'last-known/network';
                 applyGpsFix(pos, source);
+                const initialAccuracy = Number(pos && pos.coords && pos.coords.accuracy);
+                if (Number.isFinite(initialAccuracy) && initialAccuracy > 50 && Date.now() - lastGpsUncertainNoticeAt > 30000) {
+                    lastGpsUncertainNoticeAt = Date.now();
+                    const isKo = I18n.getLanguage().startsWith('ko');
+                    showApiNotice(isKo
+                        ? `GPS 정확도가 낮아(약 ±${Math.round(initialAccuracy)}m) 근사 위치에서 시작합니다. 더 정확한 신호가 들어오면 경로와 안내 위치를 자동 보정합니다.`
+                        : `GPS accuracy is low (about ±${Math.round(initialAccuracy)}m). Starting from an approximate position and refining guidance when a better fix arrives.`);
+                }
                 const lat = currentStart.lat;
                 const lng = currentStart.lng;
                 // If a destination was already selected by a resume/GPS
@@ -2488,10 +2496,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert(isKo ? '위치 권한이 거부되었습니다. Android 설정에서 위치 권한을 허용해 주세요.' : 'Location permission was denied. Allow it in Android settings.');
             } else if (e && e.code === 'UNAVAILABLE') {
                 alert(isKo ? '이 기기에서는 위치 정보를 사용할 수 없습니다.' : 'Location is not available on this device.');
-            } else if (e && e.code === 'POSITION_UNCERTAIN') {
-                alert(isKo
-                    ? 'GPS 정확도가 낮아 자동차 안내를 시작할 수 없습니다. 창가나 실외에서 더 정확한 신호를 받은 뒤 다시 시도해 주세요.'
-                    : 'GPS accuracy is too low to start driving guidance. Move near a window or outdoors and try again.');
             } else {
                 alert(isKo ? 'GPS 위치를 아직 받지 못했습니다. 잠시 후 다시 시도해 주세요.' : 'The current GPS fix is not ready yet. Please try again shortly.');
             }
@@ -2637,8 +2641,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function formatArrivalTime(remainingSec) {
+        if (window.RouteState && typeof RouteState.formatArrivalDateTime === 'function') {
+            return RouteState.formatArrivalDateTime(Date.now(), remainingSec, I18n.getLanguage());
+        }
         const arrival = new Date(Date.now() + Math.max(0, Number(remainingSec) || 0) * 1000);
-        return arrival.toLocaleTimeString(I18n.getLanguage(), { hour: 'numeric', minute: '2-digit' });
+        return arrival.toLocaleString(I18n.getLanguage(), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     }
 
     function updateRemainingSummary(remainingSec, remainingMeters) {
@@ -2652,7 +2659,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (distanceEl) distanceEl.innerText = `${(Math.max(0, Number(remainingMeters) || 0) / 1000).toFixed(1)} km`;
         // Avoid the ambiguous single-letter "m", which is normally read as
         // metres in a driving HUD. Korean uses its full minute unit as well.
-        if (durationEl) durationEl.innerText = `${Math.max(1, Math.round(seconds / 60))}${isKo ? '분' : ' min'}`;
+        if (durationEl) durationEl.innerText = window.RouteState && typeof RouteState.formatRemainingDuration === 'function'
+            ? RouteState.formatRemainingDuration(seconds, isKo)
+            : `${Math.max(1, Math.round(seconds / 60))}${isKo ? '분' : ' min'}`;
         const etaUncertainty = window.RouteState && typeof RouteState.estimateGpsEtaUncertainty === 'function'
             ? RouteState.estimateGpsEtaUncertainty(currentStart && currentStart.accuracy, remainingMeters, seconds, {
                 confidenceLevel: currentStart && currentStart.accuracyConfidenceLevel,
@@ -2821,9 +2830,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         const roleMeta = routeData.roleAnalysis && routeData.roleAnalysis[roleKey];
                         const isPrecisionProgress = progress.analysisPhase === 'precision-partial' ||
                             progress.analysisPhase === 'precision-final';
-                        const precisionReadyForRole = isPrecisionProgress && roleKey !== 'fastest' && roleMeta &&
-                            ['scene', 'hybrid-scene'].includes(roleMeta.analysisMode) && enrichedSelection &&
-                            ['scene', 'hybrid-scene'].includes(enrichedSelection.analysisMode);
+                        // Partial callbacks are display-only enrichment. Wait
+                        // for the common weather/scene tier to be finalized
+                        // before replacing active guidance.
+                        const refinedAnalysisTier = enrichedSelection &&
+                            (enrichedSelection.analysisTier || (enrichedSelection.analyzed && enrichedSelection.analyzed.analysisTier));
+                        const precisionReadyForRole = progress.analysisPhase === 'precision-final' && roleKey !== 'fastest' && roleMeta &&
+                            roleMeta.refinementReady === true && (roleMeta.sceneReady === true || roleMeta.weatherReady === true) &&
+                            enrichedSelection && (['scene', 'hybrid-scene'].includes(enrichedSelection.analysisMode) ||
+                                String(refinedAnalysisTier || '').startsWith('weather-'));
                         const precisionStartsAtVehicle = precisionRouteStartsAtVehicle(enrichedSelection);
                         if (isLiveNavActive && precisionReadyForRole && !precisionStartsAtVehicle &&
                             !precisionReroutePending && Date.now() >= precisionRerouteCooldownUntil) {
@@ -2837,9 +2852,11 @@ document.addEventListener('DOMContentLoaded', () => {
                                 .catch(() => { precisionReroutePending = false; });
                             return;
                         }
+                        const currentAnalysisTier = selectedRouteObj &&
+                            (selectedRouteObj.analysisTier || (selectedRouteObj.analyzed && selectedRouteObj.analyzed.analysisTier));
                         const canSwitchActiveGuidance = isLiveNavActive && precisionReadyForRole &&
                             precisionStartsAtVehicle &&
-                            (!selectedRouteObj || !['scene', 'hybrid-scene'].includes(selectedRouteObj.analysisMode) ||
+                            (!selectedRouteObj || currentAnalysisTier !== refinedAnalysisTier ||
                                 selectedRouteObj.id !== enrichedSelection.id);
                         if (canSwitchActiveGuidance) {
                             precisionReroutePending = false;
@@ -3076,7 +3093,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 2. Glare-Free Route (estimated glare possibility and solar exposure)
-        const glrDiffText = formatRouteDetourText(glrMin, glrKmNum, fstMin, fstKmNum);
+        const glrDiffText = glr.id === fst.id
+            ? (isKo ? '유의미한 대안 경로 없음' : 'No meaningful alternative route')
+            : formatRouteDetourText(glrMin, glrKmNum, fstMin, fstKmNum);
         document.getElementById('eta-glare').innerText = `⏱️ ${glrMin}${isKo ? '분' : 'm'} (${glrKm}km)`;
 
         const glrDesc = document.getElementById('desc-glare');
@@ -3091,7 +3110,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 3. Shade Route (estimated shade possibility and solar exposure)
-        const shdDiffText = formatRouteDetourText(shdMin, shdKmNum, fstMin, fstKmNum);
+        const shdDiffText = shd.id === fst.id
+            ? (isKo ? '유의미한 대안 경로 없음' : 'No meaningful alternative route')
+            : formatRouteDetourText(shdMin, shdKmNum, fstMin, fstKmNum);
         document.getElementById('eta-shade').innerText = `⏱️ ${shdMin}${isKo ? '분' : 'm'} (${shdKm}km)`;
 
         const shdDesc = document.getElementById('desc-shade');
@@ -3119,7 +3140,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return isKo ? '야간 · 장면 분석 불필요' : 'Night · scene analysis not needed';
             }
             if (routeData && routeData.enrichmentPending && !['scene', 'hybrid-scene'].includes(mode)) {
-                return isKo ? '휴리스틱 초기값 · 건물·지형 정밀 계산 중' : 'Heuristic first pass · scene refinement running';
+                return isKo ? '휴리스틱 초기값 · 기상·건물·지형 보정 중' : 'Heuristic first pass · weather/scene refinement running';
             }
             if (mode === 'hybrid-scene') {
                 const ratio = coverage && Number.isFinite(Number(coverage.segmentRatio))
@@ -3147,6 +3168,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 SCENE_JSON_PARSE_FAILURE: isKo ? '\uc7a5\uba74 \ud0c0\uc77c \ud30c\uc2f1 \uc2e4\ud328' : 'scene tile parse failure',
                 SCENE_TILE_MISSING: isKo ? '\ud574\ub2f9 \uad6c\uac04 \uc7a5\uba74 \ud0c0\uc77c \uc5c6\uc74c' : 'scene tile not available',
                 SCENE_REFINEMENT_INCOMPLETE: isKo ? '\uc7a5\uba74 \ube44\uad50 \ub4f1\uae09 \ubd88\uc644\uc804' : 'scene comparison tier incomplete',
+                COMMON_SCENE_TIER_INCOMPLETE: isKo ? '일부 장면 미확보 · 공통 기상 등급으로 비교' : 'Partial scene coverage · common weather tier used',
                 SCENE_DATA_UNAVAILABLE: isKo ? '\uc7a5\uba74 \ub370\uc774\ud130 \uc0ac\uc6a9 \ubd88\uac00' : 'scene data unavailable'
             };
             const failureReason = route && route.fallbackReason;
@@ -3158,8 +3180,22 @@ document.addEventListener('DOMContentLoaded', () => {
             const reason = failureReason ? ` (${failureLabels[failureReason] || failureReason})` : '';
             return isKo ? `휴리스틱 추정${reason}${coverageNote}` : `Heuristic estimate${reason}${coverageNote}`;
         }
+        function weatherLabel(route) {
+            const analyzed = route && route.analyzed || {};
+            const mode = route && route.weatherMode || analyzed.weatherMode || routeData && routeData.weatherMode;
+            const retrievedAt = route && route.weatherRetrievedAt || analyzed.weatherRetrievedAt ||
+                routeData && routeData.weatherRetrievedAt;
+            if (mode === 'forecast') {
+                const ageMinutes = Number.isFinite(Number(retrievedAt))
+                    ? Math.max(0, Math.round((Date.now() - Number(retrievedAt)) / 60000)) : null;
+                return isKo
+                    ? `기상예보 반영${ageMinutes === null ? '' : ` · ${ageMinutes}분 전 갱신`}`
+                    : `Weather forecast applied${ageMinutes === null ? '' : ` · updated ${ageMinutes} min ago`}`;
+            }
+            return isKo ? '맑은하늘 추정' : 'Clear-sky estimate';
+        }
         [[fstDesc, fst], [glrDesc, glr], [shdDesc, shd]].forEach(([element, route]) => {
-            if (element) element.innerText += ` | ${sceneLabel(route)}`;
+            if (element) element.innerText += ` | ${weatherLabel(route)} · ${sceneLabel(route)}`;
         });
     }
 

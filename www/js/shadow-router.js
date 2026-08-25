@@ -483,7 +483,32 @@ window.ShadowRouter = (function () {
         return options;
     }
 
-    function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null, scene = null) {
+    function forecastIrradianceAt(weatherProfile, p1, passTime, sunPosition, clearSkyIrradiance) {
+        if (!weatherProfile || !window.WeatherRadiation ||
+            typeof window.WeatherRadiation.interpolateAt !== 'function') return null;
+        const weather = window.WeatherRadiation.interpolateAt(weatherProfile, p1[0], p1[1], passTime);
+        if (!weather) return null;
+        const altitudeRad = Math.max(0, Number(sunPosition && sunPosition.altitude) || 0) * Math.PI / 180;
+        const dni = Math.max(0, Number(weather.dni) || 0);
+        const directHorizontal = Number.isFinite(Number(weather.directRadiation))
+            ? Math.max(0, Number(weather.directRadiation))
+            : dni * Math.sin(altitudeRad);
+        const dhi = Math.max(0, Number(weather.diffuseRadiation) || 0);
+        const ghi = Number.isFinite(Number(weather.shortwaveRadiation))
+            ? Math.max(0, Number(weather.shortwaveRadiation))
+            : directHorizontal + dhi;
+        return {
+            dni,
+            directHorizontal,
+            dhi,
+            ghi,
+            model: 'OPEN_METEO_FORECAST',
+            atmosphereSource: clearSkyIrradiance && clearSkyIrradiance.atmosphereSource || 'forecast-grid',
+            weather
+        };
+    }
+
+    function analyzeRouteSegments(coordinates, dateObj, durationSec = 0, steps = null, scene = null, weatherProfile = null) {
         const segments = [];
         let totalGlareWeighted = 0;
         let totalGlareWeight = 0;
@@ -504,6 +529,7 @@ window.ShadowRouter = (function () {
         let estimatedShadeWeighted = 0;
         let estimatedDistance = 0;
         let totalPathMeters = 0;
+        let forecastSegmentCount = 0;
 
         const segmentDistances = [];
         const analysisMode = sceneAnalysisMode(scene);
@@ -544,8 +570,13 @@ window.ShadowRouter = (function () {
             const clearSkyIrradiance = window.SolarPhysics && typeof window.SolarPhysics.birdClearSky === 'function'
                 ? window.SolarPhysics.birdClearSky(segSunPos, segmentPassTime, atmosphereOptions)
                 : { dni: 1000 * calculateSolarUvIntensity(segSunPos.altitude), dhi: 0, ghi: 1000 * calculateSolarUvIntensity(segSunPos.altitude), directHorizontal: 1000 * calculateSolarUvIntensity(segSunPos.altitude), model: 'GEOMETRIC_FALLBACK', atmosphereSource: 'none' };
+            const forecastIrradiance = forecastIrradianceAt(
+                weatherProfile, p1, segmentPassTime, segSunPos, clearSkyIrradiance
+            );
+            const irradiance = forecastIrradiance || clearSkyIrradiance;
+            if (forecastIrradiance) forecastSegmentCount++;
             const sunIntensity = window.SolarPhysics && typeof window.SolarPhysics.normalizedDirectExposure === 'function'
-                ? window.SolarPhysics.normalizedDirectExposure(clearSkyIrradiance, 0)
+                ? window.SolarPhysics.normalizedDirectExposure(irradiance, 0)
                 : calculateSolarUvIntensity(segSunPos.altitude);
 
             const heading = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
@@ -559,12 +590,12 @@ window.ShadowRouter = (function () {
             const confirmedOcclusion = sceneResult && Number.isFinite(sceneResult.occlusionRatio)
                 ? Math.max(0, Math.min(1, Number(sceneResult.occlusionRatio)))
                 : null;
-            const glareRisk = calculateSegmentGlare(heading, segSunPos, clearSkyIrradiance, confirmedOcclusion);
+            const glareRisk = calculateSegmentGlare(heading, segSunPos, irradiance, confirmedOcclusion);
             // Solar exposure is independent of windshield glare. Confirmed
             // building/terrain/tunnel occlusion removes direct exposure;
             // uncovered/unknown segments conservatively remain exposed.
             const directSolarExposure = window.SolarPhysics && typeof window.SolarPhysics.normalizedDirectExposure === 'function'
-                ? window.SolarPhysics.normalizedDirectExposure(clearSkyIrradiance, confirmedOcclusion)
+                ? window.SolarPhysics.normalizedDirectExposure(irradiance, confirmedOcclusion)
                 : calculateDirectSolarExposure(sunIntensity, confirmedOcclusion);
             // An uncertainty envelope that crosses the solar ray is not
             // evidence of shade. Keep direct exposure and the aggregate shade
@@ -574,10 +605,12 @@ window.ShadowRouter = (function () {
                 ? 0
                 : (confirmedOcclusion === null ? estimatedShadePotential : confirmedOcclusion);
             const segmentDurationSec = Math.max(0, Number(timeLookup[i + 1]) - Number(timeLookup[i]));
-            const directHorizontalWm2 = Math.max(0, Number(clearSkyIrradiance.directHorizontal) || 0);
+            const directHorizontalWm2 = Math.max(0, Number(irradiance.directHorizontal) || 0);
             const directEnergyWhM2 = directHorizontalWm2 * (1 - (confirmedOcclusion === null ? 0 : confirmedOcclusion)) * segmentDurationSec / 3600;
-            const clearDirectEnergyWhM2 = directHorizontalWm2 * segmentDurationSec / 3600;
-            const diffuseEnergyWhM2 = Math.max(0, Number(clearSkyIrradiance.dhi) || 0) * segmentDurationSec / 3600;
+            const clearDirectEnergyWhM2 = Math.max(0, Number(clearSkyIrradiance.directHorizontal) || 0) * segmentDurationSec / 3600;
+            // Diffuse sky irradiance is retained separately. Without a sky-view
+            // factor, building shade must not be claimed to remove it.
+            const diffuseEnergyWhM2 = Math.max(0, Number(irradiance.dhi) || 0) * segmentDurationSec / 3600;
 
             segments.push({
                 p1: p1,
@@ -592,6 +625,8 @@ window.ShadowRouter = (function () {
                 occlusionRatio: confirmedOcclusion,
                 sunIntensity,
                 clearSkyIrradiance,
+                irradiance,
+                weather: forecastIrradiance && forecastIrradiance.weather || null,
                 atmosphereOptions,
                 directSolarExposure,
                 directHorizontalIrradianceWm2: directHorizontalWm2,
@@ -614,7 +649,9 @@ window.ShadowRouter = (function () {
             totalDirectSolarEnergyWhM2 += directEnergyWhM2;
             clearSkyDirectEnergyWhM2 += clearDirectEnergyWhM2;
             diffuseSkyEnergyWhM2 += diffuseEnergyWhM2;
-            if (directHorizontalWm2 > 0 && confirmedOcclusion !== 1) {
+            const directSunThreshold = window.WeatherRadiation
+                ? window.WeatherRadiation.DIRECT_SUN_DNI_THRESHOLD_WM2 : 120;
+            if (segSunPos.altitude > 0 && Number(irradiance.dni) >= directSunThreshold && confirmedOcclusion !== 1) {
                 sunlitTimeSeconds += segmentDurationSec;
                 sunlitDistanceMeters += segDist;
             }
@@ -632,6 +669,13 @@ window.ShadowRouter = (function () {
                 estimatedDistance += segDist;
                 estimatedShadeWeighted += estimatedShadePotential * segDist;
             }
+        }
+
+        // Never mix forecast and clear-sky segments in one route score. If a
+        // forecast profile cannot cover the complete route, recompute the
+        // route uniformly with the Bird clear-sky fallback.
+        if (weatherProfile && segments.length && forecastSegmentCount !== segments.length) {
+            return analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene, null);
         }
 
         const denom = totalPathMeters || 1;
@@ -672,6 +716,16 @@ window.ShadowRouter = (function () {
             segmentSceneCoverage: scene && Array.isArray(scene.segmentCoverage) ? scene.segmentCoverage : null,
             sceneSource: useScene && scene.source ? scene.source : 'heuristic fallback',
             analysisMode,
+            analysisTier: weatherProfile
+                ? (analysisMode === 'scene' ? 'weather-scene' :
+                    (analysisMode === 'hybrid-scene' ? 'weather-hybrid-scene' : 'weather-heuristic'))
+                : (analysisMode === 'scene' ? 'clear-sky-scene' :
+                    (analysisMode === 'hybrid-scene' ? 'clear-sky-hybrid-scene' : 'clear-sky-heuristic')),
+            weatherMode: weatherProfile ? 'forecast' : 'clear-sky-fallback',
+            weatherCoverage: segments.length ? forecastSegmentCount / segments.length : 0,
+            weatherRetrievedAt: weatherProfile && weatherProfile.weatherRetrievedAt || null,
+            weatherResolutionMinutes: weatherProfile && weatherProfile.weatherResolutionMinutes || null,
+            weatherSource: weatherProfile && weatherProfile.weatherSource || 'bird-clear-sky',
             solarModelVersion: window.SolarPhysics ? window.SolarPhysics.MODEL_VERSION : 'legacy-fallback',
             solarReferences: window.SolarPhysics ? window.SolarPhysics.REFERENCES : null,
             atmosphereSource: segments[0] && segments[0].clearSkyIrradiance ? segments[0].clearSkyIrradiance.atmosphereSource : 'none'
@@ -970,6 +1024,11 @@ window.ShadowRouter = (function () {
                 occlusionRatio: precision.occlusionRatio,
                 sunIntensity: precision.sunIntensity,
                 directSolarExposure: precision.directSolarExposure,
+                irradiance: precision.irradiance,
+                weather: precision.weather,
+                directHorizontalIrradianceWm2: precision.directHorizontalIrradianceWm2,
+                directSolarEnergyWhM2: precision.directSolarEnergyWhM2,
+                diffuseSkyEnergyWhM2: precision.diffuseSkyEnergyWhM2,
                 shadeSource: precision.shadeSource,
                 sceneOcclusion: precision.sceneOcclusion,
                 solarExposureScore: precision.solarExposureScore,
@@ -1174,6 +1233,10 @@ window.ShadowRouter = (function () {
         }).slice(0, 2);
         const heuristicRoles = selectRouteRoles(routes);
         const role = normalizePreferredRouteRole(preferredRole);
+        const refineAllShortCandidates = routes.length <= 3 && routes.every(route => {
+            const distance = Number(route && (route.distanceMeters ?? (route.raw && route.raw.distance)));
+            return Number.isFinite(distance) && distance <= 30000;
+        });
         // A conservative heuristic pass counts unknown daylight as exposed, so
         // its final shade role can legitimately remain the fastest route. Still
         // refine the best purpose-specific shade signal first; otherwise the
@@ -1188,7 +1251,8 @@ window.ShadowRouter = (function () {
         // Expensive scenes are ordered for user value rather than OSRM array
         // order: the active purpose first, then its duration baseline, then
         // only alternatives that passed the detour/improvement noise guards.
-        [preferred, fastest, otherPurpose, ...glareCandidates, ...shadeCandidates].forEach(route => {
+        [preferred, fastest, otherPurpose, ...glareCandidates, ...shadeCandidates,
+            ...(refineAllShortCandidates ? routes : [])].forEach(route => {
             if (route && !seen.has(route.id) && selected.length < maxCandidates) {
                 seen.add(route.id);
                 selected.push(route);
@@ -1387,7 +1451,12 @@ window.ShadowRouter = (function () {
         const view = Object.assign({}, route, {
             analyzed,
             analysisMode: mode,
-            analysisTier: mode,
+            analysisTier: analyzed && analyzed.analysisTier || mode,
+            weatherMode: analyzed && analyzed.weatherMode || 'clear-sky-fallback',
+            weatherCoverage: analyzed && Number(analyzed.weatherCoverage) || 0,
+            weatherRetrievedAt: analyzed && analyzed.weatherRetrievedAt || null,
+            weatherResolutionMinutes: analyzed && analyzed.weatherResolutionMinutes || null,
+            weatherSource: analyzed && analyzed.weatherSource || 'bird-clear-sky',
             fallbackReason: mode === 'heuristic' ? (fallbackReason || route.fallbackReason || null) : null,
             // A heuristic comparison tier may still have useful partial-scene
             // diagnostics. Prefer that retained coverage instead of masking it
@@ -1410,6 +1479,7 @@ window.ShadowRouter = (function () {
         const baselineResult = fastest ? refinedById.get(fastest.id) : null;
         const baselineReady = !!(baselineResult && baselineResult.ready && baselineResult.refinedAnalyzed);
         const baselineMode = baselineReady ? baselineResult.refinedAnalyzed.analysisMode : 'heuristic';
+        const baselineWeatherMode = baselineReady ? baselineResult.refinedAnalyzed.weatherMode : 'clear-sky-fallback';
         // A failed, unrelated alternative must not discard a valid precision
         // baseline. Compare only candidates that completed with the exact same
         // analysis tier as the fastest baseline; failed/mismatched candidates
@@ -1418,7 +1488,8 @@ window.ShadowRouter = (function () {
             ? unique.filter(route => {
                 const refined = refinedById.get(route.id);
                 return !!(refined && refined.ready && refined.refinedAnalyzed &&
-                    refined.refinedAnalyzed.analysisMode === baselineMode);
+                    refined.refinedAnalyzed.analysisMode === baselineMode &&
+                    refined.refinedAnalyzed.weatherMode === baselineWeatherMode);
             })
             : unique;
         const allReady = baselineReady;
@@ -1656,6 +1727,46 @@ window.ShadowRouter = (function () {
             analyzeRawRoute(route, idx, dateObj, timeOfDayAdjustment, options.signal)));
 
         const selection = selectPrecisionCandidates(analyzedRoutes, 5, options.preferredRouteRole);
+        let weatherProfile = null;
+        let weatherFallbackReason = null;
+        if (window.WeatherRadiation && typeof window.WeatherRadiation.fetchForecastForRoutes === 'function' &&
+            options.disableWeatherRefinement !== true) {
+            const weatherStartedAt = Date.now();
+            if (window.DebugLogger) window.DebugLogger.log('weather-refinement-start', {
+                candidateCount: selection.precisionCandidates.length
+            });
+            try {
+                const forecast = await window.WeatherRadiation.fetchForecastForRoutes(
+                    selection.precisionCandidates, dateObj, {
+                        signal: options.sceneSignal || options.signal,
+                        timeoutMs: options.weatherTimeoutMs || 8000,
+                        fetchImpl: options.weatherFetch
+                    }
+                );
+                if (forecast && forecast.available && Number(forecast.coverage) >= 0.999) {
+                    weatherProfile = forecast;
+                } else {
+                    weatherFallbackReason = forecast && forecast.fallbackReason || 'WEATHER_COVERAGE_INCOMPLETE';
+                }
+                if (window.DebugLogger) window.DebugLogger.log('weather-refinement-end', {
+                    elapsedMs: Date.now() - weatherStartedAt,
+                    mode: weatherProfile ? 'forecast' : 'clear-sky-fallback',
+                    coverage: forecast && forecast.coverage,
+                    reason: weatherFallbackReason
+                });
+            } catch (weatherError) {
+                if ((options.sceneSignal && options.sceneSignal.aborted) || (options.signal && options.signal.aborted)) throw weatherError;
+                weatherFallbackReason = weatherError && weatherError.name === 'AbortError'
+                    ? 'WEATHER_REQUEST_ABORTED' : 'WEATHER_DATA_UNAVAILABLE';
+                if (window.DebugLogger) window.DebugLogger.log('weather-refinement-failure', {
+                    elapsedMs: Date.now() - weatherStartedAt,
+                    reason: weatherFallbackReason,
+                    message: String(weatherError && weatherError.message || weatherError)
+                });
+            }
+        } else {
+            weatherFallbackReason = 'WEATHER_REFINEMENT_DISABLED';
+        }
         function routeIsEntirelyNight(route) {
             const segments = route && route.analyzed && route.analyzed.segments;
             return Array.isArray(segments) && segments.length > 0 && segments.every(segment =>
@@ -1723,7 +1834,10 @@ window.ShadowRouter = (function () {
                     }
                 }
                 if (isPrecisionScene(scene)) {
-                    const sampledAnalysis = await analyzeRouteSegmentsAsync(precisionCoordinates, dateObj, route.durationSec, route.routeSteps, scene, sceneSignal);
+                    const sampledAnalysis = await analyzeRouteSegmentsAsync(
+                        precisionCoordinates, dateObj, route.durationSec, route.routeSteps,
+                        scene, sceneSignal, { weatherProfile }
+                    );
                     refinedAnalyzed = mapPrecisionAnalysisToOriginalGeometry(
                         sampledAnalysis, route.analyzed, rawCoordinates, precisionSampling
                     );
@@ -1735,9 +1849,24 @@ window.ShadowRouter = (function () {
                 console.warn('Scene data unavailable; retaining common heuristic comparison.', sceneError);
                 fallbackReason = sceneFallbackReason(sceneError);
             }
+            // Forecast irradiance is still useful when a scene tile is
+            // unavailable. Re-analyse without scene occlusion so every segment
+            // remains conservatively exposed; this cannot fabricate shade.
+            if (!refinedAnalyzed && weatherProfile) {
+                const weatherOnly = await analyzeRouteSegmentsAsync(
+                    precisionCoordinates, dateObj, route.durationSec, route.routeSteps,
+                    null, options.sceneSignal || options.signal, { weatherProfile }
+                );
+                refinedAnalyzed = mapPrecisionAnalysisToOriginalGeometry(
+                    weatherOnly, route.analyzed, rawCoordinates, precisionSampling
+                );
+            }
             const result = {
                 route, refinedAnalyzed, fallbackReason,
-                ready: !!refinedAnalyzed && ['scene', 'hybrid-scene'].includes(refinedAnalyzed.analysisMode)
+                ready: !!refinedAnalyzed && (
+                    ['scene', 'hybrid-scene'].includes(refinedAnalyzed.analysisMode) ||
+                    refinedAnalyzed.weatherMode === 'forecast'
+                )
             };
             if (refinedAnalyzed) route.sceneAnalysis = refinedAnalyzed;
             route.sceneCoverage = scene && scene.coverage ? { ...scene.coverage } : route.analyzed.sceneCoverage;
@@ -1757,6 +1886,15 @@ window.ShadowRouter = (function () {
             applyExposureReductions(glareTier.baseline, glareTier.selected, null, dateObj, start);
             applyExposureReductions(shadeTier.baseline, null, shadeTier.selected, dateObj, start);
             const roleModes = [fastestTier.mode, glareTier.mode, shadeTier.mode];
+            const roleMeta = tier => ({
+                analysisMode: tier.mode,
+                analysisTier: tier.selected && tier.selected.analysisTier || tier.mode,
+                weatherMode: tier.selected && tier.selected.weatherMode || 'clear-sky-fallback',
+                refinementReady: tier.allReady,
+                sceneReady: tier.allReady && ['scene', 'hybrid-scene'].includes(tier.mode),
+                weatherReady: tier.allReady && tier.selected && tier.selected.weatherMode === 'forecast',
+                fallbackReason: tier.fallbackReason || null
+            });
             return {
                 timeOfDayAdjustment,
                 analysisMode: roleModes.every(mode => mode === 'scene') ? 'scene' :
@@ -1766,13 +1904,19 @@ window.ShadowRouter = (function () {
                 enrichmentPending,
                 backgroundRefinementComplete: !enrichmentPending,
                 refinedAt: Date.now(),
+                weatherMode: weatherProfile ? 'forecast' : 'clear-sky-fallback',
+                weatherCoverage: weatherProfile ? Number(weatherProfile.coverage) || 0 : 0,
+                weatherRetrievedAt: weatherProfile && weatherProfile.weatherRetrievedAt || null,
+                weatherResolutionMinutes: weatherProfile && weatherProfile.weatherResolutionMinutes || null,
+                weatherSource: weatherProfile && weatherProfile.weatherSource || 'bird-clear-sky',
+                weatherFallbackReason,
                 precisionCandidateIds: selection.precisionCandidates.map(route => route.id),
                 refinedCandidateIds: processedResults.map(result => result.route.id),
                 routeCandidates: analyzedRoutes.map(route => route.raw),
                 roleAnalysis: {
-                    fastest: { analysisMode: fastestTier.mode, sceneReady: fastestTier.allReady, fallbackReason: fastestTier.fallbackReason || null },
-                    glareFree: { analysisMode: glareTier.mode, sceneReady: glareTier.allReady, fallbackReason: glareTier.fallbackReason || null },
-                    shade: { analysisMode: shadeTier.mode, sceneReady: shadeTier.allReady, fallbackReason: shadeTier.fallbackReason || null }
+                    fastest: roleMeta(fastestTier),
+                    glareFree: roleMeta(glareTier),
+                    shade: roleMeta(shadeTier)
                 },
                 routes: {
                     fastest: fastestTier.baseline,
@@ -1809,10 +1953,70 @@ window.ShadowRouter = (function () {
             refinedResults.push(...remaining);
         }
 
+        // A final ranking must use one common data tier. If any precision
+        // candidate lacks the same scene tier, preserve successful scene data
+        // for diagnostics but recompute every comparison route uniformly with
+        // forecast irradiance (or uniformly with the initial clear-sky model).
+        const sceneModes = new Set(refinedResults.filter(result => result.ready && result.refinedAnalyzed)
+            .map(result => result.refinedAnalyzed.analysisMode));
+        const weatherModes = new Set(refinedResults.filter(result => result.ready && result.refinedAnalyzed)
+            .map(result => result.refinedAnalyzed.weatherMode || 'clear-sky-fallback'));
+        const uniformSceneTier = refinedResults.length === selection.precisionCandidates.length &&
+            refinedResults.every(result => result.ready && result.refinedAnalyzed &&
+                ['scene', 'hybrid-scene'].includes(result.refinedAnalyzed.analysisMode)) &&
+            sceneModes.size === 1 && weatherModes.size === 1 &&
+            (!weatherProfile || weatherModes.has('forecast'));
+        let comparisonResults = refinedResults;
+        if (!uniformSceneTier && weatherProfile) {
+            const weatherComparisonResults = await mapWithConcurrency(
+                selection.precisionCandidates,
+                Math.min(2, Math.max(1, Number(options.sceneConcurrency) || 1)),
+                async route => {
+                    const sampling = buildPrecisionAnalysisGeometry(route.raw, { steps: route.routeSteps });
+                    const weatherOnly = await analyzeRouteSegmentsAsync(
+                        sampling.coordinates, dateObj, route.durationSec, route.routeSteps,
+                        null, options.sceneSignal || options.signal, { weatherProfile }
+                    );
+                    const mapped = mapPrecisionAnalysisToOriginalGeometry(
+                        weatherOnly, route.analyzed, route.raw.geometry.coordinates, sampling
+                    );
+                    route.weatherAnalysis = mapped;
+                    return {
+                        route,
+                        refinedAnalyzed: mapped,
+                        ready: true,
+                        fallbackReason: 'COMMON_SCENE_TIER_INCOMPLETE'
+                    };
+                },
+                options.signal
+            );
+            if (weatherComparisonResults.every(result => result.refinedAnalyzed &&
+                result.refinedAnalyzed.weatherMode === 'forecast')) {
+                comparisonResults = weatherComparisonResults;
+            } else {
+                weatherProfile = null;
+                weatherFallbackReason = 'WEATHER_SEGMENT_COVERAGE_INCOMPLETE';
+                comparisonResults = selection.precisionCandidates.map(route => ({
+                    route, refinedAnalyzed: null, ready: false,
+                    fallbackReason: 'COMMON_SCENE_TIER_INCOMPLETE'
+                }));
+            }
+        } else if (!uniformSceneTier) {
+            comparisonResults = selection.precisionCandidates.map(route => {
+                const original = refinedResults.find(result => result.route.id === route.id);
+                return {
+                    route,
+                    refinedAnalyzed: null,
+                    ready: false,
+                    fallbackReason: original && original.fallbackReason || 'COMMON_SCENE_TIER_INCOMPLETE'
+                };
+            });
+        }
+
         // Keep successful scene results attached to their route, but select a
         // comparison tier per role. Precision is never compared directly with
         // a heuristic baseline.
-        const refinedById = new Map(refinedResults.map(result => [result.route.id, result]));
+        const refinedById = new Map(comparisonResults.map(result => [result.route.id, result]));
         refinedResults.forEach(({ route, refinedAnalyzed, fallbackReason }) => {
             if (refinedAnalyzed) route.sceneAnalysis = refinedAnalyzed;
             route.sceneCoverage = refinedAnalyzed && refinedAnalyzed.sceneCoverage
@@ -1840,6 +2044,15 @@ window.ShadowRouter = (function () {
         applyExposureReductions(glareTier.baseline, glareFreeRoute, null, dateObj, start);
         applyExposureReductions(shadeTier.baseline, null, shadeRoute, dateObj, start);
         const roleModes = [fastestTier.mode, glareTier.mode, shadeTier.mode];
+        const finalRoleMeta = tier => ({
+            analysisMode: tier.mode,
+            analysisTier: tier.selected && tier.selected.analysisTier || tier.mode,
+            weatherMode: tier.selected && tier.selected.weatherMode || 'clear-sky-fallback',
+            refinementReady: tier.allReady,
+            sceneReady: tier.allReady && ['scene', 'hybrid-scene'].includes(tier.mode),
+            weatherReady: tier.allReady && tier.selected && tier.selected.weatherMode === 'forecast',
+            fallbackReason: tier.fallbackReason || null
+        });
         const finalAnalysisMode = roleModes.every(mode => mode === 'scene')
             ? 'scene'
             : (roleModes.every(mode => mode === 'hybrid-scene') ? 'hybrid-scene'
@@ -1851,15 +2064,21 @@ window.ShadowRouter = (function () {
             enrichmentPending: false,
             backgroundRefinementComplete: true,
             refinedAt: Date.now(),
+            weatherMode: weatherProfile ? 'forecast' : 'clear-sky-fallback',
+            weatherCoverage: weatherProfile ? Number(weatherProfile.coverage) || 0 : 0,
+            weatherRetrievedAt: weatherProfile && weatherProfile.weatherRetrievedAt || null,
+            weatherResolutionMinutes: weatherProfile && weatherProfile.weatherResolutionMinutes || null,
+            weatherSource: weatherProfile && weatherProfile.weatherSource || 'bird-clear-sky',
+            weatherFallbackReason,
             precisionCandidateIds: selection.precisionCandidates.map(route => route.id),
             // Raw OSRM candidates are safe to reuse for a time-only change;
             // their geometry, steps and base duration do not depend on the
             // selected clock time.
             routeCandidates: analyzedRoutes.map(route => route.raw),
             roleAnalysis: {
-                fastest: { analysisMode: fastestTier.mode, sceneReady: fastestTier.allReady, fallbackReason: fastestTier.fallbackReason || null },
-                glareFree: { analysisMode: glareTier.mode, sceneReady: glareTier.allReady, fallbackReason: glareTier.fallbackReason || null },
-                shade: { analysisMode: shadeTier.mode, sceneReady: shadeTier.allReady, fallbackReason: shadeTier.fallbackReason || null }
+                fastest: finalRoleMeta(fastestTier),
+                glareFree: finalRoleMeta(glareTier),
+                shade: finalRoleMeta(shadeTier)
             },
             routes: {
                 fastest: fastestRoute,
@@ -1996,10 +2215,11 @@ window.ShadowRouter = (function () {
     function analyzeRouteSegmentsAsync(coordinates, dateObj, durationSec, steps, scene = null, signal = null, workerOptions = {}) {
         // Build time lookup on main thread (lightweight) so Worker gets it ready
         const timeLookup = buildStepTimeLookup(coordinates, steps, durationSec);
+        const weatherProfile = workerOptions && workerOptions.weatherProfile || null;
 
         const fallback = () => {
             if (signal && signal.aborted) throw createAbortError();
-            const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene);
+            const result = analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene, weatherProfile);
             result.coordinates = coordinates;
             return result;
         };
@@ -2046,13 +2266,21 @@ window.ShadowRouter = (function () {
                         startTimestamp: dateObj.getTime(),
                         durationSec,
                         timeLookup: Array.from(timeLookup),
-                        scene
+                        scene,
+                        weatherProfile
                     });
                 } catch (error) {
                     markWorkerUnavailable(error, generation, true);
                 }
             }).then(result => {
                 if (signal && signal.aborted) throw createAbortError();
+                if (result && result.weatherFallbackRequired) {
+                    // The worker detected incomplete forecast coverage. Re-run
+                    // uniformly with Bird values; never mix tiers by segment.
+                    const clearSky = analyzeRouteSegments(coordinates, dateObj, durationSec, steps, scene, null);
+                    clearSky.coordinates = coordinates;
+                    return clearSky;
+                }
                 // Worker returns segments without coordinates; add them back.
                 if (result && !result.coordinates) result.coordinates = coordinates;
                 return result;

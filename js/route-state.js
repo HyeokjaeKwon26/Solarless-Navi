@@ -168,24 +168,36 @@
         const quickAccuracyMeters = Number(config.quickAccuracyMeters || 30);
         const maxInitialAccuracyMeters = Number(config.maxInitialAccuracyMeters || 50);
         const accuracyOf = position => Number(position && position.coords && position.coords.accuracy);
+        const hasCoordinates = position => Number.isFinite(Number(position && position.coords && position.coords.latitude)) &&
+            Number.isFinite(Number(position && position.coords && position.coords.longitude));
         const isReliable = position => {
             const accuracy = accuracyOf(position);
             return Number.isFinite(accuracy) && accuracy > 0 && accuracy <= maxInitialAccuracyMeters;
         };
+        const bestAvailable = (...positions) => positions.filter(hasCoordinates).sort((a, b) => {
+            const aAccuracy = accuracyOf(a);
+            const bAccuracy = accuracyOf(b);
+            const aRank = Number.isFinite(aAccuracy) && aAccuracy > 0 ? aAccuracy : Infinity;
+            const bRank = Number.isFinite(bAccuracy) && bAccuracy > 0 ? bAccuracy : Infinity;
+            return aRank - bRank;
+        })[0] || null;
         const acquirePrecise = async fallback => {
             try {
                 const precise = await requestGeolocationPosition(geolocation, preciseOptions);
                 if (isReliable(precise)) return precise;
-                if (isReliable(fallback)) return fallback;
-                const uncertain = new Error('Location accuracy is insufficient for driving guidance.');
-                uncertain.code = 'POSITION_UNCERTAIN';
-                uncertain.accuracy = accuracyOf(precise);
-                throw uncertain;
+                // A coarse but valid coordinate is enough to calculate an
+                // approximate road origin. The live guidance filter still
+                // rejects low-confidence movement/reroute updates until a more
+                // reliable fix arrives, so startup is not needlessly blocked.
+                const available = bestAvailable(precise, fallback);
+                if (available) return available;
+                const unavailable = new Error('Location did not contain usable coordinates.');
+                unavailable.code = 'UNAVAILABLE';
+                throw unavailable;
             } catch (error) {
-                // A moderately accurate quick fix remains usable when the
-                // high-accuracy follow-up times out. Very coarse indoor fixes
-                // are never promoted through this fallback.
-                if (isReliable(fallback) && error && error.code !== 'POSITION_UNCERTAIN') return fallback;
+                // Any valid quick fix remains usable as an approximate origin
+                // when the bounded high-accuracy follow-up fails.
+                if (hasCoordinates(fallback)) return fallback;
                 throw error;
             }
         };
@@ -200,6 +212,32 @@
         }
         if (isReliable(quick) && accuracyOf(quick) <= quickAccuracyMeters) return quick;
         return acquirePrecise(quick);
+    }
+
+    function formatArrivalDateTime(nowMs, remainingSec, locale = 'en-US') {
+        const nowValue = Number(nowMs);
+        const now = new Date(Number.isFinite(nowValue) ? nowValue : Date.now());
+        const seconds = Math.max(0, Number(remainingSec) || 0);
+        const arrival = new Date(now.getTime() + seconds * 1000);
+        const sameDay = now.getFullYear() === arrival.getFullYear() &&
+            now.getMonth() === arrival.getMonth() && now.getDate() === arrival.getDate();
+        const options = { hour: 'numeric', minute: '2-digit' };
+        if (!sameDay) {
+            options.month = 'short';
+            options.day = 'numeric';
+            if (now.getFullYear() !== arrival.getFullYear()) options.year = 'numeric';
+        }
+        return arrival.toLocaleString(locale || undefined, options);
+    }
+
+    function formatRemainingDuration(remainingSec, isKorean = false) {
+        const totalMinutes = Math.max(1, Math.round(Math.max(0, Number(remainingSec) || 0) / 60));
+        const days = Math.floor(totalMinutes / (24 * 60));
+        const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+        const minutes = totalMinutes % 60;
+        if (days > 0) return isKorean ? `${days}일 ${hours}시간` : `${days}d ${hours}h`;
+        if (hours > 0) return isKorean ? `${hours}시간 ${minutes}분` : `${hours}h ${minutes}min`;
+        return isKorean ? `${minutes}분` : `${minutes} min`;
     }
 
     function shouldRestartRouteForGpsFix(pendingKey, currentKey, hasDestination, liveNavigationActive) {
@@ -300,6 +338,8 @@
         acquireInitialPosition,
         shouldRestartRouteForGpsFix,
         evaluateNavigationFix,
-        estimateGpsEtaUncertainty
+        estimateGpsEtaUncertainty,
+        formatArrivalDateTime,
+        formatRemainingDuration
     };
 });
