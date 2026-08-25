@@ -90,9 +90,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastNavigationResumeAt = 0;
     let lastGpsPosition = null;
     let lastGpsTimestamp = null;
+    let lastNavigationSpeedKmh = 0;
     let lastRerouteTime = 0;
     let navigationSessionRouteId = null;
     let navigationSessionRouteGeometry = null;
+    let verifiedRouteOriginProvisional = false;
+    let navigationRouteNeedsReliableOrigin = false;
+    let gpsOriginReroutePending = false;
     // Set when a scene-refined glare/shade route has replaced the initial
     // heuristic route during an active navigation session.  This prevents a
     // repeated progress callback from announcing the same switch twice.
@@ -147,6 +151,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 savedAt: Date.now()
             }));
         } catch (e) {}
+    }
+
+    function captureLiveDestinationBackup() {
+        if (!isLiveNavActive) return null;
+        // If the user changes the destination again while a replacement is
+        // pending, keep the last actually guided destination as the rollback
+        // target rather than treating the uncommitted destination as active.
+        if (liveDestinationBackup && liveDestinationBackup.end) {
+            return {
+                end: { lat: Number(liveDestinationBackup.end.lat), lng: Number(liveDestinationBackup.end.lng) },
+                name: liveDestinationBackup.name,
+                verifiedRouteRequestKey: liveDestinationBackup.verifiedRouteRequestKey,
+                verifiedRouteOriginProvisional: !!liveDestinationBackup.verifiedRouteOriginProvisional
+            };
+        }
+        if (!currentEnd) return null;
+        return {
+            end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
+            name: destinationName,
+            verifiedRouteRequestKey,
+            verifiedRouteOriginProvisional
+        };
     }
 
     function clearActiveNavigationSession() {
@@ -1293,12 +1319,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const confirmWaypoint = confirm(confirmMsg);
 
             if (confirmWaypoint) {
-                currentEnd = { lat: nearest.lat, lng: nearest.lng };
-                destinationName = `☕ ${isKo ? '그늘 쉼터' : 'Shaded Rest'}: ${nearest.shortTitle || nearest.displayName}`;
-                document.getElementById('destination-input').value = destinationName;
-                document.getElementById('bar-dest-text').innerText = destinationName;
-                updateRoute();
-                TTSVoice.speak(isKo ? "근처 그늘 쉼터로 경로를 변경했습니다." : "Route updated to nearby shaded rest area.");
+                const restName = `☕ ${isKo ? '그늘 쉼터' : 'Shaded Rest'}: ${nearest.shortTitle || nearest.displayName}`;
+                applyDestinationSelection({ lat: nearest.lat, lng: nearest.lng }, restName, { confirmLive: false });
+                TTSVoice.speak(isKo ? "근처 그늘 쉼터 경로를 계산합니다." : "Calculating a route to the nearby shaded rest area.");
             }
         } else {
             alert(isKo ? "현재 위치 주변 2km 이내에 등록된 그늘 쉼터/주차장을 찾을 수 없습니다." : "No shaded rest spots found within 2km.");
@@ -1357,11 +1380,7 @@ document.addEventListener('DOMContentLoaded', () => {
             chip.addEventListener('click', async () => {
                 const targetName = getLocalizedFavName(fav);
                 if (fav.coords) {
-                    currentEnd = fav.coords;
-                    destinationName = targetName;
-                    document.getElementById('destination-input').value = targetName;
-                    document.getElementById('btn-confirm-destination').disabled = false;
-                    startNavigationFlow();
+                    applyDestinationSelection(fav.coords, targetName);
                 } else {
                     const promptName = getLocalizedFavName(fav);
                     const place = prompt(isKo ? `'${promptName}'의 주소나 장소명을 입력하고 즐겨찾기로 등록하세요:` : `Enter address or place name to register '${promptName}':`);
@@ -1382,11 +1401,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             fav.name = `${promptName.split('(')[0].trim()} (${(results[0].shortTitle || results[0].displayName).split(',')[0]})`;
                             saveFavoritesList(favs);
 
-                            currentEnd = fav.coords;
-                            destinationName = results[0].shortTitle || results[0].displayName;
-                            document.getElementById('destination-input').value = destinationName;
-                            document.getElementById('btn-confirm-destination').disabled = false;
-                            startNavigationFlow();
+                            applyDestinationSelection(
+                                fav.coords,
+                                results[0].shortTitle || results[0].displayName
+                            );
                         } else {
                             if (btn) btn.innerHTML = `<i class="fa-solid fa-route"></i> ${I18n.getText('confirmStartBtn')}`;
                             alert(isKo ? `'${place}' 장소를 찾을 수 없습니다. 정확한 주소를 입력해 주세요.` : `Cannot find place '${place}'. Please enter a valid address.`);
@@ -1558,11 +1576,7 @@ document.addEventListener('DOMContentLoaded', () => {
             row.append(info, removeButton);
 
             info.addEventListener('click', () => {
-                currentEnd = item.coords;
-                destinationName = item.name;
-                document.getElementById('destination-input').value = item.name;
-                document.getElementById('btn-confirm-destination').disabled = false;
-                startNavigationFlow();
+                applyDestinationSelection(item.coords, item.name);
             });
 
             removeButton.addEventListener('click', (e) => {
@@ -2157,9 +2171,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let targetSnapLat = null;
     let targetSnapLng = null;
     let targetSnapHeading = 0;
+    let targetSnapSpeedKmh = 0;
     let vehicleAnimFrameId = null;
     let vehicleAnimationStartedAt = 0;
     let vehicleAnimationFrom = null;
+    let vehicleAnimationDurationMs = 240;
     let lastVehicleMapPanAt = 0;
     let lastAppliedMapRotation = null;
     let manualMapRotation = 0;
@@ -2216,12 +2232,17 @@ document.addEventListener('DOMContentLoaded', () => {
             currentSmoothLat = targetSnapLat;
             currentSmoothLng = targetSnapLng;
             currentSmoothHeading = targetSnapHeading;
-            currentHeading = currentSmoothHeading;
             renderVehicleMarker();
             stopVehicleMarkerAnimation();
             return;
         }
         if (vehicleAnimFrameId !== null) return;
+        const targetGapMeters = currentSmoothLat === null || currentSmoothLng === null
+            ? 0
+            : ShadowRouter.calculateDistanceMeters(currentSmoothLat, currentSmoothLng, targetSnapLat, targetSnapLng);
+        vehicleAnimationDurationMs = window.RouteState && typeof window.RouteState.vehicleMarkerAnimationDurationMs === 'function'
+            ? window.RouteState.vehicleMarkerAnimationDurationMs(targetSnapSpeedKmh, targetGapMeters)
+            : Math.max(80, Math.min(320, 320 - Math.max(0, Number(targetSnapSpeedKmh) || 0) * 1.8));
         vehicleAnimationFrom = {
             lat: currentSmoothLat === null ? targetSnapLat : currentSmoothLat,
             lng: currentSmoothLng === null ? targetSnapLng : currentSmoothLng,
@@ -2234,19 +2255,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const now = Number(timestamp) || Date.now();
-            const progress = Math.min(1, Math.max(0, (now - vehicleAnimationStartedAt) / 400));
+            const progress = Math.min(1, Math.max(0, (now - vehicleAnimationStartedAt) / vehicleAnimationDurationMs));
+            // Ease out aggressively so the marker closes most of the GPS gap
+            // early instead of remaining visibly behind at motorway speed.
+            const easedProgress = 1 - Math.pow(1 - progress, 3);
             const from = vehicleAnimationFrom || { lat: targetSnapLat, lng: targetSnapLng, heading: targetSnapHeading };
             let headingDelta = ((targetSnapHeading - from.heading + 540) % 360) - 180;
-            currentSmoothLat = from.lat + (targetSnapLat - from.lat) * progress;
-            currentSmoothLng = from.lng + (targetSnapLng - from.lng) * progress;
-            currentSmoothHeading = (from.heading + headingDelta * progress + 360) % 360;
-            currentHeading = currentSmoothHeading;
+            currentSmoothLat = from.lat + (targetSnapLat - from.lat) * easedProgress;
+            currentSmoothLng = from.lng + (targetSnapLng - from.lng) * easedProgress;
+            currentSmoothHeading = (from.heading + headingDelta * easedProgress + 360) % 360;
             renderVehicleMarker();
             if (progress >= 1 || (Math.abs(targetSnapLat - currentSmoothLat) < 0.0000001 && Math.abs(targetSnapLng - currentSmoothLng) < 0.0000001 && Math.abs(headingDelta) < 0.5)) {
                 currentSmoothLat = targetSnapLat;
                 currentSmoothLng = targetSnapLng;
                 currentSmoothHeading = targetSnapHeading;
-                currentHeading = currentSmoothHeading;
                 renderVehicleMarker();
                 stopVehicleMarkerAnimation();
                 return;
@@ -2340,10 +2362,10 @@ document.addEventListener('DOMContentLoaded', () => {
         updateRemainingSummary(remSec, remDistMeters);
     }
 
-    function updateVehicleMarkerPosition(lat, lng, heading = 0) {
+    function updateVehicleMarkerPosition(lat, lng, heading = 0, speedKmh = 0, options = {}) {
         let snapResult = { lat, lng, heading, isSnapped: false, segmentIndex: 0 };
 
-        if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
+        if (options.snapToRoute !== false && selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
             snapResult = isLiveNavActive
                 ? snapNavigationPosition(lat, lng, heading, selectedRouteObj)
                 : ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, selectedRouteObj.analyzed.coordinates);
@@ -2352,7 +2374,12 @@ document.addEventListener('DOMContentLoaded', () => {
         targetSnapLat = snapResult.lat;
         targetSnapLng = snapResult.lng;
         targetSnapHeading = snapResult.heading;
+        targetSnapSpeedKmh = Math.max(0, Number(speedKmh) || 0);
 
+        // Rebase every new fix from the marker's currently rendered position.
+        // Continuing an old 400 ms interpolation toward a moving target made
+        // the marker repeatedly lag, catch up, and fall behind at high speed.
+        if (vehicleAnimFrameId !== null) stopVehicleMarkerAnimation();
         startVehicleMarkerAnimationLoop();
 
         if (isLiveNavActive && selectedRouteObj) {
@@ -2423,15 +2450,58 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function applyDestinationSelection(coords, name, options = {}) {
+        const lat = Number(coords && coords.lat);
+        const lng = Number(coords && coords.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+
+        const previousLiveDestination = captureLiveDestinationBackup();
+        const nextEnd = { lat, lng };
+        const nextName = String(name || '').trim() || (I18n.getLanguage().startsWith('ko') ? '선택한 목적지' : 'Selected destination');
+        if (isLiveNavActive && previousLiveDestination) {
+            const changed = ShadowRouter.calculateDistanceMeters(
+                previousLiveDestination.end.lat, previousLiveDestination.end.lng,
+                nextEnd.lat, nextEnd.lng
+            ) > 5;
+            if (!changed) {
+                document.getElementById('start-search-modal').classList.add('hidden');
+                return false;
+            }
+            const needsConfirmation = options.confirmLive !== false;
+            if (needsConfirmation) {
+                const isKo = I18n.getLanguage().startsWith('ko');
+                const confirmed = confirm(isKo
+                    ? '주행 중 목적지를 변경하고 현재 위치에서 새 경로를 계산하시겠습니까?'
+                    : 'Change the destination and calculate a new route from the current position?');
+                if (!confirmed) return false;
+            }
+        }
+
+        currentEnd = nextEnd;
+        destinationName = nextName;
+        const input = document.getElementById('destination-input');
+        const confirmButton = document.getElementById('btn-confirm-destination');
+        const destinationBar = document.getElementById('bar-dest-text');
+        if (input) input.value = destinationName;
+        if (confirmButton) confirmButton.disabled = false;
+        if (destinationBar) destinationBar.innerText = destinationName;
+
+        if (isLiveNavActive && previousLiveDestination) {
+            liveDestinationBackup = previousLiveDestination;
+            showLiveDestinationReroutePending();
+            document.getElementById('start-search-modal').classList.add('hidden');
+            updateRoute(true, { reason: 'destination-change' });
+            return true;
+        }
+        startNavigationFlow();
+        return true;
+    }
+
     async function resolveAndStartNavigation() {
         const destInput = document.getElementById('destination-input');
         const typedText = destInput ? destInput.value.trim() : "";
         const isKo = I18n.getLanguage().startsWith('ko');
-        const previousLiveDestination = isLiveNavActive && currentEnd ? {
-            end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
-            name: destinationName,
-            verifiedRouteRequestKey
-        } : null;
+        const previousLiveDestination = captureLiveDestinationBackup();
 
         if (!typedText) {
             alert(isKo ? "목적지 장소나 주소를 입력해 주세요." : "Please enter a destination place or address.");
@@ -2479,10 +2549,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentEnd = previousLiveDestination.end;
                 destinationName = previousLiveDestination.name;
                 verifiedRouteRequestKey = previousLiveDestination.verifiedRouteRequestKey;
+                verifiedRouteOriginProvisional = !!previousLiveDestination.verifiedRouteOriginProvisional;
                 if (destInput) destInput.value = destinationName;
                 return;
             }
             liveDestinationBackup = previousLiveDestination;
+            showLiveDestinationReroutePending();
             document.getElementById('start-search-modal').classList.add('hidden');
             document.getElementById('bar-dest-text').innerText = destinationName;
             updateRoute(true, { reason: 'destination-change' });
@@ -2647,12 +2719,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return sunPos;
     }
 
-    function getRouteCandidateCacheKey() {
-        if (!currentStart || !currentEnd) return null;
+    function getRouteCandidateCacheKey(start = currentStart, end = currentEnd, tollFree = isTollFreeOnly) {
+        if (!start || !end) return null;
         return [
-            Number(currentStart.lat).toFixed(6), Number(currentStart.lng).toFixed(6),
-            Number(currentEnd.lat).toFixed(6), Number(currentEnd.lng).toFixed(6),
-            isTollFreeOnly ? 'toll-free' : 'standard'
+            Number(start.lat).toFixed(6), Number(start.lng).toFixed(6),
+            Number(end.lat).toFixed(6), Number(end.lng).toFixed(6),
+            tollFree ? 'toll-free' : 'standard'
         ].join('|');
     }
 
@@ -2743,6 +2815,20 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function showLiveDestinationReroutePending() {
+        const isKo = I18n.getLanguage().startsWith('ko');
+        const banner = document.getElementById('mobile-turn-banner');
+        const icon = document.getElementById('banner-turn-icon');
+        const distance = document.getElementById('banner-dist');
+        const description = document.getElementById('banner-desc');
+        if (banner) banner.classList.add('active');
+        if (icon) icon.innerHTML = '<i class="fa-solid fa-route fa-pulse"></i>';
+        if (distance) distance.textContent = isKo ? '새 경로 계산 중' : 'Calculating new route';
+        if (description) description.textContent = isKo
+            ? '새 목적지의 실제 도로 경로가 확인될 때까지 이전 회전 안내를 중지합니다.'
+            : 'Old turn prompts are paused until the new road route is verified.';
+    }
+
     async function updateRoute(isMidDrive = false, routeOptions = {}) {
         if (!currentEnd || !currentStart) {
             pendingRouteRequestKey = null;
@@ -2777,8 +2863,19 @@ document.addEventListener('DOMContentLoaded', () => {
             if (window.DebugLogger) window.DebugLogger.log('route-reroute-start', { reason: rerouteReason });
         }
 
+        // Freeze request coordinates/options after the live reroute origin is
+        // anchored. GPS continues updating currentStart while OSRM is in
+        // flight; the response must retain the exact request identity.
+        const requestStart = { ...currentStart, lat: Number(currentStart.lat), lng: Number(currentStart.lng) };
+        const requestEnd = { ...currentEnd, lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) };
+        const requestMode = currentMode;
+        const requestTollFree = isTollFreeOnly;
+        const requestOriginProvisional = window.RouteState && typeof window.RouteState.isProvisionalRouteOrigin === 'function'
+            ? window.RouteState.isProvisionalRouteOrigin(requestStart, Date.now())
+            : Number(requestStart.accuracy) > 50;
+
         const requestGeneration = ++routeAnalysisGeneration;
-        const candidateCacheKey = getRouteCandidateCacheKey();
+        const candidateCacheKey = getRouteCandidateCacheKey(requestStart, requestEnd, requestTollFree);
         const reusableCandidates = routeOptions.reuseCachedCandidates && routeData &&
             routeData.routeCandidateKey === candidateCacheKey && Array.isArray(routeData.routeCandidates)
             ? routeData.routeCandidates : null;
@@ -2795,7 +2892,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sceneRefinementAbortController = sceneController;
 
         const dateObj = isRealTimeMode ? new Date() : getDateFromMinutes(selectedTimeMinutes);
-        const requestKey = getCurrentRouteRequestKey(dateObj);
+        const requestKey = getRouteRequestKeyFor(requestStart, requestEnd, requestMode, requestTollFree, dateObj);
         pendingRouteRequestKey = requestKey;
         activeRouteRequestKey = requestKey;
         routeRefinementPending = true;
@@ -2808,10 +2905,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const routeStartedAt = Date.now();
         try {
             const nextRouteData = await ShadowRouter.fetchAndAnalyzeRoutes(
-                currentStart,
-                currentEnd,
+                requestStart,
+                requestEnd,
                 dateObj,
-                isTollFreeOnly,
+                requestTollFree,
                 {
                     signal: requestController.signal,
                     // Scene enrichment has its own cancellation lifecycle.
@@ -2832,7 +2929,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     preferredRouteRole: currentMode,
                     onProgress: async progress => {
                         if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
-                        const progressRequestKey = getCurrentRouteRequestKey(dateObj);
+                        const progressRequestKey = requestKey;
                         routeData = progress;
                         routeData.calculatedAt = Date.now();
                         routeData.requestKey = progressRequestKey;
@@ -2840,6 +2937,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         routeRefinementPending = progress.enrichmentPending === true;
                         pendingRouteRequestKey = null;
                         verifiedRouteRequestKey = progressRequestKey;
+                        verifiedRouteOriginProvisional = requestOriginProvisional;
                         updateRouteOptionButtons(routeData);
                         const enrichedSelection = routeData.routes[currentMode] || routeData.routes.fastest;
                         const roleKey = currentMode === 'shade' ? 'shade' : (currentMode === 'glareFree' ? 'glareFree' : 'fastest');
@@ -2877,7 +2975,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (canSwitchActiveGuidance) {
                             precisionReroutePending = false;
                             selectedRouteObj = enrichedSelection;
-                            navigationSessionRouteId = selectedRouteObj.id || null;
+                            navigationSessionRouteId = getRouteGeometryIdentity(selectedRouteObj);
                             navigationSessionRouteGeometry = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
                                 ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])])
                                 : navigationSessionRouteGeometry;
@@ -2889,7 +2987,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     : (roleKey === 'shade' ? 'Guidance updated to the precision shade route.' : 'Guidance updated to the precision glare-free route.'), true, 'precision-route-update');
                             }
                         } else if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj ||
-                            enrichedSelection.id === navigationSessionRouteId ||
+                            getRouteGeometryIdentity(enrichedSelection) === navigationSessionRouteId ||
                             (isMidDrive && progress.analysisPhase === 'heuristic-initial')) {
                             // A partial precision callback is an enrichment
                             // event, not permission to replace active guidance.
@@ -2907,7 +3005,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                 liveDestinationBackup = null;
                                 saveActiveNavigationSession();
                             }
-                            navigationSessionRouteId = selectedRouteObj.id || null;
+                            if (rerouteReason === 'gps-origin-refinement') {
+                                // A reroute response is not enough by itself:
+                                // its frozen origin must also be recent and
+                                // accurate. If the provider returned another
+                                // cached/coarse fix, keep guidance suppressed
+                                // and retry from the next reliable sample.
+                                navigationRouteNeedsReliableOrigin = requestOriginProvisional;
+                                gpsOriginReroutePending = false;
+                            }
+                            navigationSessionRouteId = getRouteGeometryIdentity(selectedRouteObj);
                             navigationSessionRouteGeometry = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
                                 ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])])
                                 : null;
@@ -2916,6 +3023,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             dynamicRemainingLayers = new Map();
                             dynamicRemainingRouteId = null;
                             dynamicRemainingSegmentIndex = null;
+                            lastPrecisionSwitchRouteId = null;
                             resetNavigationRouteProgress(selectedRouteObj);
                             if (window.DebugLogger) window.DebugLogger.log('route-reroute-committed', {
                                 reason: rerouteReason, routeId: navigationSessionRouteId || 'geometry-session'
@@ -2932,7 +3040,7 @@ document.addEventListener('DOMContentLoaded', () => {
             );
 
             if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
-            const completedRequestKey = getCurrentRouteRequestKey(dateObj);
+            const completedRequestKey = requestKey;
             routeData = nextRouteData;
             routeData.calculatedAt = Date.now();
             routeData.requestKey = completedRequestKey;
@@ -2944,6 +3052,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
             verifiedRouteRequestKey = completedRequestKey;
+            verifiedRouteOriginProvisional = requestOriginProvisional;
             pendingRouteRequestKey = null;
             activeRouteRequestKey = null;
             routeRefinementPending = false;
@@ -2974,6 +3083,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (destinationInput) destinationInput.value = destinationName;
                 if (destinationBar) destinationBar.innerText = destinationName;
                 verifiedRouteRequestKey = destinationBackup.verifiedRouteRequestKey;
+                verifiedRouteOriginProvisional = !!destinationBackup.verifiedRouteOriginProvisional;
                 setNavigationButtonsEnabled(true);
             }
             showRouteFailureMessage(e, hadPreviousRoute);
@@ -2981,6 +3091,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         } finally {
             if (rerouteReason === 'precision-refresh') precisionReroutePending = false;
+            if (rerouteReason === 'gps-origin-refinement') gpsOriginReroutePending = false;
             if (routeAbortController === requestController) {
                 routeAbortController = null;
             }
@@ -2993,11 +3104,12 @@ document.addEventListener('DOMContentLoaded', () => {
         updateRouteOptionButtons(routeData);
 
         const enrichedSelection = routeData.routes[currentMode] || routeData.routes.glareFree;
-        if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj || enrichedSelection.id === navigationSessionRouteId) {
+        if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj ||
+            getRouteGeometryIdentity(enrichedSelection) === navigationSessionRouteId) {
             selectedRouteObj = enrichedSelection;
         }
         if (isLiveNavActive && selectedRouteObj) {
-            navigationSessionRouteId = selectedRouteObj.id || null;
+            navigationSessionRouteId = getRouteGeometryIdentity(selectedRouteObj);
             navigationSessionRouteGeometry = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
                 ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])]) : navigationSessionRouteGeometry;
         }
@@ -3009,7 +3121,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isMidDrive || isLiveNavActive) {
             if (currentStart) {
-                updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
+                updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading, lastNavigationSpeedKmh);
             }
         }
     }
@@ -3215,18 +3327,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function getCurrentRouteRequestKey(dateObj) {
+    function getRouteRequestKeyFor(start, end, mode, tollFree, dateObj) {
         if (!window.RouteState || typeof window.RouteState.createRouteRequestKey !== 'function') return null;
         const timeToken = isRealTimeMode
             ? 'realtime'
             : dateObj.getTime();
         return window.RouteState.createRouteRequestKey(
-            currentStart,
-            currentEnd,
-            currentMode,
-            isTollFreeOnly,
+            start,
+            end,
+            mode,
+            tollFree,
             dateObj instanceof Date ? timeToken : NaN
         );
+    }
+
+    function getCurrentRouteRequestKey(dateObj) {
+        return getRouteRequestKeyFor(currentStart, currentEnd, currentMode, isTollFreeOnly, dateObj);
     }
 
     function isCurrentRouteReady() {
@@ -3261,7 +3377,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (endMarker) map.removeLayer(endMarker);
         endMarker = L.marker([routedEnd.lat, routedEnd.lng], { icon: endIcon }).addTo(map);
 
-        updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading);
+        updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading, 0, {
+            snapToRoute: !verifiedRouteOriginProvisional
+        });
+
+        // A stale/coarse origin may still produce a real OSRM response, but
+        // drawing it as trusted guidance creates a conspicuous line from the
+        // wrong road. Keep only the raw vehicle/accuracy position until a
+        // reliable fix triggers an immediate forward reroute.
+        if (verifiedRouteOriginProvisional) return;
 
         if (!isLiveDrive && routeData && routeData.routes && routeData.routes.all) {
             routeData.routes.all.forEach(rt => {
@@ -3349,6 +3473,7 @@ document.addEventListener('DOMContentLoaded', () => {
         activeRouteRequestKey = null;
         routeRefinementPending = false;
         verifiedRouteRequestKey = null;
+        verifiedRouteOriginProvisional = false;
 
         const isKo = I18n.getLanguage().startsWith('ko');
         const destChip = document.getElementById('bar-dest-text');
@@ -3567,11 +3692,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     setupAutocomplete('destination-input', 'destination-results', (coords, name) => {
-        const previousLiveDestination = isLiveNavActive && currentEnd ? {
-            end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
-            name: destinationName,
-            verifiedRouteRequestKey
-        } : null;
+        const previousLiveDestination = captureLiveDestinationBackup();
         currentEnd = coords;
         destinationName = name;
         document.getElementById('btn-confirm-destination').disabled = false;
@@ -3586,10 +3707,12 @@ document.addEventListener('DOMContentLoaded', () => {
             currentEnd = previousLiveDestination.end;
             destinationName = previousLiveDestination.name;
             verifiedRouteRequestKey = previousLiveDestination.verifiedRouteRequestKey;
+            verifiedRouteOriginProvisional = !!previousLiveDestination.verifiedRouteOriginProvisional;
             document.getElementById('destination-input').value = destinationName;
             return;
         }
         liveDestinationBackup = previousLiveDestination;
+        showLiveDestinationReroutePending();
         document.getElementById('start-search-modal').classList.add('hidden');
         document.getElementById('bar-dest-text').innerText = destinationName;
         updateRoute(true, { reason: 'destination-change' });
@@ -3932,6 +4055,8 @@ document.addEventListener('DOMContentLoaded', () => {
         setCompassMode('north-up');
         navigationSessionRouteId = null;
         navigationSessionRouteGeometry = null;
+        navigationRouteNeedsReliableOrigin = false;
+        gpsOriginReroutePending = false;
         window.__solarlessProcessNavigationPosition = null;
         clearRouteFromMap();
         recenterMapToVehicle();
@@ -3980,6 +4105,8 @@ document.addEventListener('DOMContentLoaded', () => {
             liveDestinationBackup = null;
             navigationSessionRouteId = null;
             navigationSessionRouteGeometry = null;
+            navigationRouteNeedsReliableOrigin = false;
+            gpsOriginReroutePending = false;
             window.__solarlessProcessNavigationPosition = null;
             compassModeUserOverride = false;
             setCompassMode('north-up');
@@ -4050,6 +4177,7 @@ document.addEventListener('DOMContentLoaded', () => {
         saveActiveNavigationSession();
         precisionReroutePending = false;
         precisionRerouteCooldownUntil = 0;
+        lastRerouteTime = 0;
         navigationConsecutiveOffRouteCount = 0;
         lastPrecisionSwitchRouteId = null;
         lastProcessedNavigationTimestamp = 0;
@@ -4063,7 +4191,12 @@ document.addEventListener('DOMContentLoaded', () => {
         lastProcessedNavigationAccuracy = currentStart && Number(currentStart.accuracy) > 0
             ? Number(currentStart.accuracy)
             : 50;
-        navigationSessionRouteId = selectedRouteObj && selectedRouteObj.id || null;
+        navigationRouteNeedsReliableOrigin = verifiedRouteOriginProvisional ||
+            (window.RouteState && typeof window.RouteState.isProvisionalRouteOrigin === 'function'
+                ? window.RouteState.isProvisionalRouteOrigin(currentStart, Date.now())
+                : Number(currentStart && currentStart.accuracy) > 50);
+        gpsOriginReroutePending = false;
+        navigationSessionRouteId = getRouteGeometryIdentity(selectedRouteObj);
         navigationSessionRouteGeometry = selectedRouteObj && selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
             ? selectedRouteObj.analyzed.coordinates.map(point => [Number(point[0]), Number(point[1])]) : null;
         resetNavigationRouteProgress(selectedRouteObj);
@@ -4084,6 +4217,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const banner = document.getElementById('mobile-turn-banner');
         if (banner) banner.classList.add('active');
+
+        if (navigationRouteNeedsReliableOrigin) {
+            // A coarse/stale fix may be used to keep startup responsive, but
+            // never draw that provisional road geometry as trusted guidance.
+            if (activeRoutePolylineGroup) activeRoutePolylineGroup.clearLayers();
+            if (dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup.clearLayers();
+            updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading, 0, { snapToRoute: false });
+            const bannerIcon = document.getElementById('banner-turn-icon');
+            const bannerDistance = document.getElementById('banner-dist');
+            const bannerDescription = document.getElementById('banner-desc');
+            if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-location-crosshairs fa-pulse"></i>';
+            if (bannerDistance) bannerDistance.textContent = isKo ? 'GPS 보정 중' : 'Refining GPS';
+            if (bannerDescription) bannerDescription.textContent = isKo
+                ? '정확한 위치가 확인되면 실제 도로 경로를 표시합니다.'
+                : 'Road guidance will appear after a reliable location fix.';
+        }
 
         enableKeepAwake();
 
@@ -4125,13 +4274,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const normalized = { coords: { ...coords, latitude: lat, longitude: lng }, timestamp };
             const rawSpeedKmh = getPositionSpeedKmh(normalized);
+            lastNavigationSpeedKmh = rawSpeedKmh;
+            const previousForValidation = navigationRouteNeedsReliableOrigin ? null :
+                (lastProcessedNavigationPosition && {
+                    ...lastProcessedNavigationPosition,
+                    timestamp: lastProcessedNavigationTimestamp,
+                    accuracy: lastProcessedNavigationAccuracy
+                });
             const fixEvaluation = window.RouteState && typeof window.RouteState.evaluateNavigationFix === 'function'
                 ? window.RouteState.evaluateNavigationFix(
-                    lastProcessedNavigationPosition && {
-                        ...lastProcessedNavigationPosition,
-                        timestamp: lastProcessedNavigationTimestamp,
-                        accuracy: lastProcessedNavigationAccuracy
-                    },
+                    previousForValidation,
                     { lat, lng, timestamp, accuracy: incomingAccuracy, reportedSpeedKmh: rawSpeedKmh },
                     ShadowRouter.calculateDistanceMeters
                 )
@@ -4186,6 +4338,31 @@ document.addEventListener('DOMContentLoaded', () => {
             lastProcessedNavigationPosition = { lat, lng };
             lastProcessedNavigationAccuracy = incomingAccuracy;
 
+            if (navigationRouteNeedsReliableOrigin) {
+                // The first reliable fix after a coarse/stale start becomes
+                // the authoritative origin immediately. Keep the marker at
+                // raw GPS and suppress provisional turn guidance until OSRM
+                // returns a forward replacement from this position.
+                updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh, { snapToRoute: false });
+                const now = Date.now();
+                if (!gpsOriginReroutePending && now - lastRerouteTime >= 8000) {
+                    gpsOriginReroutePending = true;
+                    lastRerouteTime = now;
+                    updateRoute(true, { reason: 'gps-origin-refinement' })
+                        .catch(() => { gpsOriginReroutePending = false; });
+                }
+                return true;
+            }
+
+            if (liveDestinationBackup) {
+                // The old polyline may remain as visual context while OSRM is
+                // pending, but it belongs to the previous destination. Do not
+                // announce its turns or arrival after the user has confirmed
+                // a different destination.
+                updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh);
+                return true;
+            }
+
             const roadDestination = getActiveRoadDestination();
             if (roadDestination) {
                 const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, roadDestination.lat, roadDestination.lng);
@@ -4213,7 +4390,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     return true;
                 }
             }
-            updateVehicleMarkerPosition(lat, lng, heading);
+            updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh);
             const glareRisk = calculateLiveGlareRisk(lat, lng, currentHeading);
             const nextManeuver = findNextManeuver(lat, lng);
             updateTurnBannerText(nextManeuver, glareRisk);
@@ -4320,7 +4497,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
 
-                updateVehicleMarkerPosition(lat, lng, heading);
+                updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh);
 
                 // Marker rendering owns the throttled camera pan. Keeping a
                 // second animated setView here queues pans on every GPS fix.

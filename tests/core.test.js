@@ -1068,8 +1068,8 @@ test('initial GPS acquisition retries a timeout with one bounded high-accuracy r
         timeout: option.timeout,
         maximumAge: option.maximumAge
     })), [
-        { high: false, timeout: 8000, maximumAge: 120000 },
-        { high: true, timeout: 12000, maximumAge: 15000 }
+        { high: false, timeout: 8000, maximumAge: 5000 },
+        { high: true, timeout: 12000, maximumAge: 2000 }
     ]);
 });
 
@@ -1129,6 +1129,45 @@ test('coarse quick GPS remains usable when the precise follow-up times out', asy
     };
     assert.equal(await RouteState.acquireInitialPosition(geolocation), quick);
     assert.equal(requests, 2);
+});
+
+test('initial GPS prefers a fresh coarse fix over a stale but nominally accurate fix', async () => {
+    const nowMs = 1_800_000;
+    const staleAccurate = {
+        coords: { latitude: 42.3, longitude: -71.2, accuracy: 8 },
+        timestamp: nowMs - 90_000
+    };
+    const freshCoarse = {
+        coords: { latitude: 42.31, longitude: -71.19, accuracy: 75 },
+        timestamp: nowMs - 500
+    };
+    let requests = 0;
+    const geolocation = {
+        getCurrentPosition(success) {
+            success(requests++ === 0 ? staleAccurate : freshCoarse);
+        }
+    };
+    const result = await RouteState.acquireInitialPosition(geolocation, { nowMs });
+    assert.equal(result, freshCoarse);
+    assert.equal(requests, 2);
+});
+
+test('route origins expose provisional GPS state and high-speed marker animation catches up promptly', () => {
+    const nowMs = 2_000_000;
+    assert.equal(RouteState.isProvisionalRouteOrigin({
+        lat: 42.4, lng: -71.1, accuracy: 12, timestamp: nowMs - 1000
+    }, nowMs), false);
+    assert.equal(RouteState.isProvisionalRouteOrigin({
+        lat: 42.4, lng: -71.1, accuracy: 12, timestamp: nowMs - 9000
+    }, nowMs), true, 'a stale accurate fix must not be trusted as a current route origin');
+    assert.equal(RouteState.isProvisionalRouteOrigin({
+        lat: 42.4, lng: -71.1, accuracy: 90, timestamp: nowMs - 1000
+    }, nowMs), true, 'a fresh but coarse fix may start acquisition but remains provisional');
+
+    const walkingDuration = RouteState.vehicleMarkerAnimationDurationMs(5, 4);
+    const motorwayDuration = RouteState.vehicleMarkerAnimationDurationMs(120, 35);
+    assert.ok(motorwayDuration < walkingDuration);
+    assert.ok(motorwayDuration <= 100, `expected fast catch-up animation, got ${motorwayDuration}ms`);
 });
 
 test('navigation rejects low-accuracy and implausible indoor GPS jumps', () => {
@@ -2827,6 +2866,40 @@ test('navigation start-stop is serialized and destination changes use a safe liv
     assert.ok(appSource.includes('liveDestinationBackup = previousLiveDestination'));
     assert.ok(appSource.includes('currentEnd = destinationBackup.end'));
     assert.ok(appSource.includes('verifiedRouteRequestKey = destinationBackup.verifiedRouteRequestKey'));
+    assert.ok(appSource.includes('function captureLiveDestinationBackup()'));
+    assert.ok(appSource.includes('function applyDestinationSelection(coords, name, options = {})'));
+    assert.ok(appSource.includes('applyDestinationSelection(fav.coords, targetName)'));
+    assert.ok(appSource.includes('applyDestinationSelection(item.coords, item.name)'));
+    assert.ok(appSource.includes('showLiveDestinationReroutePending()'));
+    assert.ok(appSource.includes('if (liveDestinationBackup) {'));
+    assert.ok(appSource.includes('Old turn prompts are paused until the new road route is verified.'));
+    assert.ok(appSource.includes('const requestStart = { ...currentStart'));
+    assert.ok(appSource.includes('const requestEnd = { ...currentEnd'));
+    assert.ok(appSource.includes('const progressRequestKey = requestKey'));
+    assert.ok(appSource.includes('const completedRequestKey = requestKey'));
+    assert.equal(appSource.includes('navigationSessionRouteId = selectedRouteObj.id || null'), false);
+    assert.ok(appSource.includes('getRouteGeometryIdentity(enrichedSelection) === navigationSessionRouteId'));
+});
+
+test('provisional route geometry is hidden until a reliable live GPS origin is rerouted', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes('let verifiedRouteOriginProvisional = false'));
+    assert.ok(appSource.includes('snapToRoute: !verifiedRouteOriginProvisional'));
+    assert.ok(appSource.includes('if (verifiedRouteOriginProvisional) return;'));
+    assert.ok(appSource.includes('navigationRouteNeedsReliableOrigin = verifiedRouteOriginProvisional'));
+    assert.ok(appSource.includes("updateRoute(true, { reason: 'gps-origin-refinement' })"));
+    assert.ok(appSource.includes("? 'GPS 보정 중' : 'Refining GPS'"));
+});
+
+test('high-speed vehicle rendering rebases moving targets and native GPS samples at navigation cadence', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const serviceSource = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/solaris/nav/LocationForegroundService.java'), 'utf8');
+    assert.ok(appSource.includes('vehicleMarkerAnimationDurationMs(targetSnapSpeedKmh, targetGapMeters)'));
+    assert.ok(appSource.includes('if (vehicleAnimFrameId !== null) stopVehicleMarkerAnimation();'));
+    assert.ok(appSource.includes('const easedProgress = 1 - Math.pow(1 - progress, 3);'));
+    assert.equal(appSource.includes('(now - vehicleAnimationStartedAt) / 400'), false);
+    assert.equal(appSource.includes('currentHeading = currentSmoothHeading'), false);
+    assert.ok(serviceSource.includes('registerProvider(LocationManager.GPS_PROVIDER, 250L, 1f);'));
 });
 
 test('interrupted voice prompts reset only after resume and active sessions are recoverable', () => {

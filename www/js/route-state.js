@@ -171,33 +171,43 @@
         const quickOptions = {
             enableHighAccuracy: false,
             timeout: Number(config.quickTimeoutMs || 8000),
-            maximumAge: Number(config.quickMaximumAgeMs || 120000)
+            maximumAge: Number(config.quickMaximumAgeMs || 5000)
         };
         const preciseOptions = {
             enableHighAccuracy: true,
             timeout: Number(config.preciseTimeoutMs || 12000),
-            maximumAge: Number(config.preciseMaximumAgeMs || 15000)
+            maximumAge: Number(config.preciseMaximumAgeMs || 2000)
         };
         const quickAccuracyMeters = Number(config.quickAccuracyMeters || 30);
         const maxInitialAccuracyMeters = Number(config.maxInitialAccuracyMeters || 50);
+        const maxRouteFixAgeMs = Number(config.maxRouteFixAgeMs || 2000);
+        const now = Number(config.nowMs || Date.now());
         const accuracyOf = position => Number(position && position.coords && position.coords.accuracy);
+        const timestampOf = position => Number(position && position.timestamp);
         const hasCoordinates = position => Number.isFinite(Number(position && position.coords && position.coords.latitude)) &&
             Number.isFinite(Number(position && position.coords && position.coords.longitude));
+        const isFresh = position => {
+            const timestamp = timestampOf(position);
+            return Number.isFinite(timestamp) && timestamp > 0 && Math.max(0, now - timestamp) <= maxRouteFixAgeMs;
+        };
         const isReliable = position => {
             const accuracy = accuracyOf(position);
             return Number.isFinite(accuracy) && accuracy > 0 && accuracy <= maxInitialAccuracyMeters;
         };
         const bestAvailable = (...positions) => positions.filter(hasCoordinates).sort((a, b) => {
+            const freshnessDifference = Number(isFresh(b)) - Number(isFresh(a));
+            if (freshnessDifference) return freshnessDifference;
             const aAccuracy = accuracyOf(a);
             const bAccuracy = accuracyOf(b);
             const aRank = Number.isFinite(aAccuracy) && aAccuracy > 0 ? aAccuracy : Infinity;
             const bRank = Number.isFinite(bAccuracy) && bAccuracy > 0 ? bAccuracy : Infinity;
-            return aRank - bRank;
+            if (aRank !== bRank) return aRank - bRank;
+            return (timestampOf(b) || 0) - (timestampOf(a) || 0);
         })[0] || null;
         const acquirePrecise = async fallback => {
             try {
                 const precise = await requestGeolocationPosition(geolocation, preciseOptions);
-                if (isReliable(precise)) return precise;
+                if (isReliable(precise) && isFresh(precise)) return precise;
                 // A coarse but valid coordinate is enough to calculate an
                 // approximate road origin. The live guidance filter still
                 // rejects low-confidence movement/reroute updates until a more
@@ -223,8 +233,31 @@
             if (Number(error && error.code) === 1 || error && error.code === 'UNAVAILABLE') throw error;
             return acquirePrecise(null);
         }
-        if (isReliable(quick) && accuracyOf(quick) <= quickAccuracyMeters) return quick;
+        if (isReliable(quick) && isFresh(quick) && accuracyOf(quick) <= quickAccuracyMeters) return quick;
         return acquirePrecise(quick);
+    }
+
+    function isProvisionalRouteOrigin(position, nowMs = Date.now(), config = {}) {
+        const lat = Number(position && position.lat);
+        const lng = Number(position && position.lng);
+        const accuracy = Number(position && position.accuracy);
+        const timestamp = Number(position && position.timestamp);
+        const now = Number(nowMs);
+        const maxAccuracyMeters = Number(config.maxAccuracyMeters || 50);
+        const maxAgeMs = Number(config.maxAgeMs || 2000);
+        if (![lat, lng, now].every(Number.isFinite)) return true;
+        if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > maxAccuracyMeters) return true;
+        if (!Number.isFinite(timestamp) || timestamp <= 0 || Math.max(0, now - timestamp) > maxAgeMs) return true;
+        return false;
+    }
+
+    function vehicleMarkerAnimationDurationMs(speedKmh, gapMeters) {
+        const speed = Math.max(0, Number(speedKmh) || 0);
+        const gap = Math.max(0, Number(gapMeters) || 0);
+        let duration = Math.max(80, Math.min(320, 320 - speed * 1.8));
+        const speedMetersPerSecond = speed / 3.6;
+        if (gap > Math.max(12, speedMetersPerSecond * 0.5)) duration *= 0.65;
+        return Math.max(60, Math.round(duration));
     }
 
     function formatArrivalDateTime(nowMs, remainingSec, locale = 'en-US') {
@@ -350,6 +383,8 @@
         createDebouncedScheduler,
         shouldRefreshRoadRules,
         acquireInitialPosition,
+        isProvisionalRouteOrigin,
+        vehicleMarkerAnimationDurationMs,
         shouldRestartRouteForGpsFix,
         evaluateNavigationFix,
         estimateGpsEtaUncertainty,

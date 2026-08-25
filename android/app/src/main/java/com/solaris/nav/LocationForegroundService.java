@@ -103,7 +103,12 @@ public final class LocationForegroundService extends Service implements Location
             return;
         }
         providerRegistered = false;
-        registerProvider(LocationManager.GPS_PROVIDER, 1000L, 3f);
+        // Navigation needs sub-second GPS samples at motorway speed. At
+        // 120 km/h a 1 s cadence moves about 33 m between fixes, which made
+        // the WebView marker visibly lag and jump. The foreground service is
+        // active only during guidance, so request 4 Hz/1 m from GPS while
+        // keeping the lower-power network fallback at its former cadence.
+        registerProvider(LocationManager.GPS_PROVIDER, 250L, 1f);
         registerProvider(LocationManager.NETWORK_PROVIDER, 2000L, 10f);
         if (!providerRegistered) {
             sendStatus("LOCATION_SERVICE_NO_PROVIDER");
