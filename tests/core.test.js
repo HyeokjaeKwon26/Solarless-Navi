@@ -1191,6 +1191,45 @@ test('navigation rejects low-accuracy and implausible indoor GPS jumps', () => {
     assert.equal(normalDrive.accepted, true);
 });
 
+test('auto free drive requires sustained accurate vehicle motion', () => {
+    const distanceMeters = (lat1, lng1, lat2, lng2) => Math.hypot(lat2 - lat1, lng2 - lng1);
+    let state = {};
+    const config = {
+        minimumSpeedKmh: 15,
+        maximumAccuracyMeters: 50,
+        minimumSamples: 3,
+        minimumElapsedMs: 3000,
+        minimumDistanceMeters: 25
+    };
+    let result = RouteState.evaluateAutoFreeDriveSample(state, {
+        lat: 0, lng: 0, timestamp: 1000, accuracy: 10, reportedSpeedKmh: 24
+    }, distanceMeters, config);
+    assert.equal(result.shouldStart, false);
+    state = result.state;
+    result = RouteState.evaluateAutoFreeDriveSample(state, {
+        lat: 0, lng: 12, timestamp: 3000, accuracy: 12, reportedSpeedKmh: 22
+    }, distanceMeters, config);
+    assert.equal(result.shouldStart, false);
+    state = result.state;
+    result = RouteState.evaluateAutoFreeDriveSample(state, {
+        lat: 0, lng: 27, timestamp: 5000, accuracy: 9, reportedSpeedKmh: 26
+    }, distanceMeters, config);
+    assert.equal(result.shouldStart, true);
+    assert.equal(result.consecutiveSamples, 3);
+
+    const walking = RouteState.evaluateAutoFreeDriveSample({}, {
+        lat: 0, lng: 0, timestamp: 1000, accuracy: 8, reportedSpeedKmh: 6
+    }, distanceMeters, config);
+    assert.equal(walking.shouldStart, false);
+    assert.equal(walking.reason, 'NOT_CONFIRMED_DRIVING');
+
+    const inaccurate = RouteState.evaluateAutoFreeDriveSample(result.state, {
+        lat: 0, lng: 100, timestamp: 6000, accuracy: 120, reportedSpeedKmh: 80
+    }, distanceMeters, config);
+    assert.equal(inaccurate.shouldStart, false);
+    assert.equal(Object.keys(inaccurate.state).length, 0);
+});
+
 test('a refined GPS fix restarts an in-flight route with a changed request identity', () => {
     const oldKey = RouteState.createRouteRequestKey({ lat: 42.4, lng: -71.1 }, { lat: 42.5, lng: -71.2 }, 'fastest', false, 'realtime');
     const newKey = RouteState.createRouteRequestKey({ lat: 42.4003, lng: -71.1003 }, { lat: 42.5, lng: -71.2 }, 'fastest', false, 'realtime');
@@ -2894,8 +2933,8 @@ test('free drive starts without a destination and can transition into routed gui
     const i18n = fs.readFileSync(path.join(root, 'js/i18n.js'), 'utf8');
     assert.ok(html.includes('id="btn-start-free-drive"'));
     assert.ok(html.includes('id="btn-drawer-free-drive"'));
-    assert.ok(appSource.includes('async function startFreeDriveMode()'));
-    assert.ok(appSource.includes('toggleLiveGpsNavigation({ freeDrive: true })'));
+    assert.ok(appSource.includes('async function startFreeDriveMode(options = {})'));
+    assert.ok(appSource.includes('toggleLiveGpsNavigation({ freeDrive: true, automatic: options.automatic === true })'));
     assert.ok(appSource.includes('const requestedFreeDrive = options.freeDrive === true'));
     assert.ok(appSource.includes('if (!requestedFreeDrive && !isCurrentRouteReady())'));
     assert.ok(appSource.includes('if (!requestedFreeDrive && !currentEnd)'));
@@ -2905,6 +2944,31 @@ test('free drive starts without a destination and can transition into routed gui
     assert.ok(css.includes('body.free-drive-active .route-summary-floating .summary-stats-wrapper'));
     assert.ok(i18n.includes('freeDriveStart: "목적지 없이 자유 주행"'));
     assert.ok(i18n.includes('freeDriveStart: "Free drive without destination"'));
+});
+
+test('foreground driving detection can automatically enter free drive without prompting', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const i18n = fs.readFileSync(path.join(root, 'js/i18n.js'), 'utf8');
+    assert.ok(html.includes('id="toggle-auto-free-drive"'));
+    assert.ok(appSource.includes("AUTO_FREE_DRIVE_ENABLED_KEY = 'solarless_auto_free_drive_enabled'"));
+    assert.ok(appSource.includes('function startPassiveDrivingDetection()'));
+    const setupStart = appSource.indexOf('function setupFeatureListeners()');
+    const setupEnd = appSource.indexOf('/* FIND NEXT UPCOMING TURN MANEUVER', setupStart);
+    assert.ok(appSource.slice(setupStart, setupEnd).includes("getElementById('toggle-auto-free-drive')"));
+    const maneuverEnd = appSource.indexOf('function updateTurnBannerText', setupEnd);
+    assert.equal(appSource.slice(setupEnd, maneuverEnd).includes("getElementById('toggle-auto-free-drive')"), false);
+    assert.ok(appSource.includes('evaluateAutoFreeDriveSample(autoFreeDriveMotionState'));
+    assert.ok(appSource.includes('minimumSpeedKmh: 15'));
+    assert.ok(appSource.includes('maximumAccuracyMeters: 50'));
+    assert.ok(appSource.includes('minimumSamples: 3'));
+    assert.ok(appSource.includes('minimumDistanceMeters: 25'));
+    assert.ok(appSource.includes("startFreeDriveMode({ automatic: true })"));
+    assert.ok(appSource.includes('Passive detection never opens a permission prompt or alert.'));
+    assert.ok(appSource.includes("focusedElement.tagName === 'INPUT'"));
+    assert.ok(appSource.includes("#arrival-modal:not(.hidden)"));
+    assert.ok(appSource.includes('AUTO_FREE_DRIVE_MANUAL_STOP_COOLDOWN_MS = 60 * 1000'));
+    assert.ok(i18n.includes('autoFreeDriveTitle'));
 });
 
 test('provisional route geometry is hidden until a reliable live GPS origin is rerouted', () => {

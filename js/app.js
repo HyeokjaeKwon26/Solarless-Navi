@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let destinationName = "";
     const SAVED_ROUTE_MODE_KEY = 'solarless_last_route_mode';
     const ACTIVE_NAVIGATION_SESSION_KEY = 'solarless_active_navigation_session';
+    const AUTO_FREE_DRIVE_ENABLED_KEY = 'solarless_auto_free_drive_enabled';
     const ACTIVE_NAVIGATION_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
     let currentMode = 'glareFree';
     try {
@@ -60,6 +61,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let isTollFreeOnly = false;
     let isSatelliteViewActive = false;
     let isBatterySaverActive = false;
+    let isAutoFreeDriveEnabled = true;
+    try {
+        isAutoFreeDriveEnabled = localStorage.getItem(AUTO_FREE_DRIVE_ENABLED_KEY) !== 'false';
+    } catch (e) { /* Keep the safe default when storage is unavailable. */ }
 
     let routeData = null;
     let selectedRouteObj = null;
@@ -86,6 +91,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let isFreeDriveMode = false;
     let isPipMode = false;
     let gpsWatchId = null;
+    let passiveGpsWatchId = null;
+    let passiveGpsRestartTimer = null;
+    let autoFreeDriveMotionState = {};
+    let autoFreeDriveStartPending = false;
+    let autoFreeDriveSuppressedUntil = 0;
+    const AUTO_FREE_DRIVE_MANUAL_STOP_COOLDOWN_MS = 60 * 1000;
     let lastGpsWatchRestartAt = 0;
     let navigationResumePromise = null;
     let lastNavigationResumeAt = 0;
@@ -910,6 +921,17 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        const chkAutoFreeDrive = document.getElementById('toggle-auto-free-drive');
+        if (chkAutoFreeDrive) {
+            chkAutoFreeDrive.checked = isAutoFreeDriveEnabled;
+            chkAutoFreeDrive.addEventListener('change', (e) => {
+                isAutoFreeDriveEnabled = !!e.target.checked;
+                try { localStorage.setItem(AUTO_FREE_DRIVE_ENABLED_KEY, String(isAutoFreeDriveEnabled)); } catch (error) {}
+                if (isAutoFreeDriveEnabled) schedulePassiveDrivingDetection(0);
+                else stopPassiveDrivingDetection();
+            });
+        }
+
         // Toll-Free Route Avoidance Toggle Checkbox
         const chkTollFree = document.getElementById('toggle-toll-free');
         if (chkTollFree) {
@@ -1643,6 +1665,104 @@ document.addEventListener('DOMContentLoaded', () => {
         stopVehicleMarkerAnimation();
     }
 
+    function hasGrantedLocationPermission() {
+        return ['granted', 'fine-granted', 'coarse-granted'].includes(gpsPermissionState);
+    }
+
+    function stopPassiveDrivingDetection() {
+        clearTimeout(passiveGpsRestartTimer);
+        passiveGpsRestartTimer = null;
+        if (passiveGpsWatchId !== null && navigator.geolocation) {
+            navigator.geolocation.clearWatch(passiveGpsWatchId);
+        }
+        passiveGpsWatchId = null;
+        autoFreeDriveMotionState = {};
+    }
+
+    function schedulePassiveDrivingDetection(delayMs = 500) {
+        clearTimeout(passiveGpsRestartTimer);
+        passiveGpsRestartTimer = setTimeout(startPassiveDrivingDetection, Math.max(0, Number(delayMs) || 0));
+    }
+
+    function startPassiveDrivingDetection() {
+        clearTimeout(passiveGpsRestartTimer);
+        passiveGpsRestartTimer = null;
+        if (!isAutoFreeDriveEnabled || isLiveNavActive || navigationTransitionPending || currentEnd ||
+            document.visibilityState !== 'visible' || !hasGrantedLocationPermission() ||
+            !navigator.geolocation || passiveGpsWatchId !== null || Date.now() < autoFreeDriveSuppressedUntil) {
+            if (isAutoFreeDriveEnabled && !isLiveNavActive && !currentEnd && Date.now() < autoFreeDriveSuppressedUntil) {
+                schedulePassiveDrivingDetection(autoFreeDriveSuppressedUntil - Date.now() + 250);
+            }
+            return;
+        }
+        if (gpsFixPromise) {
+            schedulePassiveDrivingDetection(1000);
+            return;
+        }
+
+        autoFreeDriveMotionState = {};
+        passiveGpsWatchId = navigator.geolocation.watchPosition(position => {
+            if (isLiveNavActive || navigationTransitionPending || currentEnd || !isAutoFreeDriveEnabled) {
+                stopPassiveDrivingDetection();
+                return;
+            }
+            const coords = position && position.coords;
+            if (!coords || !window.RouteState || typeof window.RouteState.evaluateAutoFreeDriveSample !== 'function') return;
+            const focusedElement = document.activeElement;
+            const userIsEditing = focusedElement && (
+                focusedElement.tagName === 'INPUT' || focusedElement.tagName === 'TEXTAREA' || focusedElement.isContentEditable
+            );
+            const sidebar = document.getElementById('sidebar-panel');
+            const blockingModal = document.querySelector(
+                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden)'
+            );
+            if (userIsEditing || (sidebar && sidebar.classList.contains('active')) || blockingModal) {
+                autoFreeDriveMotionState = {};
+                return;
+            }
+            const timestamp = Number(position.timestamp) > 0 ? Number(position.timestamp) : Date.now();
+            const sample = window.RouteState.evaluateAutoFreeDriveSample(autoFreeDriveMotionState, {
+                lat: Number(coords.latitude),
+                lng: Number(coords.longitude),
+                timestamp,
+                accuracy: Number(coords.accuracy),
+                reportedSpeedKmh: coords.speed !== null && coords.speed !== undefined &&
+                    Number.isFinite(Number(coords.speed)) && Number(coords.speed) >= 0
+                    ? Number(coords.speed) * 3.6 : NaN
+            }, ShadowRouter.calculateDistanceMeters, {
+                minimumSpeedKmh: 15,
+                maximumAccuracyMeters: 50,
+                minimumSamples: 3,
+                minimumElapsedMs: 3000,
+                minimumDistanceMeters: 25,
+                maximumSampleGapMs: 15000
+            });
+            autoFreeDriveMotionState = sample.state;
+            if (!sample.shouldStart || autoFreeDriveStartPending) return;
+
+            autoFreeDriveStartPending = true;
+            stopPassiveDrivingDetection();
+            try {
+                applyGpsFix(position, 'auto-driving-detection');
+                updateGpsSpeedometer(position);
+            } catch (error) {
+                autoFreeDriveStartPending = false;
+                schedulePassiveDrivingDetection(1000);
+                return;
+            }
+            startFreeDriveMode({ automatic: true }).catch(() => {}).finally(() => {
+                autoFreeDriveStartPending = false;
+                if (!isLiveNavActive) schedulePassiveDrivingDetection(1000);
+            });
+        }, error => {
+            gpsLastError = error && error.code;
+            stopPassiveDrivingDetection();
+            // Passive detection never opens a permission prompt or alert. It
+            // resumes only after the foreground permission state is refreshed.
+            if (Number(error && error.code) !== 1) schedulePassiveDrivingDetection(5000);
+        }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 });
+    }
+
     function calculateLiveGlareRisk(lat, lng, heading, at = new Date()) {
         const analyzed = selectedRouteObj && selectedRouteObj.analyzed;
         const coordinates = analyzed && analyzed.coordinates;
@@ -1787,12 +1907,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (currentEnd) {
                     console.log("App resumed to foreground. Refreshing GPS position...");
                     requestUserGpsLocation(false).catch(() => {});
+                } else {
+                    schedulePassiveDrivingDetection(0);
                 }
             });
         }
 
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
+                stopPassiveDrivingDetection();
                 disableKeepAwake();
                 stopVehicleMarkerAnimation();
                 if (isLiveNavActive && window.TTSVoice && typeof window.TTSVoice.handleInterruptionStart === 'function') {
@@ -1801,10 +1924,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             else {
                 if (isLiveNavActive) resumeLiveNavigationAfterInterruption();
+                else schedulePassiveDrivingDetection(0);
                 updateSunInfo();
             }
         });
         window.addEventListener('pagehide', () => {
+            stopPassiveDrivingDetection();
             disableKeepAwake();
             stopVehicleMarkerAnimation();
         });
@@ -1840,6 +1965,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (['granted', 'fine-granted', 'coarse-granted'].includes(state) && !currentStart && !gpsFixPromise) {
                 requestUserGpsLocation(true).catch(() => {});
             }
+            if (['granted', 'fine-granted', 'coarse-granted'].includes(state)) schedulePassiveDrivingDetection(0);
+            else stopPassiveDrivingDetection();
         };
         await update();
         window.addEventListener('pageshow', update);
@@ -2533,7 +2660,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function startFreeDriveMode() {
+    async function startFreeDriveMode(options = {}) {
         if (isLiveNavActive) {
             if (isFreeDriveMode) await toggleLiveGpsNavigation();
             else {
@@ -2564,7 +2691,7 @@ document.addEventListener('DOMContentLoaded', () => {
         clearActiveNavigationSession();
         clearRouteFromMap();
         document.getElementById('start-search-modal').classList.add('hidden');
-        await toggleLiveGpsNavigation({ freeDrive: true });
+        await toggleLiveGpsNavigation({ freeDrive: true, automatic: options.automatic === true });
     }
 
     function applyDestinationSelection(coords, name, options = {}) {
@@ -4221,6 +4348,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const directMapBtn = document.getElementById('btn-map-start-nav');
         const isKo = I18n.getLanguage().startsWith('ko');
         const requestedFreeDrive = options.freeDrive === true;
+        const automaticallyDetectedFreeDrive = requestedFreeDrive && options.automatic === true;
 
         if (isLiveNavActive) {
             const wasFreeDrive = isFreeDriveMode;
@@ -4255,6 +4383,9 @@ document.addEventListener('DOMContentLoaded', () => {
             window.__solarlessProcessNavigationPosition = null;
             compassModeUserOverride = false;
             setCompassMode('north-up');
+            autoFreeDriveSuppressedUntil = wasFreeDrive
+                ? Date.now() + AUTO_FREE_DRIVE_MANUAL_STOP_COOLDOWN_MS : 0;
+            schedulePassiveDrivingDetection(wasFreeDrive ? AUTO_FREE_DRIVE_MANUAL_STOP_COOLDOWN_MS : 0);
             TTSVoice.speak(wasFreeDrive
                 ? (isKo ? '자유 주행을 종료합니다.' : 'Ending free drive.')
                 : (isKo ? '안내를 종료합니다.' : 'Ending navigation guidance.'));
@@ -4288,6 +4419,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        stopPassiveDrivingDetection();
         isLiveNavActive = true;
         isFreeDriveMode = requestedFreeDrive;
         setFreeDriveUi(isFreeDriveMode);
@@ -4404,8 +4536,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Dynamically announce exact selected route mode ("최단 시간 경로", "눈부심 방지 역광 회피 경로", "그늘 우선 경로")
         TTSVoice.speak(isFreeDriveMode
-            ? (isKo ? '자유 주행을 시작합니다.' : 'Starting free drive.')
+            ? (automaticallyDetectedFreeDrive
+                ? (isKo ? '차량 이동을 감지해 자유 주행을 시작합니다.' : 'Driving detected. Starting free drive.')
+                : (isKo ? '자유 주행을 시작합니다.' : 'Starting free drive.'))
             : getRouteAnnouncementText(currentMode, false));
+        if (automaticallyDetectedFreeDrive) {
+            showApiNotice(isKo
+                ? '차량 이동이 연속 확인되어 자유 주행을 자동으로 시작했습니다.'
+                : 'Free drive started automatically after continuous vehicle movement was detected.');
+        }
 
         // WebView geolocation and the Android foreground service feed the same
         // navigation pipeline. The active callback below returns immediately
@@ -4718,6 +4857,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnCloseArrival.addEventListener('click', () => {
             const arrivalModal = document.getElementById('arrival-modal');
             if (arrivalModal) arrivalModal.classList.add('hidden');
+            schedulePassiveDrivingDetection(0);
         });
     }
 

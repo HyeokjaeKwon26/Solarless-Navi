@@ -31,6 +31,8 @@ window.I18n = (function () {
             confirmStartBtn: "내비게이션 탐색 시작",
             freeDriveStart: "목적지 없이 자유 주행",
             freeDriveStop: "자유 주행 종료",
+            autoFreeDriveTitle: "🚘 주행 감지 시 자동 자유 주행",
+            autoFreeDriveDesc: "앱이 화면에 열려 있고 차량 이동이 연속 확인되면 목적지 없이 주행 화면을 시작",
             addFavBtn: "즐겨찾기 추가",
             aboutTitle: "앱 정보 (About App)",
             lblAppName: "어플리케이션 이름",
@@ -175,6 +177,8 @@ window.I18n = (function () {
             confirmStartBtn: "Start Navigation",
             freeDriveStart: "Free drive without destination",
             freeDriveStop: "Stop free drive",
+            autoFreeDriveTitle: "🚘 Start free drive when driving is detected",
+            autoFreeDriveDesc: "While the app is visible, start destination-free driving after continuous vehicle movement is confirmed",
             addFavBtn: "Add Favorite",
             aboutTitle: "About App",
             lblAppName: "Application Name",
@@ -400,6 +404,8 @@ window.I18n = (function () {
         setElemText('btn-skip-onboarding', dict.permissionContinue);
         setElemText('permission-onboarding-status', dict.permissionChecking);
         setElemText('pip-settings-title', dict.pipTitle);
+        setElemText('auto-free-drive-title', dict.autoFreeDriveTitle);
+        setElemText('auto-free-drive-desc', dict.autoFreeDriveDesc);
         setElemText('pip-auto-title', dict.pipAutoTitle);
         setElemText('pip-auto-desc', dict.pipAutoDesc);
         setElemText('btn-pip-settings', dict.pipSettings);

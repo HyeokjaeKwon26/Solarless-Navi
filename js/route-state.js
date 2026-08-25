@@ -337,6 +337,68 @@
         return { accepted: true, reason: 'RELIABLE_FIX', distanceMeters: distance, impliedSpeedKmh };
     }
 
+    function evaluateAutoFreeDriveSample(state = {}, candidate = {}, distanceMeters, config = {}) {
+        const lat = Number(candidate.lat);
+        const lng = Number(candidate.lng);
+        const timestamp = Number(candidate.timestamp);
+        const accuracy = Number(candidate.accuracy);
+        const reportedSpeedKmh = Number(candidate.reportedSpeedKmh);
+        const minimumSpeedKmh = Number(config.minimumSpeedKmh || 15);
+        const maximumAccuracyMeters = Number(config.maximumAccuracyMeters || 50);
+        const minimumSamples = Math.max(2, Number(config.minimumSamples || 3));
+        const minimumElapsedMs = Number(config.minimumElapsedMs || 3000);
+        const minimumDistanceMeters = Number(config.minimumDistanceMeters || 25);
+        const maximumSampleGapMs = Number(config.maximumSampleGapMs || 15000);
+        const reset = reason => ({ state: {}, shouldStart: false, reason });
+
+        if (![lat, lng, timestamp].every(Number.isFinite)) return reset('INVALID_FIX');
+        if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > maximumAccuracyMeters) {
+            return reset('LOW_ACCURACY');
+        }
+
+        const previous = state.last;
+        let distance = 0;
+        let elapsedMs = 0;
+        let computedSpeedKmh = 0;
+        if (previous) {
+            elapsedMs = timestamp - Number(previous.timestamp);
+            if (!Number.isFinite(elapsedMs) || elapsedMs <= 0 || elapsedMs > maximumSampleGapMs) {
+                return reset('STALE_OR_GAPPED_FIX');
+            }
+            distance = typeof distanceMeters === 'function'
+                ? Number(distanceMeters(Number(previous.lat), Number(previous.lng), lat, lng))
+                : 0;
+            computedSpeedKmh = Number.isFinite(distance) ? distance / (elapsedMs / 1000) * 3.6 : 0;
+        }
+
+        const speedKmh = Number.isFinite(reportedSpeedKmh) && reportedSpeedKmh >= 0
+            ? reportedSpeedKmh : computedSpeedKmh;
+        if (!Number.isFinite(speedKmh) || speedKmh < minimumSpeedKmh || speedKmh > Number(config.maximumSpeedKmh || 220)) {
+            return reset('NOT_CONFIRMED_DRIVING');
+        }
+
+        const first = state.first || { lat, lng, timestamp };
+        const totalDistanceMeters = Number(state.totalDistanceMeters || 0) + Math.max(0, Number(distance) || 0);
+        const consecutiveSamples = Number(state.consecutiveSamples || 0) + 1;
+        const totalElapsedMs = timestamp - Number(first.timestamp);
+        const nextState = {
+            first,
+            last: { lat, lng, timestamp, accuracy, speedKmh },
+            totalDistanceMeters,
+            consecutiveSamples
+        };
+        return {
+            state: nextState,
+            shouldStart: consecutiveSamples >= minimumSamples &&
+                totalElapsedMs >= minimumElapsedMs && totalDistanceMeters >= minimumDistanceMeters,
+            reason: 'DRIVING_SAMPLE',
+            speedKmh,
+            totalElapsedMs,
+            totalDistanceMeters,
+            consecutiveSamples
+        };
+    }
+
     function estimateGpsEtaUncertainty(accuracyMeters, remainingMeters, remainingSeconds, options = {}) {
         const accuracy = Number(accuracyMeters);
         const distance = Number(remainingMeters);
@@ -387,6 +449,7 @@
         vehicleMarkerAnimationDurationMs,
         shouldRestartRouteForGpsFix,
         evaluateNavigationFix,
+        evaluateAutoFreeDriveSample,
         estimateGpsEtaUncertainty,
         formatArrivalDateTime,
         formatRemainingDuration
