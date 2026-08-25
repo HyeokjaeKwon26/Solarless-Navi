@@ -794,16 +794,23 @@ body.pip-mode .map-attribution {
 .banner-icon { width: 44px; height: 44px; background: #22c55e; color: #000; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
 .mobile-turn-banner.hazard .banner-icon { background: #f59e0b; color: #000; }
 
-/* Direction-specific maneuver glyphs.  The explicit transforms avoid the
- * left/right ambiguity that the generic arrow-turn-down icon had in WebView. */
+/* Road-shaped maneuver SVGs use most of the icon tile and preserve a long
+ * approach stem, matching the proportions drivers expect from navigation. */
 .maneuver-icon { display: inline-block; transform-origin: 50% 50%; }
-.maneuver-left { transform: rotate(-90deg); }
-.maneuver-right { transform: rotate(90deg); }
+.maneuver-turn-svg {
+    width: 34px;
+    height: 34px;
+    overflow: visible;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
 .maneuver-slight-left { transform: rotate(-30deg); }
 .maneuver-slight-right { transform: rotate(30deg); }
 .maneuver-sharp-left { transform: rotate(-115deg); }
 .maneuver-sharp-right { transform: rotate(115deg); }
-.maneuver-uturn { transform: rotate(180deg); }
 .maneuver-straight { transform: none; }
 .turn-dist { font-family: var(--font-heading); font-size: 18px; font-weight: 800; color: #fff; }
 .turn-desc { font-size: 12px; color: var(--text-secondary); }

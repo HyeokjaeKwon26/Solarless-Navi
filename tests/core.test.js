@@ -2217,8 +2217,15 @@ test('turn voice does not append a generic straight prompt when a maneuver is pe
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     const guardedHazardCalls = appSource.match(/if \(!nextManeuver\) TTSVoice\.announceNavHazard/g) || [];
     assert.equal(guardedHazardCalls.length, 2);
-    assert.ok(appSource.includes('fa-arrow-turn-up maneuver-icon maneuver-left'));
-    assert.ok(appSource.includes('fa-arrow-turn-up maneuver-icon maneuver-right'));
+});
+
+test('left and right navigation arrows use long road-shaped approach stems', () => {
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    assert.ok(appSource.includes("left: 'M50 56V35C50 24.5 41.5 16 31 16H12"));
+    assert.ok(appSource.includes("right: 'M14 56V35C14 24.5 22.5 16 33 16H52"));
+    assert.ok(appSource.includes('data-maneuver="${direction}"'));
+    assert.ok(!appSource.includes('fa-arrow-turn-up maneuver-icon maneuver-left'));
+    assert.ok(!appSource.includes('fa-arrow-turn-up maneuver-icon maneuver-right'));
 });
 
 test('reverse-geocoded ISO country is cached and controls speed units', async () => {

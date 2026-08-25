@@ -1038,7 +1038,21 @@ document.addEventListener('DOMContentLoaded', () => {
         return { ...selected.maneuver, distanceFromCar: selected.distanceFromCar };
     }
 
-    /* MANEUVER TYPE+MODIFIER → FONTAWESOME ICON MAPPING */
+    /* MANEUVER TYPE+MODIFIER → ICON MAPPING */
+    function getTurnManeuverSvg(direction, label) {
+        // Navigation arrows need a long approach stem so the driver can read
+        // the road movement at a glance. Rotating Font Awesome's compact
+        // arrow-turn-up glyph produced a very short stem on Android WebView.
+        const paths = {
+            left: 'M50 56V35C50 24.5 41.5 16 31 16H12 M22 6L12 16L22 26',
+            right: 'M14 56V35C14 24.5 22.5 16 33 16H52 M42 6L52 16L42 26',
+            uturn: 'M46 56V29C46 12 18 12 18 29V48 M8 38L18 48L28 38'
+        };
+        const path = paths[direction];
+        if (!path) return '';
+        return `<svg class="maneuver-icon maneuver-turn-svg" data-maneuver="${direction}" viewBox="0 0 64 64" role="img" aria-label="${label}" focusable="false"><path d="${path}"></path></svg>`;
+    }
+
     function getManeuverIcon(type, modifier) {
         if (type === 'arrive') return '<i class="fa-solid fa-flag-checkered"></i>';
         if (type === 'roundabout' || type === 'rotary') return '<i class="fa-solid fa-rotate-right"></i>';
@@ -1046,18 +1060,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (type === 'fork') return '<i class="fa-solid fa-code-fork"></i>';
 
         const normalizedModifier = String(modifier || '').trim().toLowerCase();
-        // Keep direction in a named class instead of relying on the
-        // ambiguous orientation of arrow-turn-down plus inline transforms.
-        // The CSS classes are mirrored in www/style.css and make left/right
-        // deterministic in both the banner and PiP HUD.
+        // Left/right/U-turn use purpose-built road-shaped SVG paths. Slight
+        // and sharp turns retain the long straight arrow with a deterministic
+        // CSS rotation because their diagonal approach remains legible.
         switch (normalizedModifier) {
-            case 'left': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-left" aria-label="left turn"></i>';
-            case 'right': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-right" aria-label="right turn"></i>';
+            case 'left': return getTurnManeuverSvg('left', 'left turn');
+            case 'right': return getTurnManeuverSvg('right', 'right turn');
             case 'slight left': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-slight-left" aria-label="slight left"></i>';
             case 'slight right': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-slight-right" aria-label="slight right"></i>';
             case 'sharp left': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-sharp-left" aria-label="sharp left"></i>';
             case 'sharp right': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-sharp-right" aria-label="sharp right"></i>';
-            case 'uturn': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-uturn" aria-label="U-turn"></i>';
+            case 'uturn': return getTurnManeuverSvg('uturn', 'U-turn');
             case 'straight': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-straight" aria-label="straight"></i>';
             default: return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-straight" aria-label="straight"></i>';
         }
