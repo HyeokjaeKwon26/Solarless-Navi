@@ -701,7 +701,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!gesture) return;
             const pair = readTouchPair(event);
             if (!pair) return;
-            manualMapRotation = gesture.startOffset + angleDelta(touchAngle(pair), gesture.startAngle);
+            const nextTouchAngle = touchAngle(pair);
+            manualMapRotation = window.RouteState && typeof window.RouteState.manualMapRotationFromTouchAngles === 'function'
+                ? window.RouteState.manualMapRotationFromTouchAngles(gesture.startOffset, nextTouchAngle, gesture.startAngle)
+                : gesture.startOffset - angleDelta(nextTouchAngle, gesture.startAngle);
             applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
         }, { capture: true, passive: true });
 
@@ -1068,8 +1071,8 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'right': return getTurnManeuverSvg('right', 'right turn');
             case 'slight left': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-slight-left" aria-label="slight left"></i>';
             case 'slight right': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-slight-right" aria-label="slight right"></i>';
-            case 'sharp left': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-sharp-left" aria-label="sharp left"></i>';
-            case 'sharp right': return '<i class="fa-solid fa-arrow-turn-up maneuver-icon maneuver-sharp-right" aria-label="sharp right"></i>';
+            case 'sharp left': return getTurnManeuverSvg('left', 'sharp left');
+            case 'sharp right': return getTurnManeuverSvg('right', 'sharp right');
             case 'uturn': return getTurnManeuverSvg('uturn', 'U-turn');
             case 'straight': return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-straight" aria-label="straight"></i>';
             default: return '<i class="fa-solid fa-arrow-up maneuver-icon maneuver-straight" aria-label="straight"></i>';

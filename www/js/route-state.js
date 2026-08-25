@@ -43,6 +43,19 @@
         };
     }
 
+    function manualMapRotationFromTouchAngles(startOffsetDeg, currentTouchAngleDeg, startTouchAngleDeg) {
+        const offset = Number(startOffsetDeg);
+        const current = Number(currentTouchAngleDeg);
+        const start = Number(startTouchAngleDeg);
+        if (![offset, current, start].every(Number.isFinite)) return Number.isFinite(offset) ? offset : 0;
+        const touchDelta = ((current - start + 540) % 360) - 180;
+        // Screen touch angles increase clockwise because clientY grows
+        // downward. The map DOM is rendered with CSS rotate(-mapBearing), so
+        // the manual bearing offset must use the opposite sign for the map to
+        // visually follow the two-finger gesture instead of opposing it.
+        return offset - touchDelta;
+    }
+
     function screenPointToRotatedLayout(clientX, clientY, centerX, centerY, layoutWidth, layoutHeight, angleDeg) {
         const x = Number(clientX);
         const y = Number(clientY);
@@ -328,6 +341,7 @@
         createRouteRequestKey,
         isRouteRequestKeyCurrent,
         inverseRotateScreenDelta,
+        manualMapRotationFromTouchAngles,
         screenPointToRotatedLayout,
         rotatedLayoutPointToScreen,
         normalizeTimeToken,

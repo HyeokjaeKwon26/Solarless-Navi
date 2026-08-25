@@ -235,6 +235,16 @@ test('screen drag deltas are inverse-rotated exactly once for heading-up maps', 
     assert.ok(Math.abs(eastAt180.y) < 1e-9);
 });
 
+test('two-finger map rotation follows the screen gesture direction', () => {
+    // In screen coordinates +30 degrees is a clockwise finger rotation. The
+    // map bearing offset must be -30 because CSS renders rotate(-bearing),
+    // producing the same clockwise visual movement as the fingers.
+    assert.equal(RouteState.manualMapRotationFromTouchAngles(0, 30, 0), -30);
+    assert.equal(RouteState.manualMapRotationFromTouchAngles(0, -45, 0), 45);
+    assert.equal(RouteState.manualMapRotationFromTouchAngles(10, -170, 170), -10);
+    assert.equal(RouteState.manualMapRotationFromTouchAngles(10, 170, -170), 30);
+});
+
 test('rotated map screen and layout coordinates round-trip at all navigation angles', () => {
     const center = { x: 540, y: 960 };
     const layout = { width: 1440, height: 1440 };
@@ -2226,6 +2236,8 @@ test('left and right navigation arrows use long road-shaped approach stems', () 
     assert.ok(appSource.includes('data-maneuver="${direction}"'));
     assert.ok(!appSource.includes('fa-arrow-turn-up maneuver-icon maneuver-left'));
     assert.ok(!appSource.includes('fa-arrow-turn-up maneuver-icon maneuver-right'));
+    assert.ok(appSource.includes("case 'sharp left': return getTurnManeuverSvg('left', 'sharp left')"));
+    assert.ok(appSource.includes("case 'sharp right': return getTurnManeuverSvg('right', 'sharp right')"));
 });
 
 test('reverse-geocoded ISO country is cached and controls speed units', async () => {
@@ -2461,7 +2473,8 @@ test('heading-up gestures compensate CSS rotation and route preview frames both 
     assert.ok(appSource.includes('function markUserMapPanning()'));
     assert.ok(appSource.includes("'touchmove'"));
     assert.ok(appSource.includes('startOffset: manualMapRotation'));
-    assert.ok(appSource.includes('manualMapRotation = gesture.startOffset'));
+    assert.ok(appSource.includes('manualMapRotationFromTouchAngles(gesture.startOffset, nextTouchAngle, gesture.startAngle)'));
+    assert.ok(appSource.includes('gesture.startOffset - angleDelta(nextTouchAngle, gesture.startAngle)'));
     assert.ok(appSource.includes('rotatePointToMapCoordinates'));
     assert.ok(appSource.includes('screenPointToRotatedLayout'));
     assert.ok(appSource.includes('paddingTopLeft: [48, 176]'));

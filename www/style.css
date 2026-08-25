@@ -809,8 +809,6 @@ body.pip-mode .map-attribution {
 }
 .maneuver-slight-left { transform: rotate(-30deg); }
 .maneuver-slight-right { transform: rotate(30deg); }
-.maneuver-sharp-left { transform: rotate(-115deg); }
-.maneuver-sharp-right { transform: rotate(115deg); }
 .maneuver-straight { transform: none; }
 .turn-dist { font-family: var(--font-heading); font-size: 18px; font-weight: 800; color: #fff; }
 .turn-desc { font-size: 12px; color: var(--text-secondary); }
