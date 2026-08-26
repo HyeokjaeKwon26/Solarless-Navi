@@ -96,7 +96,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let autoFreeDriveMotionState = {};
     let autoFreeDriveStartPending = false;
     let autoFreeDriveSuppressedUntil = 0;
-    const AUTO_FREE_DRIVE_MANUAL_STOP_COOLDOWN_MS = 60 * 1000;
+    let lastDestinationEditingAt = 0;
+    // Focus can remain on a WebView input after the keyboard closes.  Treat
+    // only recent typing/tapping as active editing so a stale focus does not
+    // disable automatic free-drive detection for the rest of the session.
+    const AUTO_FREE_DRIVE_EDITING_GRACE_MS = 8 * 1000;
+    const AUTO_FREE_DRIVE_MANUAL_STOP_COOLDOWN_MS = 10 * 1000;
     let lastGpsWatchRestartAt = 0;
     let navigationResumePromise = null;
     let lastNavigationResumeAt = 0;
@@ -381,14 +386,40 @@ document.addEventListener('DOMContentLoaded', () => {
         sunsetMins: 1180
     };
 
+    function updateDrawerPrimaryActionButton() {
+        const button = document.getElementById('live-gps-nav-btn');
+        if (!button) return;
+        const isKo = I18n.getLanguage().startsWith('ko');
+        if (isLiveNavActive) {
+            button.classList.remove('free-drive-entry');
+            if (!button.classList.contains('reroute-mode')) {
+                button.innerHTML = `<i class="fa-solid fa-square"></i> ${isFreeDriveMode
+                    ? (isKo ? '자유 주행 종료' : 'Stop free drive')
+                    : I18n.getText('liveNavStop')}`;
+            }
+            return;
+        }
+        button.classList.remove('active', 'reroute-mode');
+        if (!currentEnd) {
+            button.classList.add('free-drive-entry');
+            button.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${isKo
+                ? '목적지 없이 자유 주행' : 'Free drive without destination'}`;
+        } else {
+            button.classList.remove('free-drive-entry');
+            button.innerHTML = `<i class="fa-solid fa-location-arrow"></i> ${I18n.getText('liveNavStart')}`;
+        }
+    }
+
     function setNavigationButtonsEnabled(isEnabled) {
         ['live-gps-nav-btn', 'btn-map-start-nav'].forEach((id) => {
             const button = document.getElementById(id);
             if (!button) return;
-            const shouldDisable = navigationTransitionPending || (!isEnabled && !isLiveNavActive);
+            const isDestinationlessDrawerAction = id === 'live-gps-nav-btn' && !currentEnd && !isLiveNavActive;
+            const shouldDisable = navigationTransitionPending || (!isEnabled && !isLiveNavActive && !isDestinationlessDrawerAction);
             button.disabled = shouldDisable;
             button.setAttribute('aria-disabled', shouldDisable ? 'true' : 'false');
         });
+        updateDrawerPrimaryActionButton();
     }
 
     function showRouteFailureMessage(error, keptPreviousRoute = false) {
@@ -1051,6 +1082,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         `<i class="fa-solid fa-square"></i> ${I18n.getText('mapStopNav')}` :
                         `<i class="fa-solid fa-play"></i> ${I18n.getText('mapStartNav')}`;
                 }
+                updateDrawerPrimaryActionButton();
 
                 renderFavorites();
                 renderRecentDestinationHistory();
@@ -1708,10 +1740,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const coords = position && position.coords;
             if (!coords || !window.RouteState || typeof window.RouteState.evaluateAutoFreeDriveSample !== 'function') return;
-            const focusedElement = document.activeElement;
-            const userIsEditing = focusedElement && (
-                focusedElement.tagName === 'INPUT' || focusedElement.tagName === 'TEXTAREA' || focusedElement.isContentEditable
-            );
+            const userIsEditing = Date.now() - lastDestinationEditingAt < AUTO_FREE_DRIVE_EDITING_GRACE_MS;
             const sidebar = document.getElementById('sidebar-panel');
             const blockingModal = document.querySelector(
                 '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden)'
@@ -1721,9 +1750,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const timestamp = Number(position.timestamp) > 0 ? Number(position.timestamp) : Date.now();
+            const lat = Number(coords.latitude);
+            const lng = Number(coords.longitude);
+            const previousPosition = lastGpsPosition;
+            const displaySpeedKmh = getPositionSpeedKmh(position);
             const sample = window.RouteState.evaluateAutoFreeDriveSample(autoFreeDriveMotionState, {
-                lat: Number(coords.latitude),
-                lng: Number(coords.longitude),
+                lat,
+                lng,
                 timestamp,
                 accuracy: Number(coords.accuracy),
                 reportedSpeedKmh: coords.speed !== null && coords.speed !== undefined &&
@@ -1738,6 +1771,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 maximumSampleGapMs: 15000
             });
             autoFreeDriveMotionState = sample.state;
+            // Ambient tracking still updates the vehicle marker and speed when
+            // route guidance is inactive. Keep the camera under user control;
+            // automatic follow begins only after free drive is confirmed.
+            if (Number(coords.accuracy) > 0 && Number(coords.accuracy) <= 100) {
+                let passiveHeading = Number(coords.heading);
+                const hasProviderHeading = Number.isFinite(passiveHeading) && passiveHeading >= 0;
+                if (!hasProviderHeading && previousPosition) {
+                    const movedMeters = ShadowRouter.calculateDistanceMeters(
+                        previousPosition.lat, previousPosition.lng, lat, lng
+                    );
+                    if (movedMeters >= 3) {
+                        passiveHeading = ShadowRouter.calculateBearing(previousPosition.lat, previousPosition.lng, lat, lng);
+                    }
+                }
+                if (!Number.isFinite(passiveHeading) || passiveHeading < 0) passiveHeading = currentHeading;
+                applyGpsFix(position, 'passive-driving-detection');
+                currentHeading = passiveHeading;
+                stableGpsHeading = passiveHeading;
+                lastStableMovingGps = { lat, lng };
+                updateVehicleMarkerPosition(lat, lng, passiveHeading, displaySpeedKmh, { snapToRoute: false });
+                updateGpsSpeedometer(position);
+                lastGpsPosition = { lat, lng };
+                lastGpsTimestamp = timestamp;
+            }
             if (!sample.shouldStart || autoFreeDriveStartPending) return;
 
             autoFreeDriveStartPending = true;
@@ -2648,8 +2705,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (destinationBar && !currentEnd) destinationBar.innerText = I18n.getText('barDestDefault');
         }
         const freeButtons = [
-            document.getElementById('btn-start-free-drive'),
-            document.getElementById('btn-drawer-free-drive')
+            document.getElementById('btn-start-free-drive')
         ];
         freeButtons.forEach(button => {
             if (!button) return;
@@ -2658,6 +2714,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? `<i class="fa-solid fa-square"></i> ${isKo ? '자유 주행 종료' : 'Stop free drive'}`
                 : `<i class="fa-solid fa-gauge-high"></i> ${isKo ? '목적지 없이 자유 주행' : 'Free drive without destination'}`;
         });
+        updateDrawerPrimaryActionButton();
     }
 
     async function startFreeDriveMode(options = {}) {
@@ -3819,7 +3876,15 @@ document.addEventListener('DOMContentLoaded', () => {
         input.setAttribute('aria-autocomplete', 'list');
         dropdown.setAttribute('role', 'listbox');
 
+        const markRecentRouteEditing = () => {
+            lastDestinationEditingAt = Date.now();
+            autoFreeDriveMotionState = {};
+        };
+        input.addEventListener('pointerdown', markRecentRouteEditing, { passive: true });
+        input.addEventListener('focus', markRecentRouteEditing);
+
         input.addEventListener('input', (e) => {
+            markRecentRouteEditing();
             clearTimeout(debounceTimer);
             requestGeneration += 1;
             activeIndex = -1;
@@ -3913,6 +3978,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         input.addEventListener('keydown', (e) => {
+            markRecentRouteEditing();
             const options = Array.from(dropdown.querySelectorAll('[role="option"]'));
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault();
@@ -3983,7 +4049,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('btn-confirm-destination').addEventListener('click', resolveAndStartNavigation);
-    ['btn-start-free-drive', 'btn-drawer-free-drive'].forEach(id => {
+    ['btn-start-free-drive'].forEach(id => {
         const button = document.getElementById(id);
         if (button) button.addEventListener('click', startFreeDriveMode);
     });
@@ -4372,6 +4438,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 directMapBtn.innerHTML = `<i class="fa-solid fa-play"></i> ${I18n.getText('mapStartNav')}`;
                 directMapBtn.classList.remove('active', 'reroute-mode');
             }
+            updateDrawerPrimaryActionButton();
             disableKeepAwake();
             navigationSessionArrived = true;
             clearActiveNavigationSession();
@@ -4490,7 +4557,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? (isKo ? '자유 주행 종료' : 'Stop free drive')
                 : I18n.getText('liveNavStop')}`;
             btn.classList.add('active');
-            btn.classList.remove('reroute-mode');
+            btn.classList.remove('reroute-mode', 'free-drive-entry');
         }
         if (directMapBtn) {
             directMapBtn.innerHTML = `<i class="fa-solid fa-square"></i> ${isFreeDriveMode
@@ -5046,7 +5113,8 @@ document.addEventListener('DOMContentLoaded', () => {
             setSidebarOpen(false);
             TTSVoice.speak(getRouteAnnouncementText(currentMode, true));
         } else {
-            toggleLiveGpsNavigation();
+            if (!currentEnd) startFreeDriveMode();
+            else toggleLiveGpsNavigation();
         }
     });
 

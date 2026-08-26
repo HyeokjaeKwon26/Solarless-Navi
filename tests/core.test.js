@@ -1221,7 +1221,34 @@ test('auto free drive requires sustained accurate vehicle motion', () => {
         lat: 0, lng: 0, timestamp: 1000, accuracy: 8, reportedSpeedKmh: 6
     }, distanceMeters, config);
     assert.equal(walking.shouldStart, false);
-    assert.equal(walking.reason, 'NOT_CONFIRMED_DRIVING');
+    assert.equal(walking.reason, 'BASELINE_FIX');
+
+    let derivedState = {};
+    const derivedSamples = [
+        { lat: 0, lng: 0, timestamp: 1000, accuracy: 8, reportedSpeedKmh: NaN },
+        { lat: 0, lng: 20, timestamp: 3000, accuracy: 8, reportedSpeedKmh: NaN },
+        { lat: 0, lng: 40, timestamp: 5000, accuracy: 8, reportedSpeedKmh: NaN },
+        { lat: 0, lng: 60, timestamp: 7000, accuracy: 8, reportedSpeedKmh: NaN }
+    ];
+    let derivedResult;
+    derivedSamples.forEach(sample => {
+        derivedResult = RouteState.evaluateAutoFreeDriveSample(derivedState, sample, distanceMeters, config);
+        derivedState = derivedResult.state;
+    });
+    assert.equal(derivedResult.shouldStart, true);
+    assert.equal(derivedResult.consecutiveSamples, 3);
+
+    let zeroSpeedState = {};
+    let zeroSpeedResult;
+    derivedSamples.forEach(sample => {
+        zeroSpeedResult = RouteState.evaluateAutoFreeDriveSample(zeroSpeedState, {
+            ...sample,
+            reportedSpeedKmh: 0
+        }, distanceMeters, config);
+        zeroSpeedState = zeroSpeedResult.state;
+    });
+    assert.equal(zeroSpeedResult.shouldStart, true);
+    assert.equal(zeroSpeedResult.consecutiveSamples, 3);
 
     const inaccurate = RouteState.evaluateAutoFreeDriveSample(result.state, {
         lat: 0, lng: 100, timestamp: 6000, accuracy: 120, reportedSpeedKmh: 80
@@ -2932,7 +2959,7 @@ test('free drive starts without a destination and can transition into routed gui
     const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
     const i18n = fs.readFileSync(path.join(root, 'js/i18n.js'), 'utf8');
     assert.ok(html.includes('id="btn-start-free-drive"'));
-    assert.ok(html.includes('id="btn-drawer-free-drive"'));
+    assert.equal(html.includes('id="btn-drawer-free-drive"'), false);
     assert.ok(appSource.includes('async function startFreeDriveMode(options = {})'));
     assert.ok(appSource.includes('toggleLiveGpsNavigation({ freeDrive: true, automatic: options.automatic === true })'));
     assert.ok(appSource.includes('const requestedFreeDrive = options.freeDrive === true'));
@@ -2949,6 +2976,7 @@ test('free drive starts without a destination and can transition into routed gui
 test('foreground driving detection can automatically enter free drive without prompting', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
     const i18n = fs.readFileSync(path.join(root, 'js/i18n.js'), 'utf8');
     assert.ok(html.includes('id="toggle-auto-free-drive"'));
     assert.ok(appSource.includes("AUTO_FREE_DRIVE_ENABLED_KEY = 'solarless_auto_free_drive_enabled'"));
@@ -2965,9 +2993,14 @@ test('foreground driving detection can automatically enter free drive without pr
     assert.ok(appSource.includes('minimumDistanceMeters: 25'));
     assert.ok(appSource.includes("startFreeDriveMode({ automatic: true })"));
     assert.ok(appSource.includes('Passive detection never opens a permission prompt or alert.'));
-    assert.ok(appSource.includes("focusedElement.tagName === 'INPUT'"));
+    assert.ok(appSource.includes('AUTO_FREE_DRIVE_EDITING_GRACE_MS = 8 * 1000'));
+    assert.ok(appSource.includes('Date.now() - lastDestinationEditingAt < AUTO_FREE_DRIVE_EDITING_GRACE_MS'));
+    assert.ok(appSource.includes("input.addEventListener('pointerdown', markRecentRouteEditing"));
     assert.ok(appSource.includes("#arrival-modal:not(.hidden)"));
-    assert.ok(appSource.includes('AUTO_FREE_DRIVE_MANUAL_STOP_COOLDOWN_MS = 60 * 1000'));
+    assert.ok(appSource.includes('AUTO_FREE_DRIVE_MANUAL_STOP_COOLDOWN_MS = 10 * 1000'));
+    assert.ok(appSource.includes('updateVehicleMarkerPosition(lat, lng, passiveHeading, displaySpeedKmh, { snapToRoute: false })'));
+    assert.ok(appSource.includes('if (!currentEnd) startFreeDriveMode();'));
+    assert.ok(css.includes('.nav-btn.live.free-drive-entry'));
     assert.ok(i18n.includes('autoFreeDriveTitle'));
 });
 

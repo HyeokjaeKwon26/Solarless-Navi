@@ -370,7 +370,7 @@ window.I18n = (function () {
         setElemHtml('recent-title-text', `<i class="fa-solid fa-clock-rotate-left"></i> ${dict.recentTitle}`);
         setElemText('btn-clear-history', dict.clearHistoryBtn);
         setElemHtml('btn-confirm-destination', `<i class="fa-solid fa-route"></i> ${dict.confirmStartBtn}`);
-        ['btn-start-free-drive', 'btn-drawer-free-drive'].forEach(id => {
+        ['btn-start-free-drive'].forEach(id => {
             const button = document.getElementById(id);
             if (!button) return;
             const active = button.classList.contains('active');

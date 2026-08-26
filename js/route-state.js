@@ -371,14 +371,34 @@
             computedSpeedKmh = Number.isFinite(distance) ? distance / (elapsedMs / 1000) * 3.6 : 0;
         }
 
-        const speedKmh = Number.isFinite(reportedSpeedKmh) && reportedSpeedKmh >= 0
-            ? reportedSpeedKmh : computedSpeedKmh;
-        if (!Number.isFinite(speedKmh) || speedKmh < minimumSpeedKmh || speedKmh > Number(config.maximumSpeedKmh || 220)) {
-            return reset('NOT_CONFIRMED_DRIVING');
+        // Some Android providers report an initial numeric zero instead of
+        // null while their speed estimate warms up.  A zero/near-zero value
+        // must not permanently mask sustained movement visible in consecutive
+        // accurate fixes; the sample-count, distance, accuracy and plausible-
+        // speed gates below still prevent a single GPS jump from auto-starting.
+        const providerSpeedIsMoving = Number.isFinite(reportedSpeedKmh) &&
+            reportedSpeedKmh > Number(config.providerStationarySpeedKmh || 3.5);
+        const speedKmh = providerSpeedIsMoving ? reportedSpeedKmh : computedSpeedKmh;
+        if (!Number.isFinite(speedKmh) || speedKmh > Number(config.maximumSpeedKmh || 220)) {
+            return reset('IMPLAUSIBLE_SPEED');
+        }
+        if (speedKmh < minimumSpeedKmh) {
+            // Android providers commonly return coords.speed=null. Preserve a
+            // reliable baseline fix so the next sample can derive speed from
+            // distance/time instead of discarding every first sample forever.
+            return {
+                state: { last: { lat, lng, timestamp, accuracy, speedKmh } },
+                shouldStart: false,
+                reason: previous ? 'NOT_CONFIRMED_DRIVING' : 'BASELINE_FIX',
+                speedKmh
+            };
         }
 
-        const first = state.first || { lat, lng, timestamp };
-        const totalDistanceMeters = Number(state.totalDistanceMeters || 0) + Math.max(0, Number(distance) || 0);
+        const continuingDrivingRun = !!state.first && Number(state.consecutiveSamples || 0) > 0;
+        const first = continuingDrivingRun ? state.first : { lat, lng, timestamp };
+        const totalDistanceMeters = continuingDrivingRun
+            ? Number(state.totalDistanceMeters || 0) + Math.max(0, Number(distance) || 0)
+            : 0;
         const consecutiveSamples = Number(state.consecutiveSamples || 0) + 1;
         const totalElapsedMs = timestamp - Number(first.timestamp);
         const nextState = {
