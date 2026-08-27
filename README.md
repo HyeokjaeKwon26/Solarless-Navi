@@ -176,13 +176,11 @@ CSV, JSON과 SVG 그래프도 보고서와 함께 저장됩니다. 재현 명령
 | 도로 경로 | OSRM |
 | 주소·장소·국가 | Nominatim, Photon |
 | 장면 fallback | OSM Overpass, OpenTopoData |
-| 지도 | OpenFreeMap/OpenMapTiles 벡터 지도, OpenStreetMap 래스터 fallback |
+| 지도 데이터 | © OpenStreetMap contributors |
 | 사전계산 장면 | GitHub Releases |
 | 기상예보·직접일사 | Open-Meteo |
 
 공개 서비스는 장애·속도제한·정책 변경이 있을 수 있습니다. 다운로드한 장면은 재사용하지만 새 도로 경로의 오프라인 계산은 지원하지 않습니다.
-
-도로 지도는 한국어·영어에서 동일한 OpenFreeMap/OpenMapTiles 벡터 스타일을 사용하며, 언어 전환은 UI·음성·단위·검색 표시만 바꿉니다. 기존 Leaflet 경로·마커·회전·터치 구조는 유지됩니다. WebGL을 지원하지 않거나 벡터 스타일 로딩이 실패하거나 반복 렌더링 오류 및 WebGL context 손실이 발생하면 경로와 조작 상태를 유지한 채 OpenStreetMap 표준 래스터 지도로 자동 전환합니다. 두 공개 지도 서비스 모두 가용성을 보장하는 SLA는 없습니다.
 
 ## 개발·검증·빌드
 
@@ -211,7 +209,7 @@ SolarLess Navi는 연구·연습 목적의 실험용 소프트웨어입니다. �
 
 - 앱: AGPL-3.0-only
 - Android: Capacitor 6
-- 지도: Leaflet + MapLibre GL, OpenFreeMap/OpenMapTiles, © OpenStreetMap contributors
+- 지도 데이터: © OpenStreetMap contributors
 - 도로·건물·터널: OpenStreetMap ODbL
 - 태양 위치: `nrel-spa`와 NREL SPA — 자세한 조건은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - 지형: SRTM 및 fallback ASTER30m
@@ -265,9 +263,7 @@ The [research-style report](docs/US_SOLAR_ROUTE_SIMULATION.md) is a 2026-08-21 s
 
 This is research software. Estimates can be wrong because map, height, terrain, weather, route, GPS or network data can be missing or stale. It does not provide medical protection or replace signs, traffic law, weather/road conditions, or driver judgment. Do not interact with the display while driving.
 
-### Map provider and fallback
-
-The road map uses the same OpenFreeMap/OpenMapTiles vector style in Korean and English; language switching only changes the UI, voice, units and search presentation. Leaflet remains the navigation and interaction engine. If WebGL is unavailable, the vector style cannot load, repeated rendering errors occur, or the WebGL context is lost, the app automatically keeps the route and controls while switching to the OpenStreetMap standard raster layer. The public services are best-effort and do not provide an availability guarantee. OpenFreeMap, OpenMapTiles and OpenStreetMap attribution is shown on the map.
+Map data: © OpenStreetMap contributors.
 
 ### Build
 
