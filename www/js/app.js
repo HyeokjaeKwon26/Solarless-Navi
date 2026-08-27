@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let darkTileLayer = null;
     let satelliteTileLayer = null;
     let currentTileLayer = null;
+    let roadLayerSet = null;
+    let isRasterMapFallbackActive = false;
+    const VECTOR_MAP_LOAD_TIMEOUT_MS = 12000;
 
     let currentStart = null;
     let currentHeading = 0;
@@ -566,18 +569,14 @@ document.addEventListener('DOMContentLoaded', () => {
             attributionControl: false
         }).setView([initialLat, initialLng], initialZoom);
 
-        // Use the same base map in every UI language. Language switching
-        // changes UI/voice/search presentation, not the map geometry/style.
-        lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-            maxZoom: 19,
-            subdomains: 'abcd'
-        });
-
-        // Dark Theme: CartoDB Dark Matter High-Contrast Night Navigation
-        darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png', {
-            maxZoom: 19,
-            subdomains: 'abcd'
-        });
+        // Keep Leaflet as the navigation/map interaction engine. OpenFreeMap
+        // supplies the primary vector road style; a regular OSM raster layer
+        // remains ready so unsupported WebGL or a failed style request never
+        // leaves the driver with a blank map.
+        roadLayerSet = MapProvider.createRoadLayers(L, window.maplibregl);
+        isRasterMapFallbackActive = !roadLayerSet.vectorSupported;
+        lightTileLayer = MapProvider.layerForTheme(roadLayerSet, 'light', isRasterMapFallbackActive);
+        darkTileLayer = MapProvider.layerForTheme(roadLayerSet, 'dark', isRasterMapFallbackActive);
 
         // High-Resolution Satellite Photo Tile Layer: ESRI World Imagery
         satelliteTileLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
@@ -585,9 +584,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         currentTileLayer = lightTileLayer;
-        currentTileLayer.addTo(map);
+        addBaseLayerSafely(currentTileLayer);
 
         OfflineMap.registerOfflineTileCache(lightTileLayer);
+        updateMapAttribution();
 
         activeRoutePolylineGroup = L.featureGroup().addTo(map);
         dynamicRemainingPolylineGroup = L.featureGroup().addTo(map);
@@ -1327,6 +1327,85 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function updateMapAttribution() {
+        const attribution = document.getElementById('map-attribution-text');
+        if (!attribution || !window.MapProvider) return;
+        attribution.innerHTML = MapProvider.attributionFor({
+            satellite: isSatelliteViewActive,
+            fallbackActive: isRasterMapFallbackActive,
+            vectorSupported: !!(roadLayerSet && roadLayerSet.vectorSupported)
+        });
+    }
+
+    function activateRasterMapFallback(reason) {
+        if (isRasterMapFallbackActive || !roadLayerSet || !map) return;
+        isRasterMapFallbackActive = true;
+
+        const failedLayer = currentTileLayer;
+        if (failedLayer && map.hasLayer(failedLayer)) map.removeLayer(failedLayer);
+        lightTileLayer = MapProvider.layerForTheme(roadLayerSet, 'light', true);
+        darkTileLayer = MapProvider.layerForTheme(roadLayerSet, 'dark', true);
+        currentTileLayer = null;
+
+        // Do not expose coordinates or URLs in production logs. The short
+        // reason only identifies the renderer/fetch stage for diagnostics.
+        console.warn('Vector basemap unavailable; using OSM raster fallback:', reason || 'unknown');
+        checkAndUpdateMapTileTheme();
+        updateMapAttribution();
+    }
+
+    function monitorVectorMapLayer(layer) {
+        if (isRasterMapFallbackActive || !layer || typeof layer.getMaplibreMap !== 'function') return;
+        const glMap = layer.getMaplibreMap();
+        if (!glMap || layer.__solarLessMonitoredGlMap === glMap) return;
+        layer.__solarLessMonitoredGlMap = glMap;
+
+        let loaded = false;
+        let recentErrors = [];
+        const stillCurrent = () => !isRasterMapFallbackActive && currentTileLayer === layer &&
+            typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap() === glMap;
+        const loadTimer = setTimeout(() => {
+            if (!loaded && stillCurrent()) activateRasterMapFallback('vector-load-timeout');
+        }, VECTOR_MAP_LOAD_TIMEOUT_MS);
+
+        glMap.once('load', () => {
+            loaded = true;
+            clearTimeout(loadTimer);
+        });
+        glMap.on('error', () => {
+            if (!stillCurrent()) return;
+            const now = Date.now();
+            recentErrors = recentErrors.filter(time => now - time < 10000);
+            recentErrors.push(now);
+            // A single missing glyph/tile must not discard an otherwise usable
+            // map. Repeated startup errors or a sustained runtime failure do.
+            const threshold = loaded ? 6 : 2;
+            if (recentErrors.length >= threshold) activateRasterMapFallback('repeated-vector-errors');
+        });
+
+        const canvas = typeof glMap.getCanvas === 'function' ? glMap.getCanvas() : null;
+        if (canvas) {
+            canvas.addEventListener('webglcontextlost', event => {
+                if (event && typeof event.preventDefault === 'function') event.preventDefault();
+                if (stillCurrent()) activateRasterMapFallback('webgl-context-lost');
+            }, { once: true });
+        }
+    }
+
+    function addBaseLayerSafely(layer) {
+        if (!layer || !map) return;
+        try {
+            layer.addTo(map);
+            monitorVectorMapLayer(layer);
+        } catch (error) {
+            if (!isRasterMapFallbackActive && roadLayerSet && roadLayerSet.vectorSupported) {
+                activateRasterMapFallback('vector-initialization-error');
+                return;
+            }
+            console.warn('Basemap layer could not be added:', error && error.message ? error.message : 'unknown');
+        }
+    }
+
     /* REAL-TIME DYNAMIC GPS SUNCALC ASTRONOMICAL SUNRISE/SUNSET & TUNNEL/LIGHT DARK MODE SWITCHING */
     function checkAndUpdateMapTileTheme() {
         let targetTileLayer = null;
@@ -1371,8 +1450,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 map.removeLayer(currentTileLayer);
             }
             currentTileLayer = targetTileLayer;
-            currentTileLayer.addTo(map);
+            addBaseLayerSafely(currentTileLayer);
         }
+        updateMapAttribution();
     }
 
     /* OLED HEAT & BATTERY SAVER MODE TOGGLE */

@@ -2682,10 +2682,13 @@ test('startup is north-up and native permission/PiP state is checked before onbo
     assert.equal(html.includes('compass-btn heading-up'), false);
 });
 
-test('language switching keeps one CARTO Voyager road layer and compass clicks persist', () => {
+test('language switching keeps one no-key road provider with raster fallback and compass clicks persist', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.equal(appSource.includes('World_Street_Map/MapServer'), false);
-    assert.equal((appSource.match(/basemaps\.cartocdn\.com\/rastertiles\/voyager/g) || []).length, 1);
+    assert.equal(appSource.includes('basemaps.cartocdn.com'), false);
+    assert.ok(appSource.includes('MapProvider.createRoadLayers'));
+    assert.ok(appSource.includes('activateRasterMapFallback'));
+    assert.ok(appSource.includes("activateRasterMapFallback('webgl-context-lost')"));
     assert.ok(appSource.includes('targetTileLayer = lightTileLayer;'));
     const toggleStart = appSource.indexOf('function toggleCompassMode()');
     const toggleEnd = appSource.indexOf('function applyMapRotation', toggleStart);

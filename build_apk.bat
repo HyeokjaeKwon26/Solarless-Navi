@@ -7,6 +7,7 @@ set "ROOT_DIR=%~dp0"
 set "ANDROID_DIR=%ROOT_DIR%android"
 set "PUBLIC_DIR=%ANDROID_DIR%\app\src\main\assets\public"
 set "WWW_DIR=%ROOT_DIR%www"
+set "LICENSES_DIR=%ROOT_DIR%licenses"
 
 echo ===================================================
 echo [1/4] Configuring optional JDK 17 Environment
@@ -37,9 +38,11 @@ echo ===================================================
 if not exist "%PUBLIC_DIR%\js" mkdir "%PUBLIC_DIR%\js"
 if not exist "%PUBLIC_DIR%\css" mkdir "%PUBLIC_DIR%\css"
 if not exist "%PUBLIC_DIR%\webfonts" mkdir "%PUBLIC_DIR%\webfonts"
+if not exist "%PUBLIC_DIR%\licenses" mkdir "%PUBLIC_DIR%\licenses"
 if not exist "%WWW_DIR%\js" mkdir "%WWW_DIR%\js"
 if not exist "%WWW_DIR%\css" mkdir "%WWW_DIR%\css"
 if not exist "%WWW_DIR%\webfonts" mkdir "%WWW_DIR%\webfonts"
+if not exist "%WWW_DIR%\licenses" mkdir "%WWW_DIR%\licenses"
 
 copy /y "%ROOT_DIR%index.html" "%PUBLIC_DIR%\index.html" >nul
 if errorlevel 1 (echo [ERROR] Failed to copy index.html to Android assets.& exit /b 2)
@@ -53,6 +56,8 @@ xcopy /y /e /i "%ROOT_DIR%css\*" "%PUBLIC_DIR%\css\" >nul
 if errorlevel 1 (echo [ERROR] Failed to copy CSS assets to Android assets.& exit /b 2)
 xcopy /y /e /i "%ROOT_DIR%webfonts\*" "%PUBLIC_DIR%\webfonts\" >nul
 if errorlevel 1 (echo [ERROR] Failed to copy fonts to Android assets.& exit /b 2)
+xcopy /y /e /i "%LICENSES_DIR%\*" "%PUBLIC_DIR%\licenses\" >nul
+if errorlevel 1 (echo [ERROR] Failed to copy third-party licenses to Android assets.& exit /b 2)
 
 rem Capacitor webDir is www; keep this tracked copy in lockstep with root sources.
 copy /y "%ROOT_DIR%index.html" "%WWW_DIR%\index.html" >nul
@@ -65,6 +70,8 @@ xcopy /y /e /i "%ROOT_DIR%css\*" "%WWW_DIR%\css\" >nul
 if errorlevel 1 (echo [ERROR] Failed to copy CSS assets to www.& exit /b 2)
 xcopy /y /e /i "%ROOT_DIR%webfonts\*" "%WWW_DIR%\webfonts\" >nul
 if errorlevel 1 (echo [ERROR] Failed to copy fonts to www.& exit /b 2)
+xcopy /y /e /i "%LICENSES_DIR%\*" "%WWW_DIR%\licenses\" >nul
+if errorlevel 1 (echo [ERROR] Failed to copy third-party licenses to www.& exit /b 2)
 
 echo.
 echo ===================================================

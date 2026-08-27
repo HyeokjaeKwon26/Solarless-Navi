@@ -9,6 +9,7 @@
     
     <!-- Leaflet CSS (Locally Bundled) -->
     <link rel="stylesheet" href="css/leaflet.css" />
+    <link rel="stylesheet" href="css/maplibre-gl.css" />
     
     <!-- FontAwesome Icons (Locally Bundled) -->
     <link rel="stylesheet" href="css/all.min.css" />
@@ -532,7 +533,7 @@
                 </div>
                 <div class="map-bottom-overlay-stack" id="map-bottom-overlay-stack" aria-live="polite">
                     <div class="map-attribution" id="map-attribution" aria-label="Map attribution">
-                        <span id="map-attribution-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · Tiles © <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a> / <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a></span>
+                        <span id="map-attribution-text"><a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> · © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer">OpenMapTiles</a> · Data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a></span>
                     </div>
                 </div>
 
@@ -645,6 +646,9 @@
 
     <!-- Scripts -->
     <script src="js/leaflet.js"></script>
+    <script src="js/maplibre-gl.js"></script>
+    <script src="js/leaflet-maplibre-gl.js"></script>
+    <script src="js/map-provider.js"></script>
     <script src="js/nrel-spa.js"></script>
     <script src="js/solar-physics.js"></script>
     <script src="js/weather-radiation.js"></script>

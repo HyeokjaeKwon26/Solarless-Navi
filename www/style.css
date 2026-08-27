@@ -616,6 +616,20 @@ body.pip-mode .map-attribution {
     transform-origin: 50% 50%;
 }
 
+/* OSM is the no-key safety layer when WebGL or OpenFreeMap cannot render.
+   The light tiles remain untouched; at night a reversible colour transform
+   preserves label contrast instead of leaving the driver with a blank map. */
+.osm-fallback-dark .leaflet-tile {
+    filter: invert(1) hue-rotate(180deg) brightness(.78) contrast(.9) saturate(.75);
+}
+
+/* Leaflet owns all gestures and route overlays. The MapLibre bridge is only
+   a visual base layer, so its canvas must never intercept navigation input. */
+.leaflet-maplibre-gl,
+.leaflet-maplibre-gl canvas {
+    pointer-events: none !important;
+}
+
 .map-container.manual-rotation-gesture #map {
     transition: none;
 }

@@ -17,6 +17,8 @@
     "@capacitor/android": "^6.0.0",
     "@capacitor/app": "^6.0.3",
     "@capacitor/core": "^6.0.0",
+    "@maplibre/maplibre-gl-leaflet": "^0.1.4",
+    "maplibre-gl": "^5.24.0",
     "nrel-spa": "^2.0.2"
   },
   "devDependencies": {

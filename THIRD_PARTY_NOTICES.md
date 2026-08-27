@@ -1,5 +1,44 @@
 # Third-party notices
 
+## MapLibre GL JS 5.24.0
+
+`js/maplibre-gl.js` and `css/maplibre-gl.css` are locally bundled from
+MapLibre GL JS 5.24.0 under the BSD 3-Clause License. The full upstream
+license, including notices for incorporated components, is bundled as
+[`licenses/maplibre-gl-LICENSE.txt`](licenses/maplibre-gl-LICENSE.txt).
+
+## MapLibre GL Leaflet 0.1.4
+
+`js/leaflet-maplibre-gl.js` is locally bundled from
+`@maplibre/maplibre-gl-leaflet` 0.1.4 under the ISC License. Its license is
+also bundled as
+[`licenses/maplibre-gl-leaflet-LICENSE.txt`](licenses/maplibre-gl-leaflet-LICENSE.txt).
+
+Copyright (c) MapLibre contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+## OpenFreeMap, OpenMapTiles and OpenStreetMap
+
+The primary road basemap uses OpenFreeMap-hosted OpenMapTiles vector styles
+with data from OpenStreetMap. The safe raster fallback uses the OpenStreetMap
+standard tile service. Attribution is displayed in the map UI. Service use is
+subject to the providers' current terms and policies:
+
+- https://openfreemap.org/terms/
+- https://openmaptiles.org/
+- https://operations.osmfoundation.org/policies/tiles/
+
 ## nrel-spa 2.0.2
 
 `js/nrel-spa.js` is a browser bundle generated from `nrel-spa` 2.0.2.
