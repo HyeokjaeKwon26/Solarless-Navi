@@ -602,17 +602,17 @@ body.pip-mode .map-attribution {
     transition: transform 0.12s linear;
 }
 
-/* Rotation needs enough off-screen map area to cover every corner. The
-   viewport diagonal is <= 142vmax, so 150vmax avoids clipping without the
-   former 250vmax tile/memory cost. This applies to preview and live driving. */
+/* Rotation needs enough off-screen map area to cover every corner. JavaScript
+   sizes this surface from the actual viewport diagonal instead of the old
+   150vmax square, which rendered many invisible tiles on tall phones. */
 .map-container.heading-up-active #map {
-    width: 150vmax;
-    height: 150vmax;
+    width: var(--map-overscan-size, 1200px);
+    height: var(--map-overscan-size, 1200px);
     position: absolute;
     top: 50%;
     left: 50%;
-    margin-top: -75vmax;
-    margin-left: -75vmax;
+    margin-top: var(--map-overscan-half, -600px);
+    margin-left: var(--map-overscan-half, -600px);
     transform-origin: 50% 50%;
 }
 
@@ -631,6 +631,15 @@ body.pip-mode .map-attribution {
 }
 
 .map-container.manual-rotation-gesture #map {
+    transition: none;
+}
+
+/* During guidance requestAnimationFrame already supplies intermediate camera
+   states. A second CSS transition queues stale rotations behind live GPS. */
+.map-container.live-navigation #map,
+.map-container.live-navigation .custom-map-marker,
+.map-container.live-navigation .leaflet-popup-content-wrapper,
+.map-container.live-navigation .leaflet-tooltip {
     transition: none;
 }
 

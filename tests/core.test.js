@@ -1016,6 +1016,19 @@ test('off-route distance uses the nearest point on a route segment', () => {
     assert.ok(ShadowRouter.pointToSegmentDistanceMeters(0.0005, 0.005, route[0], route[1]) < 65);
 });
 
+test('remaining-distance lookup preserves the exact route total without a per-fix suffix scan', () => {
+    const route = [[0, 0], [0.01, 0], [0.02, 0.005], [0.03, 0.005]];
+    const lookup = ShadowRouter.buildRemainingDistanceLookup(route);
+    assert.equal(lookup.length, route.length);
+    for (let segmentIndex = 0; segmentIndex < route.length - 1; segmentIndex++) {
+        const lat = route[segmentIndex][1];
+        const lng = route[segmentIndex][0];
+        const scanned = ShadowRouter.calculateRemainingRouteDistance(lat, lng, route, segmentIndex);
+        const indexed = ShadowRouter.calculateRemainingRouteDistance(lat, lng, route, segmentIndex, lookup);
+        assert.ok(Math.abs(scanned - indexed) < 0.001);
+    }
+});
+
 test('guidance snap prefers forward route progress at self-crossings', () => {
     const route = [
         [0, 0], [0.001, 0], [0.001, 0.001], [0, 0.001],
@@ -1164,10 +1177,19 @@ test('route origins expose provisional GPS state and high-speed marker animation
         lat: 42.4, lng: -71.1, accuracy: 90, timestamp: nowMs - 1000
     }, nowMs), true, 'a fresh but coarse fix may start acquisition but remains provisional');
 
-    const walkingDuration = RouteState.vehicleMarkerAnimationDurationMs(5, 4);
-    const motorwayDuration = RouteState.vehicleMarkerAnimationDurationMs(120, 35);
+    const walkingDuration = RouteState.vehicleMarkerAnimationDurationMs(5, 4, 250);
+    const motorwayDuration = RouteState.vehicleMarkerAnimationDurationMs(120, 35, 250);
     assert.ok(motorwayDuration < walkingDuration);
-    assert.ok(motorwayDuration <= 100, `expected fast catch-up animation, got ${motorwayDuration}ms`);
+    assert.ok(motorwayDuration <= 180, `expected fast catch-up animation, got ${motorwayDuration}ms`);
+    assert.ok(RouteState.vehicleMarkerAnimationDurationMs(120, 8, 250) >= 250,
+        'ordinary motorway samples should interpolate through the next GPS cadence instead of stopping early');
+    assert.equal(RouteState.navigationCameraFrameIntervalMs(true, false), 33);
+    assert.equal(RouteState.navigationCameraFrameIntervalMs(false, false), 16);
+    assert.equal(RouteState.navigationCameraFrameIntervalMs(true, true), 50);
+    assert.equal(
+        RouteState.headingMapOverscanPixels(412, 915, 192),
+        Math.ceil(Math.hypot(412, 915) + 192)
+    );
 });
 
 test('navigation rejects low-accuracy and implausible indoor GPS jumps', () => {
@@ -2612,9 +2634,12 @@ test('live navigation auto-recenters after map exploration and cycles two large 
 
 test('heading-up map covers rotated corners in preview and live navigation', () => {
     const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(css.includes('.map-container.heading-up-active #map'));
-    assert.ok(css.includes('width: 150vmax'));
-    assert.equal(/width:\s*250vmax/.test(css), false);
+    assert.ok(css.includes('width: var(--map-overscan-size'));
+    assert.equal(/width:\s*(?:150|250)vmax/.test(css), false);
+    assert.ok(appSource.includes('headingMapOverscanPixels(width, height, 192)'));
+    assert.ok(css.includes('.map-container.live-navigation #map'));
 });
 
 test('route cancellation clears destination identity and stale option-card content', () => {
@@ -3020,9 +3045,13 @@ test('provisional route geometry is hidden until a reliable live GPS origin is r
 test('high-speed vehicle rendering rebases moving targets and native GPS samples at navigation cadence', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     const serviceSource = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/solaris/nav/LocationForegroundService.java'), 'utf8');
-    assert.ok(appSource.includes('vehicleMarkerAnimationDurationMs(targetSnapSpeedKmh, targetGapMeters)'));
+    assert.ok(appSource.includes('vehicleMarkerAnimationDurationMs(targetSnapSpeedKmh, targetGapMeters, observedVehicleSampleIntervalMs)'));
     assert.ok(appSource.includes('if (vehicleAnimFrameId !== null) stopVehicleMarkerAnimation();'));
-    assert.ok(appSource.includes('const easedProgress = 1 - Math.pow(1 - progress, 3);'));
+    assert.ok(appSource.includes('const easedProgress = progress;'));
+    assert.ok(appSource.includes('navigationCameraFrameIntervalMs(!isRasterMapFallbackActive, isBatterySaverActive)'));
+    assert.ok(appSource.includes("map.panTo([currentSmoothLat, currentSmoothLng], { animate: false, noMoveStart: true })"));
+    assert.ok(appSource.includes('sampleTimestampMs: timestamp'));
+    assert.ok(appSource.includes("gps-secondary-provider-ignored"));
     assert.equal(appSource.includes('(now - vehicleAnimationStartedAt) / 400'), false);
     assert.equal(appSource.includes('currentHeading = currentSmoothHeading'), false);
     assert.ok(serviceSource.includes('registerProvider(LocationManager.GPS_PROVIDER, 250L, 1f);'));

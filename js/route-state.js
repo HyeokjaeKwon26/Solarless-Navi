@@ -251,13 +251,37 @@
         return false;
     }
 
-    function vehicleMarkerAnimationDurationMs(speedKmh, gapMeters) {
+    function vehicleMarkerAnimationDurationMs(speedKmh, gapMeters, sampleIntervalMs = 250) {
         const speed = Math.max(0, Number(speedKmh) || 0);
         const gap = Math.max(0, Number(gapMeters) || 0);
-        let duration = Math.max(80, Math.min(320, 320 - speed * 1.8));
+        // Follow the actual location cadence instead of finishing early at
+        // higher speeds.  The old speed-only duration could complete in
+        // 60-100 ms while native GPS arrived every 250 ms, producing a
+        // visible move-stop-move rhythm.  A small overlap lets the next fix
+        // rebase an animation that is still moving.
+        const cadence = Math.max(120, Math.min(1000, Number(sampleIntervalMs) || 250));
+        let duration = cadence * 1.15;
         const speedMetersPerSecond = speed / 3.6;
-        if (gap > Math.max(12, speedMetersPerSecond * 0.5)) duration *= 0.65;
-        return Math.max(60, Math.round(duration));
+        const expectedGap = speedMetersPerSecond * cadence / 1000;
+        // A genuine discontinuity should catch up promptly instead of
+        // animating a bad/late fix for a full second.
+        if (gap > Math.max(15, expectedGap * 2.5 + 8)) duration = Math.min(duration, 180);
+        return Math.max(120, Math.min(1150, Math.round(duration)));
+    }
+
+    function navigationCameraFrameIntervalMs(vectorMapActive, batterySaverActive) {
+        if (batterySaverActive) return 50; // Smooth 20 fps, not GPS-tick jumps.
+        return vectorMapActive ? 33 : 16; // Vector 30 fps; raster up to 60 fps.
+    }
+
+    function headingMapOverscanPixels(width, height, marginPixels = 192) {
+        const w = Math.max(0, Number(width) || 0);
+        const h = Math.max(0, Number(height) || 0);
+        const margin = Math.max(0, Number(marginPixels) || 0);
+        if (w <= 0 || h <= 0) return 0;
+        // A square whose side is the viewport diagonal covers every rotation.
+        // Add a small tile buffer instead of rendering a fixed 150vmax square.
+        return Math.ceil(Math.hypot(w, h) + margin);
     }
 
     function formatArrivalDateTime(nowMs, remainingSec, locale = 'en-US') {
@@ -467,6 +491,8 @@
         acquireInitialPosition,
         isProvisionalRouteOrigin,
         vehicleMarkerAnimationDurationMs,
+        navigationCameraFrameIntervalMs,
+        headingMapOverscanPixels,
         shouldRestartRouteForGpsFix,
         evaluateNavigationFix,
         evaluateAutoFreeDriveSample,

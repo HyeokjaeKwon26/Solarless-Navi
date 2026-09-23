@@ -228,13 +228,29 @@ window.ShadowRouter = (function () {
         return { lat: carLat, lng: carLng, heading: rawHeading, isSnapped: false, distMeters: bestRawDistance, segmentIndex: bestIndex, t: bestT };
     }
 
-    function calculateRemainingRouteDistance(carLat, carLng, coordinates, segmentIndex) {
+    function buildRemainingDistanceLookup(coordinates) {
+        if (!Array.isArray(coordinates) || coordinates.length === 0) return [];
+        const lookup = new Array(coordinates.length).fill(0);
+        for (let i = coordinates.length - 2; i >= 0; i--) {
+            lookup[i] = lookup[i + 1] + calculateDistanceMeters(
+                coordinates[i][1], coordinates[i][0],
+                coordinates[i + 1][1], coordinates[i + 1][0]
+            );
+        }
+        return lookup;
+    }
+
+    function calculateRemainingRouteDistance(carLat, carLng, coordinates, segmentIndex, existingLookup = null) {
         if (!coordinates || coordinates.length < 2) return 0;
-        let total = 0;
         const startIndex = Math.max(0, Math.min(coordinates.length - 2, segmentIndex || 0));
 
         // Distance from current position to next route waypoint
-        total += calculateDistanceMeters(carLat, carLng, coordinates[startIndex + 1][1], coordinates[startIndex + 1][0]);
+        let total = calculateDistanceMeters(carLat, carLng, coordinates[startIndex + 1][1], coordinates[startIndex + 1][0]);
+
+        if (Array.isArray(existingLookup) && existingLookup.length === coordinates.length &&
+            Number.isFinite(Number(existingLookup[startIndex + 1]))) {
+            return total + Number(existingLookup[startIndex + 1]);
+        }
 
         // Remaining route segments to destination
         for (let i = startIndex + 1; i < coordinates.length - 1; i++) {
@@ -2299,6 +2315,7 @@ window.ShadowRouter = (function () {
         snapHeadingToRoad: snapHeadingToRoad,
         snapPositionAndHeadingToRoad: snapPositionAndHeadingToRoad,
         calculateRemainingRouteDistance: calculateRemainingRouteDistance,
+        buildRemainingDistanceLookup: buildRemainingDistanceLookup,
         calculateRemainingRouteDuration: calculateRemainingRouteDuration,
         calculateSegmentGlare: calculateSegmentGlare,
         calculateDirectSolarExposure: calculateDirectSolarExposure,

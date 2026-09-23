@@ -297,7 +297,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // off-route detection still uses the raw GPS point and can trigger a
         // forward reroute when necessary.
         if (previous.snap && candidateValue + 0.15 < previous.value) {
-            return { ...previous.snap, progressClamped: true };
+            return { ...previous.snap, rawDistanceMeters: candidate.distMeters, progressClamped: true };
         }
         navigationRouteProgress = {
             routeId: identity,
@@ -306,7 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
             t: Number(candidate.t || 0),
             snap: candidate
         };
-        return candidate;
+        return { ...candidate, rawDistanceMeters: candidate.distMeters };
     }
 
     function precisionRouteStartsAtVehicle(route) {
@@ -656,6 +656,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         installManualMapRotationGesture();
         installHeadingUpInteractionCompensation();
+        updateHeadingMapOverscan();
 
         const onUserPan = () => {
             markUserMapPanning();
@@ -686,6 +687,11 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         document.addEventListener('touchstart', onAnyUserInteraction, { passive: true });
         document.addEventListener('mousedown', onAnyUserInteraction, { passive: true });
+        window.addEventListener('resize', () => {
+            headingMapOverscanKey = '';
+            updateHeadingMapOverscan();
+            if (map) map.invalidateSize({ pan: false, debounceMoveend: true });
+        }, { passive: true });
 
         const btnRecenterToast = document.getElementById('btn-recenter-now-toast');
         if (btnRecenterToast) {
@@ -1775,6 +1781,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         gpsWatchId = null;
         stopVehicleMarkerAnimation();
+        lastVehicleTargetTimestamp = 0;
+        observedVehicleSampleIntervalMs = 250;
+        lastVehicleRenderAt = 0;
+        lastVehicleMapPanAt = 0;
     }
 
     function hasGrantedLocationPermission() {
@@ -2488,8 +2498,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let vehicleAnimationFrom = null;
     let vehicleAnimationDurationMs = 240;
     let lastVehicleMapPanAt = 0;
+    let lastVehicleRenderAt = 0;
+    let lastVehicleTargetTimestamp = 0;
+    let observedVehicleSampleIntervalMs = 250;
     let lastAppliedMapRotation = null;
     let manualMapRotation = 0;
+    let headingMapOverscanKey = '';
     let stableGpsHeading = 0;
     let lastStableMovingGps = null;
     let hasValidGpsHeading = false;
@@ -2504,7 +2518,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function prefersReducedMotion() {
-        return isBatterySaverActive || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        // Respect the operating-system accessibility preference. Battery
+        // saver keeps interpolation at a lower frame rate instead of making
+        // the vehicle jump at raw GPS cadence.
+        return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
     }
 
     function renderVehicleMarker() {
@@ -2530,9 +2547,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const carArrow = document.getElementById('car-heading-arrow');
         if (carArrow) carArrow.style.transform = `translate(-50%, -50%) rotate(${currentSmoothHeading}deg)`;
         const now = Date.now();
-        if (isLiveNavActive && !isUserMapPanning && map && now - lastVehicleMapPanAt >= 66) {
+        const cameraFrameInterval = window.RouteState && typeof window.RouteState.navigationCameraFrameIntervalMs === 'function'
+            ? window.RouteState.navigationCameraFrameIntervalMs(!isRasterMapFallbackActive, isBatterySaverActive)
+            : (isBatterySaverActive ? 50 : (isRasterMapFallbackActive ? 16 : 33));
+        if (isLiveNavActive && !isUserMapPanning && map && now - lastVehicleMapPanAt >= cameraFrameInterval) {
             lastVehicleMapPanAt = now;
-            map.setView([currentSmoothLat, currentSmoothLng], 17.5, { animate: false });
+            map.panTo([currentSmoothLat, currentSmoothLng], { animate: false, noMoveStart: true });
             applyMapRotation(currentSmoothHeading);
         }
     }
@@ -2552,8 +2572,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ? 0
             : ShadowRouter.calculateDistanceMeters(currentSmoothLat, currentSmoothLng, targetSnapLat, targetSnapLng);
         vehicleAnimationDurationMs = window.RouteState && typeof window.RouteState.vehicleMarkerAnimationDurationMs === 'function'
-            ? window.RouteState.vehicleMarkerAnimationDurationMs(targetSnapSpeedKmh, targetGapMeters)
-            : Math.max(80, Math.min(320, 320 - Math.max(0, Number(targetSnapSpeedKmh) || 0) * 1.8));
+            ? window.RouteState.vehicleMarkerAnimationDurationMs(targetSnapSpeedKmh, targetGapMeters, observedVehicleSampleIntervalMs)
+            : Math.max(120, Math.min(1150, observedVehicleSampleIntervalMs * 1.15));
         vehicleAnimationFrom = {
             lat: currentSmoothLat === null ? targetSnapLat : currentSmoothLat,
             lng: currentSmoothLng === null ? targetSnapLng : currentSmoothLng,
@@ -2567,15 +2587,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const now = Number(timestamp) || Date.now();
             const progress = Math.min(1, Math.max(0, (now - vehicleAnimationStartedAt) / vehicleAnimationDurationMs));
-            // Ease out aggressively so the marker closes most of the GPS gap
-            // early instead of remaining visibly behind at motorway speed.
-            const easedProgress = 1 - Math.pow(1 - progress, 3);
+            // Linear movement matches the near-constant velocity between GPS
+            // samples. An ease-out curve visibly slowed and stopped before
+            // the next native 4 Hz fix arrived.
+            const easedProgress = progress;
             const from = vehicleAnimationFrom || { lat: targetSnapLat, lng: targetSnapLng, heading: targetSnapHeading };
             let headingDelta = ((targetSnapHeading - from.heading + 540) % 360) - 180;
-            currentSmoothLat = from.lat + (targetSnapLat - from.lat) * easedProgress;
-            currentSmoothLng = from.lng + (targetSnapLng - from.lng) * easedProgress;
-            currentSmoothHeading = (from.heading + headingDelta * easedProgress + 360) % 360;
-            renderVehicleMarker();
+            const renderInterval = isBatterySaverActive ? 33 : 0;
+            if (renderInterval === 0 || now - lastVehicleRenderAt >= renderInterval || progress >= 1) {
+                lastVehicleRenderAt = now;
+                currentSmoothLat = from.lat + (targetSnapLat - from.lat) * easedProgress;
+                currentSmoothLng = from.lng + (targetSnapLng - from.lng) * easedProgress;
+                currentSmoothHeading = (from.heading + headingDelta * easedProgress + 360) % 360;
+                renderVehicleMarker();
+            }
             if (progress >= 1 || (Math.abs(targetSnapLat - currentSmoothLat) < 0.0000001 && Math.abs(targetSnapLng - currentSmoothLng) < 0.0000001 && Math.abs(headingDelta) < 0.5)) {
                 currentSmoothLat = targetSnapLat;
                 currentSmoothLng = targetSnapLng;
@@ -2624,6 +2649,11 @@ document.addEventListener('DOMContentLoaded', () => {
             selectedRouteObj._remainingTimeLookupSteps = selectedRouteObj.routeSteps;
             selectedRouteObj._remainingTimeLookupDuration = selectedRouteObj.durationSec;
         }
+        if (!selectedRouteObj._remainingDistanceLookup ||
+            selectedRouteObj._remainingDistanceLookupCoordinates !== coords) {
+            selectedRouteObj._remainingDistanceLookup = ShadowRouter.buildRemainingDistanceLookup(coords);
+            selectedRouteObj._remainingDistanceLookupCoordinates = coords;
+        }
         const segments = selectedRouteObj.analyzed.segments;
         if (dynamicRemainingRouteId !== routeIdentity) {
             dynamicRemainingPolylineGroup.clearLayers();
@@ -2640,7 +2670,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (dynamicRemainingSegmentIndex === segIdx && dynamicRemainingLayers.size > 0) {
             const currentLayer = dynamicRemainingLayers.get(segIdx);
             if (currentLayer) currentLayer.setLatLngs([[effectiveLat, effectiveLng], segments[segIdx].p2]);
-            const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(effectiveLat, effectiveLng, coords, segIdx);
+            const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(
+                effectiveLat, effectiveLng, coords, segIdx, selectedRouteObj._remainingDistanceLookup
+            );
             const remSec = Math.max(30, Math.round(ShadowRouter.calculateRemainingRouteDuration(
                 coords, selectedRouteObj.routeSteps, selectedRouteObj.durationSec, segIdx, effectiveSegmentT,
                 selectedRouteObj._remainingTimeLookup
@@ -2665,7 +2697,9 @@ document.addEventListener('DOMContentLoaded', () => {
         dynamicRemainingSegmentIndex = segIdx;
 
         // 3. Dynamic remaining distance and ETA calculation
-        const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(effectiveLat, effectiveLng, coords, segIdx);
+        const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(
+            effectiveLat, effectiveLng, coords, segIdx, selectedRouteObj._remainingDistanceLookup
+        );
         const remSec = Math.max(30, Math.round(ShadowRouter.calculateRemainingRouteDuration(
             coords, selectedRouteObj.routeSteps, selectedRouteObj.durationSec, segIdx, effectiveSegmentT,
             selectedRouteObj._remainingTimeLookup
@@ -2674,12 +2708,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateVehicleMarkerPosition(lat, lng, heading = 0, speedKmh = 0, options = {}) {
-        let snapResult = { lat, lng, heading, isSnapped: false, segmentIndex: 0 };
+        let snapResult = options.knownSnap || { lat, lng, heading, isSnapped: false, segmentIndex: 0 };
 
-        if (options.snapToRoute !== false && selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
+        if (!options.knownSnap && options.snapToRoute !== false && selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
             snapResult = isLiveNavActive
                 ? snapNavigationPosition(lat, lng, heading, selectedRouteObj)
                 : ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, selectedRouteObj.analyzed.coordinates);
+        }
+
+        const sampleTimestamp = Number(options.sampleTimestampMs);
+        if (Number.isFinite(sampleTimestamp) && sampleTimestamp > 0) {
+            if (lastVehicleTargetTimestamp > 0) {
+                const interval = sampleTimestamp - lastVehicleTargetTimestamp;
+                if (interval >= 80 && interval <= 2000) {
+                    observedVehicleSampleIntervalMs = observedVehicleSampleIntervalMs * 0.7 + interval * 0.3;
+                }
+            }
+            if (sampleTimestamp >= lastVehicleTargetTimestamp) lastVehicleTargetTimestamp = sampleTimestamp;
         }
 
         targetSnapLat = snapResult.lat;
@@ -2708,6 +2753,23 @@ document.addEventListener('DOMContentLoaded', () => {
             : (isKo ? '북쪽 고정 모드입니다.' : 'North-up mode activated.'));
     }
 
+    function updateHeadingMapOverscan() {
+        const mapWrapper = document.getElementById('map-perspective-wrapper');
+        const mapElement = document.getElementById('map');
+        if (!mapWrapper || !mapElement) return;
+        const width = mapWrapper.clientWidth;
+        const height = mapWrapper.clientHeight;
+        const size = window.RouteState && typeof window.RouteState.headingMapOverscanPixels === 'function'
+            ? window.RouteState.headingMapOverscanPixels(width, height, 192)
+            : Math.ceil(Math.hypot(width, height) + 192);
+        if (!Number.isFinite(size) || size <= 0) return;
+        const key = `${width}x${height}:${size}`;
+        if (headingMapOverscanKey === key) return;
+        headingMapOverscanKey = key;
+        mapElement.style.setProperty('--map-overscan-size', `${size}px`);
+        mapElement.style.setProperty('--map-overscan-half', `${-size / 2}px`);
+    }
+
     function applyMapRotation(heading) {
         const mapWrapper = document.getElementById('map-perspective-wrapper');
         const mapElement = document.getElementById('map');
@@ -2718,11 +2780,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const hasManualRotation = Math.abs(manualMapRotation) >= 0.1;
         if ((compassMode === 'heading-up' && heading !== undefined) || hasManualRotation) {
             if (!mapWrapper.classList.contains('heading-up-active')) {
+                updateHeadingMapOverscan();
                 mapWrapper.classList.add('heading-up-active');
                 if (map) map.invalidateSize();
             }
-            // Rotation deadband filter: Only update DOM transform if angular delta is >= 1.0 degrees
-            if (lastAppliedMapRotation === null || Math.abs(((visualRotation - lastAppliedMapRotation + 540) % 360) - 180) >= 1.0) {
+            // A small deadband removes compass noise without making the map
+            // visibly rotate in one-degree steps at motorway speed.
+            if (lastAppliedMapRotation === null || Math.abs(((visualRotation - lastAppliedMapRotation + 540) % 360) - 180) >= 0.15) {
                 lastAppliedMapRotation = visualRotation;
                 mapElement.style.transform = `rotate(${-visualRotation}deg)`;
                 mapWrapper.style.setProperty('--map-counter-rotation', `${visualRotation}deg`);
@@ -2754,6 +2818,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!wrapper) return;
         const wasActive = wrapper.classList.contains('live-navigation');
         wrapper.classList.toggle('live-navigation', !!active);
+        if (active) updateHeadingMapOverscan();
         if (map && wasActive !== !!active) {
             // The live view uses an oversized rotated map so tile corners stay
             // covered. Preview remains normal-sized for reliable fitBounds().
@@ -4609,6 +4674,10 @@ document.addEventListener('DOMContentLoaded', () => {
         navigationConsecutiveOffRouteCount = 0;
         lastPrecisionSwitchRouteId = null;
         lastProcessedNavigationTimestamp = 0;
+        lastVehicleTargetTimestamp = 0;
+        observedVehicleSampleIntervalMs = 250;
+        lastVehicleRenderAt = 0;
+        lastVehicleMapPanAt = 0;
         // Anchor GPS validation to the verified route origin. This prevents
         // the first indoor/network watch fix from teleporting guidance to a
         // nearby block before there is a prior watch sample to compare.
@@ -4706,6 +4775,16 @@ document.addEventListener('DOMContentLoaded', () => {
             const timestamp = Number(position.timestamp) > 0 ? Number(position.timestamp) : Date.now();
             const accuracy = Number(coords.accuracy);
             const ageMs = Math.max(0, Date.now() - timestamp);
+            const sourceName = String(source || 'web-watch');
+            const incomingNativeGps = /^native-.*gps/i.test(sourceName);
+            const previousNativeGps = /^native-.*gps/i.test(String(gpsLastFixSource || ''));
+            // Android can deliver the foreground-service GPS fix and the
+            // WebView/network fix for the same moment. Prefer fresh hardware
+            // GPS so the marker does not oscillate between two providers.
+            if (!incomingNativeGps && previousNativeGps && Date.now() - gpsLastFixAt < 1200) {
+                if (window.DebugLogger) window.DebugLogger.log('gps-secondary-provider-ignored', { source });
+                return true;
+            }
             if (ageMs > 2 * 60 * 1000 || timestamp + 1000 < lastProcessedNavigationTimestamp) {
                 if (window.DebugLogger) window.DebugLogger.log('gps-stale-ignored', { source, ageMs });
                 return true;
@@ -4790,12 +4869,22 @@ document.addEventListener('DOMContentLoaded', () => {
             lastProcessedNavigationPosition = { lat, lng };
             lastProcessedNavigationAccuracy = incomingAccuracy;
 
+            const activeNavigationCoords = selectedRouteObj && selectedRouteObj.analyzed &&
+                Array.isArray(selectedRouteObj.analyzed.coordinates)
+                ? selectedRouteObj.analyzed.coordinates : null;
+            const navigationSnap = !navigationRouteNeedsReliableOrigin && activeNavigationCoords && activeNavigationCoords.length > 1
+                ? snapNavigationPosition(lat, lng, heading, selectedRouteObj)
+                : null;
+            const markerOptions = navigationSnap
+                ? { knownSnap: navigationSnap, sampleTimestampMs: timestamp }
+                : { snapToRoute: false, sampleTimestampMs: timestamp };
+
             if (navigationRouteNeedsReliableOrigin) {
                 // The first reliable fix after a coarse/stale start becomes
                 // the authoritative origin immediately. Keep the marker at
                 // raw GPS and suppress provisional turn guidance until OSRM
                 // returns a forward replacement from this position.
-                updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh, { snapToRoute: false });
+                updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh, markerOptions);
                 const now = Date.now();
                 if (!gpsOriginReroutePending && now - lastRerouteTime >= 8000) {
                     gpsOriginReroutePending = true;
@@ -4811,7 +4900,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 // pending, but it belongs to the previous destination. Do not
                 // announce its turns or arrival after the user has confirmed
                 // a different destination.
-                updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh);
+                updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh, {
+                    snapToRoute: false,
+                    sampleTimestampMs: timestamp
+                });
                 return true;
             }
 
@@ -4821,17 +4913,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 const routeCoords = selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates
                     ? selectedRouteObj.analyzed.coordinates : navigationSessionRouteGeometry;
                 let nearEnd = false;
-                if (routeCoords && routeCoords.length > 1) {
-                    const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, routeCoords);
-                    nearEnd = snap.segmentIndex >= Math.max(0, routeCoords.length - 3);
+                if (routeCoords && routeCoords.length > 1 && navigationSnap) {
+                    nearEnd = navigationSnap.segmentIndex >= Math.max(0, routeCoords.length - 3);
                 }
                 if (distToDest <= 55 || (nearEnd && distToDest <= 80 && rawSpeedKmh < 30)) {
                     handleDestinationArrival(navigationSessionStartedAt, navigationSessionStartDistanceMeters);
                     return true;
                 }
             }
-            if (selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
-                const offRouteDist = ShadowRouter.distanceToRoute(lat, lng, selectedRouteObj.analyzed.coordinates);
+            if (activeNavigationCoords) {
+                const offRouteDist = navigationSnap && Number.isFinite(Number(navigationSnap.rawDistanceMeters))
+                    ? Number(navigationSnap.rawDistanceMeters)
+                    : ShadowRouter.distanceToRoute(lat, lng, activeNavigationCoords);
                 const now = Date.now();
                 navigationConsecutiveOffRouteCount = offRouteDist > 45 ? navigationConsecutiveOffRouteCount + 1 : 0;
                 if ((navigationConsecutiveOffRouteCount >= 2 || offRouteDist > 65) && now - lastRerouteTime > 8000) {
@@ -4842,7 +4935,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     return true;
                 }
             }
-            updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh);
+            updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh, markerOptions);
             const glareRisk = calculateLiveGlareRisk(lat, lng, currentHeading);
             const nextManeuver = findNextManeuver(lat, lng);
             updateTurnBannerText(nextManeuver, glareRisk);

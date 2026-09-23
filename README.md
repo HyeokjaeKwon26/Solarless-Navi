@@ -17,6 +17,37 @@
 - **자동차용 안내**: 주소 우선 검색, 자동차 도로에 맞춘 목적지, 음성 회전 안내, 이탈 재탐색, heading-up, 자동 재중앙 정렬과 선택형 PiP를 제공합니다.
 - **부분 실패 보존**: 장면 API나 타일 일부가 실패해도 OSRM 도로 경로는 유지하며, 정밀값과 휴리스틱값을 조용히 섞지 않습니다.
 
+## 앱 화면 / App screenshots
+
+아래 화면은 최신 `main` 웹 런타임을 Android 화면 크기로 실행하고, 개인 위치가 아닌 합성 GPS와 공개 장소를 사용해 캡처한 예시입니다. 실제 경로·태양·기상·장면 결과는 위치와 시각, 데이터 가용성에 따라 달라집니다.
+
+These examples were captured from the latest `main` web runtime at an Android-sized viewport, using synthetic GPS and a public destination rather than a private location. Actual routes and solar, weather and scene results vary with location, time and data availability.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/01-destination-search.png" width="300" alt="SolarLess Navi destination search screen"><br>
+      <strong>목적지 검색 / Destination search</strong><br>
+      주소·장소 검색과 목적지 없는 자유 주행<br>
+      <sub>Address/place search and destination-free driving</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/03-route-comparison.png" width="300" alt="SolarLess Navi route comparison with weather and scene analysis"><br>
+      <strong>경로 비교 / Route comparison</strong><br>
+      빠른·눈부심 회피·그늘 우선 경로의 같은 등급 분석<br>
+      <sub>Same-tier analysis for fastest, glare-avoidance and shade-priority routes</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="docs/screenshots/04-live-guidance.png" width="300" alt="SolarLess Navi live turn-by-turn guidance screen"><br>
+      <strong>실시간 안내 / Live guidance</strong><br>
+      회전 안내, 남은 시간·거리, heading-up 지도<br>
+      <sub>Turn guidance, remaining time/distance and a heading-up map</sub>
+    </td>
+  </tr>
+</table>
+
 ## 계산 흐름
 
 ```text
