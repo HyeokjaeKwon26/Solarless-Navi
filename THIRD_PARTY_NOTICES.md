@@ -1,9 +1,10 @@
 # Third-party notices
 
-## MapLibre GL JS 5.24.0
+## MapLibre GL JS 6.11.1
 
 `js/maplibre-gl.js` and `css/maplibre-gl.css` are locally bundled from
-MapLibre GL JS 5.24.0 under the BSD 3-Clause License. The full upstream
+MapLibre GL JS 6.11.1 under the BSD 3-Clause License. The local module worker
+and its shared module are stored beside the browser bundle. The full upstream
 license, including notices for incorporated components, is bundled as
 [`licenses/maplibre-gl-LICENSE.txt`](licenses/maplibre-gl-LICENSE.txt).
 

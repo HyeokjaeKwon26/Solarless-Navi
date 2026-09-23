@@ -10,6 +10,7 @@
         dark: 'https://tiles.openfreemap.org/styles/dark'
     });
     const OSM_RASTER_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    const MAPLIBRE_WORKER_URL = 'js/maplibre-gl-worker.mjs';
 
     const ATTRIBUTION = Object.freeze({
         vector: '<a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> · © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer">OpenMapTiles</a> · Data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>',
@@ -27,11 +28,19 @@
         }
     }
 
+    function configureMapLibreRuntime(maplibregl) {
+        if (!maplibregl || typeof maplibregl.setWorkerUrl !== 'function') return false;
+        const current = typeof maplibregl.getWorkerUrl === 'function' ? maplibregl.getWorkerUrl() : '';
+        if (!current) maplibregl.setWorkerUrl(MAPLIBRE_WORKER_URL);
+        return true;
+    }
+
     function createRoadLayers(leaflet, maplibregl) {
         if (!leaflet || typeof leaflet.tileLayer !== 'function') {
             throw new Error('Leaflet tile support is required');
         }
 
+        configureMapLibreRuntime(maplibregl);
         const fallback = {
             light: leaflet.tileLayer(OSM_RASTER_URL, {
                 maxNativeZoom: 19,
@@ -87,7 +96,9 @@
     return {
         OPENFREEMAP_STYLES,
         OSM_RASTER_URL,
+        MAPLIBRE_WORKER_URL,
         ATTRIBUTION,
+        configureMapLibreRuntime,
         canUseVectorMap,
         createRoadLayers,
         layerForTheme,

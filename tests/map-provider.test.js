@@ -24,7 +24,13 @@ function leafletStub() {
 
 test('OpenFreeMap vector is primary and OSM raster remains a no-key fallback', () => {
     const leaflet = leafletStub();
-    const layers = provider.createRoadLayers(leaflet, { supported: () => true });
+    let workerUrl = '';
+    const maplibregl = {
+        supported: () => true,
+        getWorkerUrl: () => workerUrl,
+        setWorkerUrl: value => { workerUrl = value; }
+    };
+    const layers = provider.createRoadLayers(leaflet, maplibregl);
 
     assert.equal(layers.vectorSupported, true);
     assert.equal(layers.primary.light.kind, 'vector');
@@ -34,6 +40,7 @@ test('OpenFreeMap vector is primary and OSM raster remains a no-key fallback', (
     assert.equal(layers.fallback.dark.options.className, 'osm-fallback-dark');
     assert.deepEqual(layers.primary.light.options.maxCanvasSize, [4096, 4096]);
     assert.ok(layers.primary.light.options.pixelRatio <= 1.5);
+    assert.equal(workerUrl, 'js/maplibre-gl-worker.mjs');
 });
 
 test('unsupported WebGL starts directly on OSM without creating vector layers', () => {
@@ -68,6 +75,17 @@ test('browser bundles and third-party licenses are packaged locally', () => {
     assert.match(html, /css\/maplibre-gl\.css/);
     assert.ok(fs.existsSync(path.join(root, 'licenses', 'maplibre-gl-LICENSE.txt')));
     assert.ok(fs.existsSync(path.join(root, 'www', 'licenses', 'maplibre-gl-LICENSE.txt')));
+    assert.ok(fs.existsSync(path.join(root, 'js', 'maplibre-gl-worker.mjs')));
+    assert.ok(fs.existsSync(path.join(root, 'js', 'maplibre-gl-shared.mjs')));
+    assert.ok(fs.existsSync(path.join(root, 'www', 'js', 'maplibre-gl-worker.mjs')));
+
+    const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const maplibreVersion = packageJson.dependencies['maplibre-gl'].replace(/^[^0-9]*/, '');
+    const [major, minor, patch] = maplibreVersion.split('.').map(Number);
+    assert.ok(major > 6 || (major === 6 && (minor > 4 || (minor === 4 && patch >= 1))),
+        `MapLibre ${maplibreVersion} must include the GHSA-jrc7-96c5-q579 patch`);
+    const browserBundle = fs.readFileSync(path.join(root, 'js', 'maplibre-gl.js'), 'utf8');
+    assert.ok(browserBundle.includes(`MapLibre GL JS ${maplibreVersion}`));
 
     const buildScript = fs.readFileSync(path.join(root, 'build_apk.bat'), 'utf8');
     assert.match(buildScript, /LICENSES_DIR/);

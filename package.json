@@ -6,6 +6,7 @@
   "scripts": {
     "start": "serve -p 8080",
     "test": "node --test tests/*.test.js",
+    "vendor:maplibre": "node tools/vendor-maplibre.mjs",
     "simulate:us": "node tools/simulate-us-solar-routes.mjs",
     "scene:build": "node tools/build-scene-tiles.mjs",
     "scene:package": "node tools/package-scene-tiles.mjs"
@@ -18,11 +19,12 @@
     "@capacitor/app": "^6.0.3",
     "@capacitor/core": "^6.0.0",
     "@maplibre/maplibre-gl-leaflet": "^0.1.4",
-    "maplibre-gl": "^5.24.0",
+    "maplibre-gl": "^6.11.1",
     "nrel-spa": "^2.0.2"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.0.0",
+    "esbuild": "^0.28.2",
     "fflate": "^0.8.3",
     "osm-pbf-parser": "^2.3.0",
     "serve": "^14.2.4"
