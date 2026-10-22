@@ -215,19 +215,34 @@ CSV, JSON과 SVG 그래프도 보고서와 함께 저장됩니다. 재현 명령
 
 ## 개발·검증·빌드
 
-Node.js 20+, JDK 17, Android SDK/Android Studio와 저장소의 Gradle Wrapper가 필요합니다.
+Node.js 24 LTS (`.nvmrc`), JDK 17, Android SDK/Android Studio와 저장소의 Gradle Wrapper가 필요합니다.
 
 ```bash
 npm ci
 npm test
+npm run check:mirrors
+npx playwright install chromium
+npm run test:browser
 npm run simulate:us
 npx @capacitor/cli sync android
 ```
 
+브라우저 회귀 테스트는 root와 `www`에서 로컬 MapLibre Worker 렌더링, 지도 fallback,
+자유주행·북쪽 정렬·화면 복귀, 연속 목적지 변경을 검사합니다. GPS와 외부 서비스는 모의 데이터로
+대체하므로 실제 Android GPS·전화 인터럽트·PiP 검증은 별도로 필요합니다.
+
+Capacitor는 보안 패치된 6.2.2를 사용합니다. 개발 도구의 `tar`와 `compression`은
+`package.json`의 `overrides`로 패치 버전을 지정합니다. `npm ci`의 postinstall은
+`tools/patch-capacitor-cli.cjs`로 CLI 6.2.2의 tar import를 tar 7 형식에 맞춥니다.
+CLI 버전이 바뀌면 이 호환 수정을 재검토하도록 설치가 중단되며, 단위 테스트에서 실제 Android
+플러그인 템플릿 압축 해제를 검증합니다. CI는 개발 의존성까지 보안 검사합니다.
+
 Debug APK:
 
 ```cmd
-android\gradlew.bat assembleDebug
+cd android
+gradlew.bat assembleDebug
+cd ..
 ```
 
 서명된 release는 저장소 밖의 `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`를 사용합니다. 선택적으로 `EXPECTED_SIGNING_CERT_SHA256`으로 인증서 고정을 검증할 수 있습니다.
@@ -298,6 +313,13 @@ Map data: © OpenStreetMap contributors.
 
 ### Build
 
-Use Node.js 20+, JDK 17 and the Android SDK. Run `npm ci`, `npm test`, then `npx @capacitor/cli sync android`. Release credentials must remain outside the repository.
+Use Node.js 24 LTS (`.nvmrc`), JDK 17 and the Android SDK. Run `npm ci`, `npm test`, then `npx @capacitor/cli sync android`. Release credentials must remain outside the repository.
+
+Run `npm run check:mirrors`, `npx playwright install chromium`, and `npm run test:browser`
+to check both web asset copies and browser behavior with mocked GPS and external services.
+These tests do not replace Android device tests for GPS, phone interruptions, or PiP.
+Development overrides select patched `tar` and `compression` versions; postinstall adapts
+Capacitor CLI 6.2.2's tar import and rejects unreviewed CLI versions. Unit tests exercise the
+real CLI template extractor, and CI audits all dependencies.
 
 </details>

@@ -9,24 +9,39 @@
     "vendor:maplibre": "node tools/vendor-maplibre.mjs",
     "simulate:us": "node tools/simulate-us-solar-routes.mjs",
     "scene:build": "node tools/build-scene-tiles.mjs",
-    "scene:package": "node tools/package-scene-tiles.mjs"
+    "scene:package": "node tools/package-scene-tiles.mjs",
+    "postinstall": "node tools/patch-capacitor-cli.cjs",
+    "test:browser": "playwright test",
+    "check:mirrors": "node tools/check-web-mirrors.mjs"
   },
   "author": "Hyeokjae Kwon, M.D., Ph.D. <https://hyeokjaekwon26.github.io/>",
   "license": "AGPL-3.0-only",
   "dependencies": {
     "@capacitor-community/text-to-speech": "^5.1.0",
-    "@capacitor/android": "^6.0.0",
+    "@capacitor/android": "^6.2.2",
     "@capacitor/app": "^6.0.3",
-    "@capacitor/core": "^6.0.0",
+    "@capacitor/core": "^6.2.2",
     "@maplibre/maplibre-gl-leaflet": "^0.1.4",
-    "maplibre-gl": "^6.11.1",
+    "maplibre-gl": "^6.15.0",
     "nrel-spa": "^2.0.2"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.0.0",
+    "@capacitor/cli": "6.2.2",
+    "@playwright/test": "^1.64.1",
     "esbuild": "^0.28.2",
     "fflate": "^0.8.3",
     "osm-pbf-parser": "^2.3.0",
     "serve": "^14.2.4"
+  },
+  "overrides": {
+    "@capacitor/cli": {
+      "tar": "^7.5.22"
+    },
+    "serve": {
+      "compression": "^1.8.2"
+    }
+  },
+  "engines": {
+    "node": ">=24 <25"
   }
 }

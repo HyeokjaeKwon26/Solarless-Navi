@@ -33,6 +33,8 @@ data/release/
 .scene-v3-local/
 .gradle-local/
 logs/
+test-results/
+playwright-report/
 
 # OS / Editor Files
 .DS_Store

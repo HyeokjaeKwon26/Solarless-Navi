@@ -16,17 +16,23 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit all dependencies
+        run: npm audit --audit-level=high
 
       - name: Run unit tests
         run: npm test
+
+      - name: Install browser for regression tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser regression tests
+        run: npm run test:browser
 
       - name: Check JavaScript syntax
         shell: bash
@@ -34,19 +40,7 @@ jobs:
           find js www/js -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
 
       - name: Verify root and www mirrors
-        shell: bash
-        run: |
-          set -euo pipefail
-          for name in app.js app-version.js debug-logger.js geocoder.js i18n.js nrel-spa.js offline-map.js route-state.js scene-pack-worker.js scene-shadow.js shadow-router.js solar-physics.js solar-worker.js weather-radiation.js suncalc.js pip-controller.js map-provider.js leaflet-maplibre-gl.js maplibre-gl.js maplibre-gl-worker.mjs maplibre-gl-shared.mjs; do
-            root_hash=$(sha256sum "js/$name" | cut -d' ' -f1)
-            www_hash=$(sha256sum "www/js/$name" | cut -d' ' -f1)
-            test "$root_hash" = "$www_hash"
-          done
-          for name in index.html style.css; do
-            root_hash=$(sha256sum "$name" | cut -d' ' -f1)
-            www_hash=$(sha256sum "www/$name" | cut -d' ' -f1)
-            test "$root_hash" = "$www_hash"
-          done
+        run: npm run check:mirrors
 
       - name: Android debug compile (unsigned debug variant)
         uses: actions/setup-java@v5
@@ -56,6 +50,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: 13114758
 
       - name: Ensure Android SDK packages
         shell: bash
