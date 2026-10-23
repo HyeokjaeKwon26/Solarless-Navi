@@ -3113,7 +3113,8 @@ test('interrupted voice prompts reset only after resume and active sessions are 
     assert.ok(ttsSource.includes('function handleInterruptionEnd()'));
     assert.ok(appSource.includes('TTSVoice.handleInterruptionStart()'));
     assert.ok(appSource.includes('TTSVoice.handleInterruptionEnd()'));
-    assert.ok(ttsSource.includes("lastTurnAnnounceBucket = ''"));
+    // Phase reset and replay after interruption are exercised behaviorally in
+    // navigation-guidance.test.js; the old single-bucket implementation is gone.
     assert.ok(appSource.includes('ACTIVE_NAVIGATION_SESSION_TTL_MS'));
     assert.ok(appSource.includes('offerActiveNavigationSessionRestore'));
     assert.ok(appSource.includes('clearActiveNavigationSession()'));

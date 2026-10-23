@@ -1229,3 +1229,6 @@ body.battery-saver-active .route-summary-floating {
 }
 #guidance-health[hidden], #banner-lanes[hidden] { display: none; }
 #banner-lanes { font-size: 12px; color: #b8f2cd; line-height: 1.4; }
+
+.banner-following { font-size: 13px; line-height: 1.4; margin-top: 4px; color: #bae6fd; }
+.banner-following[hidden] { display: none; }

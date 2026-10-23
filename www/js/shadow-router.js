@@ -1568,6 +1568,7 @@ window.ShadowRouter = (function () {
                             type: step.maneuver.type, modifier: step.maneuver.modifier || '',
                             location: step.maneuver.location, bearingBefore: step.maneuver.bearing_before,
                             bearingAfter: step.maneuver.bearing_after, name: step.name || '', ref: step.ref || '',
+                            exits: step.exits || null, destinations: step.destinations || null, exit: step.maneuver.exit || null,
                             distance: step.distance, duration: step.duration, cumulativeDistance: cumulativeStepDist,
                             lanes: window.RouteState ? window.RouteState.maneuverLaneGuidance(step) : null
                         });

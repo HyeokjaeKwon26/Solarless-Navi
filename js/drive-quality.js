@@ -50,6 +50,10 @@
                 // Copy primitives so later route/GPS updates cannot mutate history.
                 samples.push({ ...sample });
             },
+            annotate(timestamp, fields) {
+                const last = samples[samples.length - 1];
+                if (active && last && last.timestamp === timestamp) Object.assign(last, fields);
+            },
             export() { return { version: 1, type: 'solarless-drive-quality', dropped,
                 samples: samples.map(sample => ({ ...sample })) }; }
         };

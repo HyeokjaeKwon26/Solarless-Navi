@@ -11,6 +11,8 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
+import android.os.BatteryManager;
 import android.util.Rational;
 import android.content.SharedPreferences;
 import android.location.LocationManager;
@@ -32,6 +34,27 @@ public class PipPlugin extends Plugin {
     private static boolean navigationActive;
     private static boolean autoEnter = true;
     private BroadcastReceiver locationReceiver;
+
+    @PluginMethod
+    public void getRuntimeHealth(PluginCall call) {
+        JSObject result = new JSObject();
+        PowerManager power = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+        result.put("powerSaveMode", power != null && power.isPowerSaveMode());
+        result.put("thermalStatus", Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && power != null
+            ? power.getCurrentThermalStatus() : -1);
+        Intent battery = getContext().registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (battery != null) {
+            int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+            if (level >= 0 && scale > 0) result.put("batteryPercent", 100.0 * level / scale);
+            int status = battery.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+            result.put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL);
+            if (battery.hasExtra(BatteryManager.EXTRA_TEMPERATURE)) {
+                result.put("batteryTemperatureC", battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0);
+            }
+        }
+        call.resolve(result);
+    }
 
     @PluginMethod
     public void saveDriveRecording(PluginCall call) {

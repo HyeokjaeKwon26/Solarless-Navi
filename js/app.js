@@ -64,6 +64,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let isTollFreeOnly = false;
     let isSatelliteViewActive = false;
     let isBatterySaverActive = false;
+    let manualBatterySaver = false;
+    let automaticBatterySaver = false;
+    let runtimeHealth = null;
+    let lastRuntimeHealthAt = 0;
+    let runtimeHealthPending = false;
+    try { manualBatterySaver = localStorage.getItem('solarless_battery_saver') === 'true'; } catch (e) {}
+    isBatterySaverActive = manualBatterySaver;
     let isAutoFreeDriveEnabled = true;
     try {
         isAutoFreeDriveEnabled = localStorage.getItem(AUTO_FREE_DRIVE_ENABLED_KEY) !== 'false';
@@ -191,11 +198,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const isKo = I18n.getLanguage().startsWith('ko');
         let message = '';
         if (isLiveNavActive && !navigationSessionArrived) {
+            refreshRuntimeHealth();
             const gpsStale = !lastReliableFixAt || Date.now() - lastReliableFixAt > 10000;
             if (gpsStale) message = isKo ? 'GPS 신호 확인 중 · 위치와 회전 안내가 갱신되지 않습니다' : 'Waiting for GPS · position and turn guidance are not updating';
             else if (navigator.onLine === false) message = isKo ? '오프라인 · 기존 경로 유지, 새 경로 탐색 대기' : 'Offline · keeping existing route; rerouting unavailable';
             else if (routingUnavailable) message = isKo ? '경로 서버 연결 대기 · 기존 경로 유지' : 'Routing service unavailable · keeping existing route';
             else if (offRouteEvidence.confirmed) message = isKo ? '경로 이탈 · 새 경로 확인 중' : 'Off route · waiting for a verified route';
+            else if (automaticBatterySaver) message = isKo ? '기기 상태에 따라 자동 절전 중' : 'Automatic battery saver active';
+            if (gpsStale && !isFreeDriveMode) {
+                TTSVoice.pauseGuidance();
+                document.getElementById('banner-dist').textContent = '—';
+                document.getElementById('banner-desc').textContent = isKo ? 'GPS 신호 확인 중 · 회전 안내 대기' : 'Waiting for GPS · turn guidance paused';
+                document.getElementById('banner-lanes').hidden = true;
+                const following = document.getElementById('banner-following');
+                if (following) following.hidden = true;
+            }
         }
         status.hidden = !message;
         if (status.textContent !== message) status.textContent = message;
@@ -223,6 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${route && route.id ? route.id : 'route'}|${coords.length}|${first[0]},${first[1]}|${last[0]},${last[1]}`;
     }
 
+    let lastSessionCheckpointAt = 0;
     function saveActiveNavigationSession() {
         if (!currentEnd) return;
         try {
@@ -230,8 +248,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
                 name: destinationName,
                 mode: currentMode,
+                tollFree: isTollFreeOnly,
                 savedAt: Date.now()
             }));
+            lastSessionCheckpointAt = Date.now();
         } catch (e) {}
     }
 
@@ -310,8 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isLiveNavActive || currentEnd) return;
         let saved = null;
         try { saved = JSON.parse(localStorage.getItem(ACTIVE_NAVIGATION_SESSION_KEY) || 'null'); } catch (e) {}
-        const valid = saved && saved.end && Number.isFinite(Number(saved.end.lat)) &&
-            Number.isFinite(Number(saved.end.lng)) && Date.now() - Number(saved.savedAt || 0) <= ACTIVE_NAVIGATION_SESSION_TTL_MS;
+        const valid = NavigationGuidance.validSession(saved, Date.now(), ACTIVE_NAVIGATION_SESSION_TTL_MS);
         if (!valid) {
             clearActiveNavigationSession();
             return;
@@ -327,6 +346,9 @@ document.addEventListener('DOMContentLoaded', () => {
         currentEnd = { lat: Number(saved.end.lat), lng: Number(saved.end.lng) };
         destinationName = String(saved.name || (isKo ? '이전 목적지' : 'Previous destination'));
         if (['glareFree', 'fastest', 'shade'].includes(saved.mode)) currentMode = saved.mode;
+        isTollFreeOnly = saved.tollFree === true;
+        const tollToggle = document.getElementById('toggle-toll-free');
+        if (tollToggle) tollToggle.checked = isTollFreeOnly;
         updateModeButtonsHighlight();
         const destinationInput = document.getElementById('destination-input');
         if (destinationInput) destinationInput.value = destinationName;
@@ -334,6 +356,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function resetNavigationRouteProgress(route = null) {
+        if (window.TTSVoice) TTSVoice.resetGuidance();
         offRouteEvidence = { lastAttempt: lastRerouteTime || undefined };
         navigationRouteProgress = {
             routeId: getRouteGeometryIdentity(route), value: 0,
@@ -342,33 +365,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function snapNavigationPosition(lat, lng, heading, route) {
-        const coords = route && route.analyzed && Array.isArray(route.analyzed.coordinates)
-            ? route.analyzed.coordinates : null;
-        if (!coords || coords.length < 2) return { lat, lng, heading, isSnapped: false, segmentIndex: 0, t: 0, distMeters: 0 };
         const identity = getRouteGeometryIdentity(route);
         if (navigationRouteProgress.routeId !== identity) resetNavigationRouteProgress(route);
         const previous = navigationRouteProgress;
-        const candidate = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, coords, {
-            previousSegmentIndex: previous.snap ? previous.segmentIndex : null,
-            maxBacktrackSegments: 0
+        const key = `${lastGpsTimestamp}|${lat}|${lng}|${heading}`;
+        if (previous.fixKey === key) return previous.result;
+        const candidate = NavigationGuidance.match(route, { lat, lng, heading,
+            speedKmh: lastNavigationSpeedKmh, accuracy: lastProcessedNavigationAccuracy,
+            timestamp: lastGpsTimestamp || Date.now() }, previous.snap);
+        // Keep raw route distance independent of continuity/heading rejection.
+        candidate.rawDistanceMeters = candidate.isSnapped ? candidate.distMeters :
+            ShadowRouter.distanceToRoute(lat, lng, route.analyzed.coordinates);
+        navigationRouteProgress = { ...previous, fixKey: key, result: candidate };
+        if (candidate.isSnapped) Object.assign(navigationRouteProgress, {
+            value: candidate.segmentIndex + candidate.t, segmentIndex: candidate.segmentIndex,
+            t: candidate.t, snap: candidate
         });
-        if (!candidate.isSnapped) return candidate;
-        const candidateValue = Number(candidate.segmentIndex || 0) + Number(candidate.t || 0);
-        // Do not let a noisy fix move the active route backwards. Keep the
-        // last accepted snapped point until the vehicle reaches it again;
-        // off-route detection still uses the raw GPS point and can trigger a
-        // forward reroute when necessary.
-        if (previous.snap && candidateValue + 0.15 < previous.value) {
-            return { ...previous.snap, rawDistanceMeters: candidate.distMeters, progressClamped: true };
-        }
-        navigationRouteProgress = {
-            routeId: identity,
-            value: candidateValue,
-            segmentIndex: Number(candidate.segmentIndex || 0),
-            t: Number(candidate.t || 0),
-            snap: candidate
-        };
-        return { ...candidate, rawDistanceMeters: candidate.distMeters };
+        return candidate;
     }
 
     function precisionRouteStartsAtVehicle(route) {
@@ -687,6 +700,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setNavigationButtonsEnabled(false);
         setupNativeLocationPermissionState();
         setupPipUi();
+        applyBatterySaverState();
         if (window.DebugLogger) window.DebugLogger.init();
 
         setTimeout(checkGitHubLatestVersion, 2500);
@@ -1165,75 +1179,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* FIND NEXT UPCOMING TURN MANEUVER FROM CURRENT VEHICLE POSITION */
     function findNextManeuver(carLat, carLng) {
-        if (!selectedRouteObj || !selectedRouteObj.maneuvers || selectedRouteObj.maneuvers.length === 0) {
-            return null;
-        }
-
-        const maneuvers = selectedRouteObj.maneuvers;
-        const routeCoords = selectedRouteObj.analyzed && Array.isArray(selectedRouteObj.analyzed.coordinates)
-            ? selectedRouteObj.analyzed.coordinates : null;
-        let currentRouteIndex = -1;
-        if (routeCoords && routeCoords.length > 1 && ShadowRouter.snapPositionAndHeadingToRoad) {
-            const snap = isLiveNavActive
-                ? snapNavigationPosition(carLat, carLng, currentHeading, selectedRouteObj)
-                : ShadowRouter.snapPositionAndHeadingToRoad(carLat, carLng, currentHeading, routeCoords);
-            currentRouteIndex = Number.isFinite(Number(snap && snap.segmentIndex)) ? Number(snap.segmentIndex) : -1;
-        }
-
-        // OSRM returns maneuvers in route order.  Use that order (rather than
-        // only the closest geographic point) so a turn that has just been
-        // passed can never be selected again when the road doubles back.
-        const routeIndexForManeuver = (maneuver) => {
-            if (!routeCoords || routeCoords.length === 0 || !maneuver.location) return Infinity;
-            let best = Infinity;
-            let bestIndex = Infinity;
-            for (let i = 0; i < routeCoords.length; i++) {
-                const point = routeCoords[i];
-                const dLat = Number(point[1]) - Number(maneuver.location[1]);
-                const dLng = Number(point[0]) - Number(maneuver.location[0]);
-                const score = dLat * dLat + dLng * dLng;
-                if (score < best) {
-                    best = score;
-                    bestIndex = i;
-                }
-            }
-            return bestIndex;
-        };
-
-        const candidates = [];
-
-        for (let i = 0; i < maneuvers.length; i++) {
-            const m = maneuvers[i];
-            if (!m.location || m.location.length < 2) continue;
-
-            const routeIndex = routeIndexForManeuver(m);
-            if (currentRouteIndex >= 0 && Number.isFinite(routeIndex) && routeIndex < currentRouteIndex - 2) continue;
-
-            // Distance from car to maneuver point
-            const dist = ShadowRouter.calculateDistanceMeters(carLat, carLng, m.location[1], m.location[0]);
-
-            // Only consider maneuvers AHEAD of us (within 2km, but skip ones behind us)
-            if (dist < 2000) {
-                // Check if maneuver is ahead by comparing bearing from car to maneuver vs current heading
-                const bearingToManeuver = ShadowRouter.calculateBearing(carLat, carLng, m.location[1], m.location[0]);
-                const headingDiff = Math.abs(((bearingToManeuver - currentHeading) % 360 + 540) % 360 - 180);
-
-                // Accept if maneuver is roughly ahead (within 120° arc) OR very close (< 60m)
-                if (headingDiff < 120 || dist < 60) {
-                    candidates.push({ maneuver: m, distanceFromCar: dist, routeIndex });
-                }
-            }
-        }
-
-        candidates.sort((a, b) => {
-            if (Number.isFinite(a.routeIndex) && Number.isFinite(b.routeIndex) && a.routeIndex !== b.routeIndex) {
-                return a.routeIndex - b.routeIndex;
-            }
-            return a.distanceFromCar - b.distanceFromCar;
-        });
-        if (!candidates.length) return null;
-        const selected = candidates[0];
-        return { ...selected.maneuver, distanceFromCar: selected.distanceFromCar };
+        if (!selectedRouteObj || !selectedRouteObj.analyzed) return null;
+        const snap = isLiveNavActive
+            ? snapNavigationPosition(carLat, carLng, currentHeading, selectedRouteObj)
+            : NavigationGuidance.match(selectedRouteObj, { lat: carLat, lng: carLng,
+                heading: currentHeading, timestamp: Date.now(), speedKmh: 0 });
+        return NavigationGuidance.next(selectedRouteObj, snap);
     }
 
     /* MANEUVER TYPE+MODIFIER → ICON MAPPING */
@@ -1285,6 +1236,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const bannerIcon = document.getElementById('banner-turn-icon');
         const laneElement = document.getElementById('banner-lanes');
         const lanes = nextManeuver && nextManeuver.distanceFromCar <= 500 && nextManeuver.lanes;
+        let followingElement = document.getElementById('banner-following');
+        if (!followingElement) {
+            followingElement = document.createElement('div');
+            followingElement.id = 'banner-following';
+            followingElement.className = 'banner-following';
+            laneElement.after(followingElement);
+        }
+        const following = nextManeuver && nextManeuver.distanceFromCar <= 400 && nextManeuver.following;
+        followingElement.hidden = !following || following.distanceAfter > 180;
+        followingElement.textContent = followingElement.hidden ? '' : (isKo
+            ? `이어서 ${Math.round(following.distanceAfter)}m 후 ${TTSVoice.getManeuverText(following.type, following.modifier)}`
+            : `Then in ${Math.round(following.distanceAfter)}m, ${TTSVoice.getManeuverText(following.type, following.modifier)}`);
         laneElement.hidden = !lanes;
         laneElement.textContent = lanes ? (isKo
             ? `왼쪽부터 ${lanes.valid.join(', ')}번 차로 이용 · 총 ${lanes.total}차로`
@@ -1301,7 +1264,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Turn instruction text
             const turnText = TTSVoice.getManeuverText(nextManeuver.type, nextManeuver.modifier);
-            const roadName = nextManeuver.name || '';
+            const roadName = NavigationGuidance.roadLabel(nextManeuver, isKo);
 
             let descText;
             if (isKo) {
@@ -1530,19 +1493,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* OLED HEAT & BATTERY SAVER MODE TOGGLE */
-    function toggleBatterySaverMode() {
-        isBatterySaverActive = !isBatterySaverActive;
-        const btn = document.getElementById('btn-toggle-battery-saver');
-
-        if (isBatterySaverActive) {
-            document.body.classList.add('battery-saver-active');
-            if (btn) btn.classList.add('active');
-            TTSVoice.speak(I18n.getLanguage().startsWith('ko') ? "배터리 및 발열 절전 주행 모드가 켜졌습니다." : "Battery saver mode activated.", true);
-        } else {
-            document.body.classList.remove('battery-saver-active');
-            if (btn) btn.classList.remove('active');
-            TTSVoice.speak(I18n.getLanguage().startsWith('ko') ? "절전 주행 모드가 꺼졌습니다." : "Battery saver mode deactivated.", true);
+    function applyBatterySaverState() {
+        isBatterySaverActive = manualBatterySaver || automaticBatterySaver;
+        document.body.classList.toggle('battery-saver-active', isBatterySaverActive);
+        const button = document.getElementById('btn-toggle-battery-saver');
+        if (button) {
+            button.classList.toggle('active', isBatterySaverActive);
+            button.setAttribute('aria-pressed', String(isBatterySaverActive));
+            button.title = automaticBatterySaver
+                ? (I18n.getLanguage().startsWith('ko') ? '기기 발열·배터리 상태에 따른 자동 절전' : 'Automatic saver for device temperature or battery') : '';
         }
+    }
+    function toggleBatterySaverMode() {
+        manualBatterySaver = !manualBatterySaver;
+        try { localStorage.setItem('solarless_battery_saver', String(manualBatterySaver)); } catch (e) {}
+        applyBatterySaverState();
+    }
+    async function refreshRuntimeHealth() {
+        if (runtimeHealthPending || Date.now() - lastRuntimeHealthAt < 30000) return;
+        const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Pip;
+        if (!plugin || typeof plugin.getRuntimeHealth !== 'function') return;
+        runtimeHealthPending = true;
+        lastRuntimeHealthAt = Date.now();
+        try {
+            runtimeHealth = await plugin.getRuntimeHealth();
+            automaticBatterySaver = NavigationGuidance.shouldConserve(runtimeHealth, automaticBatterySaver);
+            applyBatterySaverState();
+        } catch (e) { /* Older bridge versions do not expose device health. */ }
+        finally { runtimeHealthPending = false; }
     }
 
     /* SHADED REST SPOT & PARKING WAYPOINT SEARCH */
@@ -2690,6 +2668,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const coords = selectedRouteObj.analyzed.coordinates;
         const routeIdentity = getRouteGeometryIdentity(selectedRouteObj);
         const snap = knownSnap || ShadowRouter.snapPositionAndHeadingToRoad(carLat, carLng, carHeading, coords);
+        if (!snap.isSnapped) return;
         if (selectedRouteObj.analyzed.segments.length === 0) return;
         const progressFloor = navigationRouteProgress.routeId === routeIdentity
             ? navigationRouteProgress.segmentIndex : 0;
@@ -4574,7 +4553,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.PipController) window.PipController.setNavigationActive(false);
 
         const isKo = I18n.getLanguage().startsWith('ko');
-        TTSVoice.speak(isKo ? "목적지 부근에 도착했습니다. 안내를 종료합니다." : "You have arrived at your destination. Navigation guidance completed.", true);
+        TTSVoice.speak(isKo ? "목적지 부근에 도착했습니다. 안내를 종료합니다." : "You have arrived at your destination. Navigation guidance completed.", true, null, 3);
 
         const durTotalMin = Math.max(1, Math.round((Date.now() - (navStartTime || Date.now())) / 60000));
         const distTotalKm = ((navStartDistanceMeters || 0) / 1000).toFixed(1);
@@ -4857,8 +4836,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const timestamp = Number(position.timestamp) > 0 ? Number(position.timestamp) : Date.now();
             const accuracy = Number(coords.accuracy);
             const activeGeometry = selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates;
-            driveRecorder.add({ lat, lng, timestamp, receivedAt: Date.now(), accuracy,
+            if (driveRecorder.active) driveRecorder.add({ lat, lng, timestamp, receivedAt: Date.now(), accuracy,
                 reportedSpeedKmh: getPositionSpeedKmh(position), online: navigator.onLine !== false,
+                heading: coords.heading,
+                batteryPercent: runtimeHealth?.batteryPercent, batteryTemperatureC: runtimeHealth?.batteryTemperatureC,
+                thermalStatus: runtimeHealth?.thermalStatus, batterySaver: isBatterySaverActive,
                 pending: !!pendingRouteRequestKey, routeId: navigationSessionRouteId,
                 distanceMeters: activeGeometry ? ShadowRouter.distanceToRoute(lat, lng, activeGeometry) : null });
             const ageMs = Math.max(0, Date.now() - timestamp);
@@ -4931,7 +4913,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 return true;
             }
-            const hasHwHeading = Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0;
+            const hasHwHeading = coords.heading !== null && coords.heading !== undefined && Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0;
             lastReliableFixAt = timestamp;
             if (hasHwHeading) hasValidGpsHeading = true;
             if (hasHwHeading && !compassModeUserOverride && compassMode === 'north-up') setCompassMode('heading-up');
@@ -4968,6 +4950,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const markerOptions = navigationSnap
                 ? { knownSnap: navigationSnap, sampleTimestampMs: timestamp }
                 : { snapToRoute: false, sampleTimestampMs: timestamp };
+            if (navigationSnap) driveRecorder.annotate(timestamp, {
+                snapReason: navigationSnap.reason, snapped: navigationSnap.isSnapped,
+                progressMeters: navigationSnap.progressMeters,
+                oppositeDirection: navigationSnap.reason === 'opposite-direction'
+            });
 
             if (navigationRouteNeedsReliableOrigin) {
                 // The first reliable fix after a coarse/stale start becomes
@@ -4997,6 +4984,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return true;
             }
 
+            if (Date.now() - lastSessionCheckpointAt >= 30000) saveActiveNavigationSession();
             const roadDestination = getActiveRoadDestination();
             if (roadDestination) {
                 const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, roadDestination.lat, roadDestination.lng);
@@ -5005,7 +4993,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const remaining = navigationSnap && Number.isFinite(navigationSnap.remainingMeters)
                     ? navigationSnap.remainingMeters : (routeCoords && navigationSnap
                         ? ShadowRouter.calculateRemainingRouteDistance(lat, lng, routeCoords, navigationSnap.segmentIndex) : Infinity);
-                if (RouteState.canConfirmArrival(distToDest, remaining, incomingAccuracy, rawSpeedKmh)) {
+                if (navigationSnap && navigationSnap.isSnapped && RouteState.canConfirmArrival(distToDest, remaining, incomingAccuracy, rawSpeedKmh)) {
                     handleDestinationArrival(navigationSessionStartedAt, navigationSessionStartDistanceMeters);
                     return true;
                 }
@@ -5017,6 +5005,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const now = Date.now();
                 offRouteEvidence = RouteState.evaluateOffRoute(offRouteEvidence, {
                     timestamp: now, distanceMeters: offRouteDist, accuracy: incomingAccuracy,
+                    oppositeDirection: navigationSnap && navigationSnap.reason === 'opposite-direction',
                     online: navigator.onLine !== false, pending: !!pendingRouteRequestKey || !!routeAbortController
                 });
                 if (offRouteEvidence.shouldReroute) {
@@ -5024,11 +5013,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     navigationConsecutiveOffRouteCount = 0;
                     TTSVoice.speak(I18n.getLanguage().startsWith('ko')
                         ? '경로를 이탈했습니다. 현재 위치에서 새로 탐색합니다.'
-                        : 'Off route. Recalculating from current position.', true);
+                        : 'Off route. Recalculating from current position.', true, null, 3);
                     updateRoute(true, { reason: 'off-route' });
                     return true;
                 }
                 if (offRouteEvidence.confirmed) {
+                    TTSVoice.pauseGuidance();
+                    const following = document.getElementById('banner-following');
+                    if (following) following.hidden = true;
                     updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh, { snapToRoute: false, sampleTimestampMs: timestamp });
                     const isKo = I18n.getLanguage().startsWith('ko');
                     document.getElementById('banner-dist').textContent = '—';
@@ -5038,10 +5030,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             updateVehicleMarkerPosition(lat, lng, heading, rawSpeedKmh, markerOptions);
+            if (navigationSnap && !navigationSnap.isSnapped) {
+                TTSVoice.pauseGuidance();
+                document.getElementById('banner-dist').textContent = '—';
+                document.getElementById('banner-desc').textContent = I18n.getLanguage().startsWith('ko')
+                    ? '도로 위치 확인 중 · 회전 안내 대기' : 'Checking road position · turn guidance paused';
+                document.getElementById('banner-lanes').hidden = true;
+                const following = document.getElementById('banner-following');
+                if (following) following.hidden = true;
+                return true;
+            }
             const glareRisk = calculateLiveGlareRisk(lat, lng, currentHeading);
             const nextManeuver = findNextManeuver(lat, lng);
             updateTurnBannerText(nextManeuver, glareRisk);
-            if (nextManeuver) TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar);
+            if (nextManeuver) TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar, lastNavigationSpeedKmh);
             if (glareRisk > 0.45) TTSVoice.announceProactiveGlareWarning(currentHeading, glareRisk);
             // Do not let the generic "continue straight" hazard message
             // overwrite a real upcoming left/right turn announcement.
@@ -5105,7 +5107,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 lastGpsTimestamp = pos.timestamp;
 
                 // 1. Destination Arrival Multi-Tier Proximity Check
-                const roadDestination = getActiveRoadDestination();
+                if (Date.now() - lastSessionCheckpointAt >= 30000) saveActiveNavigationSession();
+            const roadDestination = getActiveRoadDestination();
                 if (isLiveNavActive && roadDestination && !isArrived) {
                     const distToDest = ShadowRouter.calculateDistanceMeters(lat, lng, roadDestination.lat, roadDestination.lng);
                     let isNearEndSegment = false;
@@ -5157,7 +5160,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Turn-by-turn voice announcement (3-tier: 300m/100m/30m)
                 if (nextManeuver) {
-                    TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar);
+                    TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar, lastNavigationSpeedKmh);
                 }
 
                 if (glareRisk > 0.45) {

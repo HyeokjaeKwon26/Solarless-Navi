@@ -486,7 +486,8 @@
         const distance = Number(sample.distanceMeters);
         const accuracy = Number(sample.accuracy);
         const reliable = [now, distance, accuracy].every(Number.isFinite) && accuracy > 0 && accuracy <= 50;
-        const outside = reliable && distance - accuracy > 45;
+        const outside = reliable && (distance - accuracy > 45 ||
+            (sample.oppositeDirection === true && accuracy <= 20));
         const continuous = outside && state.count > 0 && Number.isFinite(state.since) &&
             Number.isFinite(state.lastAt) && now > state.lastAt && now - state.lastAt <= 5000;
         const since = outside ? (continuous ? state.since : now) : null;

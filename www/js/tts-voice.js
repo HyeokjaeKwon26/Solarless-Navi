@@ -11,10 +11,31 @@ window.TTSVoice = (function () {
     let lastSpokenTime = 0;
     let lastAnnouncedBucket = "";
     let lastProactiveGlareTime = 0;
-    let lastTurnAnnounceBucket = '';
     let lastTurnAnnounceTime = 0;
     let audioCtx = null;
     let interruptionActive = false;
+    let speechGeneration = 0;
+    let stopBarrier = Promise.resolve();
+    let turnProtectedUntil = 0;
+    const spokenStages = new Map();
+    let guidancePaused = false;
+
+    function resetGuidance() {
+        guidancePaused = false;
+        stopSpeech();
+        spokenStages.clear();
+        turnProtectedUntil = 0;
+        lastTurnAnnounceTime = 0;
+        lastSpokenText = '';
+    }
+    function pauseGuidance() {
+        if (guidancePaused) return;
+        guidancePaused = true;
+        stopSpeech();
+        spokenStages.clear();
+        turnProtectedUntil = 0;
+        lastTurnAnnounceTime = 0;
+    }
 
     function getAudioContext() {
         if (!audioCtx) {
@@ -92,16 +113,13 @@ window.TTSVoice = (function () {
     }
 
     function stopSpeech() {
-        try {
-            if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech) {
-                window.Capacitor.Plugins.TextToSpeech.stop();
-            }
-            if (window.speechSynthesis) {
-                window.speechSynthesis.cancel();
-            }
-        } catch (e) {
-            console.warn("Stop speech warning:", e);
-        }
+        speechGeneration++;
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+        const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech;
+        // Serialize native stop operations. A delayed stop must not cut off a
+        // newer utterance, and a rejected stop must not become unhandled.
+        stopBarrier = stopBarrier.then(() => plugin ? plugin.stop() : undefined).catch(() => {});
+        return stopBarrier;
     }
 
     function handleInterruptionStart() {
@@ -116,9 +134,10 @@ window.TTSVoice = (function () {
         // silenced the instruction that was emitted immediately beforehand.
         lastSpokenText = '';
         lastSpokenTime = 0;
-        lastTurnAnnounceBucket = '';
         lastTurnAnnounceTime = 0;
         lastAnnouncedBucket = '';
+        spokenStages.clear();
+        turnProtectedUntil = 0;
     }
 
     function showVoiceToast(text) {
@@ -149,23 +168,20 @@ window.TTSVoice = (function () {
         }
     }
 
-    async function speak(text, force = false, playChimeType = null) {
-        if (!text || isMuted || interruptionActive) return;
-
-        if (playChimeType) {
-            playWarningChime(playChimeType);
-        }
-
-        showVoiceToast(text);
-
+    async function speak(text, force = false, playChimeType = null, priority = 0) {
+        if (!text || isMuted || interruptionActive) return false;
         const now = Date.now();
-        if (!force && text === lastSpokenText && (now - lastSpokenTime) < 4000) {
-            return;
-        }
+        if (priority < 2 && now < turnProtectedUntil) return false;
+        if (!force && text === lastSpokenText && now - lastSpokenTime < 4000) return false;
         lastSpokenText = text;
         lastSpokenTime = now;
-
-        stopSpeech();
+        if (priority === 2) turnProtectedUntil = now + 6000;
+        const stopped = stopSpeech();
+        const generation = speechGeneration;
+        await stopped;
+        if (generation !== speechGeneration || isMuted || interruptionActive) return false;
+        if (playChimeType) playWarningChime(playChimeType);
+        showVoiceToast(text);
 
         // 1. Native Android Capacitor TextToSpeech Plugin
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech) {
@@ -180,6 +196,7 @@ window.TTSVoice = (function () {
                 });
                 return;
             } catch (err) {
+                if (generation !== speechGeneration || isMuted || interruptionActive) return false;
                 console.warn("Capacitor Native TTS fallback to Web Speech:", err);
             }
         }
@@ -369,85 +386,43 @@ window.TTSVoice = (function () {
         return window.I18n ? window.I18n.getText('turnStraight') : (isKo ? '직진' : 'Continue straight');
     }
 
-    /**
-     * 3-Tier Turn-by-Turn Voice Announcement Engine.
-     * Announces at 300m (preview), 100m (prepare), and 30m (execute) from the turn point.
-     * Each distance bucket for a given maneuver is announced only once.
-     */
-    function announceTurnManeuver(maneuver, distanceMeters) {
-        if (isMuted || !maneuver) return;
-
+    // Announce each maneuver phase once; speed changes cannot replay an older phase.
+    function announceTurnManeuver(maneuver, distanceMeters, speedKmh = 0) {
+        if (isMuted || interruptionActive || !maneuver || maneuver.type === 'arrive' || !Number.isFinite(distanceMeters)) return;
         const now = Date.now();
-        // Global cooldown: minimum 2.5s between any turn announcements
-        if (now - lastTurnAnnounceTime < 2500) return;
-
-        // Determine distance bucket
-        let bucket = '';
-        if (distanceMeters <= 50) {
-            bucket = 'exec';
-        } else if (distanceMeters <= 150) {
-            bucket = 'prep';
-        } else if (distanceMeters <= 400) {
-            bucket = 'prev';
-        } else {
-            return; // Too far for announcement
-        }
-
-        // Deduplicate: same maneuver location + bucket = skip
-        const maneuverKey = `${maneuver.type}_${maneuver.modifier}_${bucket}`;
-        const locKey = maneuver.location ? `${maneuver.location[0].toFixed(4)}_${maneuver.location[1].toFixed(4)}` : '';
-        const fullKey = `${locKey}_${maneuverKey}`;
-        if (fullKey === lastTurnAnnounceBucket) return;
-        lastTurnAnnounceBucket = fullKey;
+        guidancePaused = false;
+        const limits = window.NavigationGuidance.thresholds(speedKmh);
+        const stage = distanceMeters <= limits.execute ? 3 : distanceMeters <= limits.prepare ? 2 : distanceMeters <= limits.preview ? 1 : 0;
+        if (!stage) return;
+        const key = `${maneuver.sequence ?? ''}|${maneuver.location}|${maneuver.type}|${maneuver.modifier}`;
+        if ((spokenStages.get(key) || 0) >= stage) return;
+        // A newly reached close turn can supersede the prior turn's cooldown.
+        if (stage !== 3 && now - lastTurnAnnounceTime < 2500) return;
+        spokenStages.set(key, stage);
+        if (spokenStages.size > 128) spokenStages.delete(spokenStages.keys().next().value);
         lastTurnAnnounceTime = now;
-
         const isKo = currentLang.startsWith('ko');
-        const turnText = getManeuverText(maneuver.type, maneuver.modifier);
-        const roadName = maneuver.name || '';
-
-        let msg = '';
-
-        if (bucket === 'prev') {
-            // 300m preview: "300미터 앞에서 [도로명] 방면으로 [좌회전]입니다"
-            const distText = distanceMeters >= 1000
-                ? `${(distanceMeters / 1000).toFixed(1)}km`
-                : `${Math.round(distanceMeters / 50) * 50}m`;
-
-            if (isKo) {
-                msg = roadName
-                    ? `${distText} 앞에서 ${roadName} 방면으로 ${turnText}입니다.`
-                    : `${distText} 앞에서 ${turnText}입니다.`;
-            } else {
-                msg = roadName
-                    ? `In ${distText}, ${turnText} onto ${roadName}.`
-                    : `In ${distText}, ${turnText}.`;
-            }
-        } else if (bucket === 'prep') {
-            // 100m prepare: "잠시 후 [좌회전]입니다"
-            if (isKo) {
-                msg = roadName
-                    ? `잠시 후 ${roadName} 방면으로 ${turnText}입니다.`
-                    : `잠시 후 ${turnText}입니다.`;
-            } else {
-                msg = roadName
-                    ? `Shortly, ${turnText} onto ${roadName}.`
-                    : `Shortly, ${turnText}.`;
-            }
-        } else if (bucket === 'exec') {
-            // 30m execute: "[좌회전] 하세요"
-            if (isKo) {
-                msg = `${turnText} 하세요.`;
-            } else {
-                msg = `${turnText} now.`;
-            }
+        let turn = getManeuverText(maneuver.type, maneuver.modifier);
+        if (maneuver.exit && /roundabout|rotary/.test(maneuver.type)) {
+            turn += isKo ? `, ${maneuver.exit}번째 출구` : `, take exit ${maneuver.exit}`;
         }
-
-        if (msg) {
-            speak(msg, true);
+        const road = window.NavigationGuidance.roadLabel(maneuver, isKo);
+        const dist = `${Math.max(10, Math.round(distanceMeters / 10) * 10)}m`;
+        const action = road ? (isKo ? `${road} 방면 ${turn}` : `${turn} toward ${road}`) : turn;
+        let message = isKo
+            ? (stage === 3 ? `곧 ${action}입니다.` : stage === 2 ? `잠시 후 ${action}입니다.` : `${dist} 앞에서 ${action}입니다.`)
+            : (stage === 3 ? `${action} ahead.` : stage === 2 ? `Shortly, ${action}.` : `In ${dist}, ${action}.`);
+        const following = maneuver.following;
+        if (stage >= 2 && following && following.distanceAfter <= 180) {
+            const nextTurn = getManeuverText(following.type, following.modifier);
+            message += isKo ? ` 이어서 ${Math.round(following.distanceAfter)}m 후 ${nextTurn}입니다.`
+                : ` Then in ${Math.round(following.distanceAfter)}m, ${nextTurn}.`;
         }
+        speak(message, true, null, 2);
     }
 
     return {
+        resetGuidance, pauseGuidance,
         setLanguage: setLanguage,
         toggleMute: toggleMute,
         speak: speak,

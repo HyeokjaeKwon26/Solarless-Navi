@@ -18,7 +18,7 @@ const style = {
     ]
 };
 
-async function fixtures(page, { brokenMap = false, holdBravo = false } = {}) {
+async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false } = {}) {
     const state = { routes: [], errors: [], releaseBravo: null, bravoFinished: false };
     page.on('pageerror', error => state.errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
@@ -84,10 +84,13 @@ async function fixtures(page, { brokenMap = false, holdBravo = false } = {}) {
                     { name: 'Fixture Road', distance: 600, duration: 75, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: coordinates.slice(0, 11) },
                         maneuver: { type: 'depart', location: start, bearing_after: 45 }, intersections: [] },
-                    { name: 'Fixture Road', distance: 1800, duration: 225, mode: 'driving',
+                    { name: 'Fixture Road', exits: '7', destinations: 'Downtown', distance: chained ? 240 : 1800, duration: chained ? 30 : 225, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: coordinates.slice(10) },
                         maneuver: { type: 'turn', modifier: 'slight right', location: coordinates[10], bearing_after: 45 },
                         intersections: [{ location: coordinates[10], lanes: [{ valid: false }, { valid: true }, { valid: true }] }] },
+                    ...(chained ? [{ name: 'Second Street', distance: 1560, duration: 195, mode: 'driving',
+                        geometry: { type: 'LineString', coordinates: coordinates.slice(14) },
+                        maneuver: { type: 'turn', modifier: 'left', location: coordinates[14], bearing_after: 315 }, intersections: [] }] : []),
                     { name: 'Fixture Road', distance: 0, duration: 0, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: [end, end] },
                         maneuver: { type: 'arrive', location: end, bearing_before: 45 }, intersections: [] }
@@ -272,5 +275,59 @@ test('lane guidance renders and GPS silence is reported until a reliable fix ret
     await expect(page.locator('#guidance-health')).toContainText('Waiting for GPS', { timeout: 13000 });
     await page.evaluate(() => window.testGps.emit({ latitude: 42.3601 }));
     await expect(page.locator('#guidance-health')).toBeHidden();
+    expect(state.errors).toEqual([]);
+});
+
+
+test('chained turns and exit details clear when heading contradicts the selected road', async ({ page }) => {
+    const state = await fixtures(page, { chained: true });
+    await page.goto('./');
+    await selectDestination(page, 'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-map-start-nav').click();
+    await establishReliableGuidance(page);
+    await expect(page.locator('#banner-desc')).toContainText('Exit 7');
+    await expect(page.locator('#banner-following')).toContainText('Then in');
+    await expect(page.locator('#banner-following')).toBeVisible();
+    await page.waitForTimeout(1600);
+    await page.evaluate(() => window.testGps.emit({ latitude: 42.36015, heading: 225 }));
+    await expect(page.locator('#banner-desc')).toContainText('Checking road position');
+    await expect(page.locator('#banner-lanes')).toBeHidden();
+    await expect(page.locator('#banner-following')).toBeHidden();
+    await page.waitForTimeout(1600);
+    await page.evaluate(() => window.testGps.emit({ latitude: 42.3602, heading: 20 }));
+    await expect(page.locator('#banner-desc')).toContainText('Exit 7');
+    expect(state.errors).toEqual([]);
+});
+
+test('restart restores the saved destination and toll preference through a fresh route', async ({ page }) => {
+    test.setTimeout(60000);
+    const state = await fixtures(page);
+    await page.addInitScript(() => localStorage.setItem('solarless_active_navigation_session', JSON.stringify({
+        end: { lat: 42.37, lng: -71.065 }, name: 'Saved Alpha', mode: 'fastest', tollFree: true, savedAt: Date.now()
+    })));
+    await page.goto('./');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled({ timeout: 15000 });
+    await page.locator('#btn-map-start-nav').click();
+    await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);
+    await expect(page.locator('#toggle-toll-free')).toBeChecked();
+    await expect(page.locator('#bar-dest-text')).toContainText('Saved Alpha');
+    await establishReliableGuidance(page);
+    expect(state.routes.length).toBeGreaterThan(0);
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('solarless_active_navigation_session')));
+    expect(saved.tollFree).toBe(true);
+    expect(saved.mode).toBe('fastest');
+    expect(state.errors).toEqual([]);
+});
+
+test('manual battery saver persists across a page restart', async ({ page }) => {
+    const state = await fixtures(page);
+    await page.goto('./');
+    await page.locator('#btn-start-free-drive').click();
+    await page.locator('#btn-toggle-battery-saver').click();
+    await expect(page.locator('body')).toHaveClass(/battery-saver-active/);
+    await page.reload();
+    await expect(page.locator('body')).toHaveClass(/battery-saver-active/);
+    await expect(page.locator('#btn-toggle-battery-saver')).toHaveAttribute('aria-pressed', 'true');
     expect(state.errors).toEqual([]);
 });
