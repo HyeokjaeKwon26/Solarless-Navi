@@ -49,7 +49,7 @@ test('real app launch offers update before free drive and Continue returns to de
             installUpdate:async()=>{window.updateCalls.install++;return {installerOpened:true};}
         }}};
     },config);
-    await page.route('https://api.github.com/repos/**',route=>route.fulfill({json:[{tag_name:'app-v9.0.0',assets:[{name:'update.json',browser_download_url:prefix+'update.json'}]}]}));
+    await page.route('https://api.github.com/repos/**',route=>route.fulfill({json:route.request().url().includes('/git/matching-refs/') ? [{ref:'refs/tags/app-v9.0.0'}] : {tag_name:'app-v9.0.0',assets:[{name:'update.json',browser_download_url:prefix+'update.json'}]}}));
     await page.route(prefix+'update.json',route=>route.fulfill({json:{...config,versionName:'9.0.0',versionCode:900,schemaVersion:1,sizeBytes:400,sha256:'a'.repeat(64),apkUrl:prefix+'SolarLessNavi-9.0.0.apk',releaseNotes:'Address search and settings improvements.'}}));
     await page.goto('./');
     await expect(page.locator('#update-modal')).not.toHaveClass(/hidden/);

@@ -115,19 +115,30 @@
                 const installed = await bounded(plugin.getInstalledInfo());
                 installedVersion = installed.versionName;
                 if (byId('about-app-version')) byId('about-app-version').textContent = `${installed.versionName} (${installed.versionCode})`;
-                const releases = [];
-                for (let page = 1; page <= 5; page++) {
-                    const data = await json(`https://api.github.com/repos/${utils.repository}/releases?per_page=100&page=${page}`);
-                    if (!Array.isArray(data)) throw new Error('INVALID_UPDATE');
-                    releases.push(...data);
-                    if (data.length < 100) break;
+                // Scene releases contain thousands of assets. Discover only app tags,
+                // then read an individual published release; never download the full catalog.
+                const api = `https://api.github.com/repos/${utils.repository}`;
+                const refs = await json(`${api}/git/matching-refs/tags/app-v`);
+                if (!Array.isArray(refs)) throw new Error('INVALID_UPDATE');
+                const tags = [...new Set(refs.map(item => String(item?.ref || ''))
+                    .filter(ref => /^refs\/tags\/app-v\d+\.\d+\.\d+$/.test(ref))
+                    .map(ref => ref.slice('refs/tags/'.length)))]
+                    .sort((a, b) => utils.compareSemver(b, a));
+                let latest;
+                for (const tag of tags.slice(0, 20)) {
+                    let release;
+                    try { release = await json(`${api}/releases/tags/${tag}`); }
+                    catch (error) {
+                        if (error.message === 'HTTP_404') continue; // Tag exists before publication finishes.
+                        throw error;
+                    }
+                    if (release?.tag_name !== tag) throw new Error('INVALID_UPDATE');
+                    if (utils.updateReleases([release]).length) { latest = release; break; }
                 }
-                const available = utils.updateReleases(releases);
-                if (!available.length) {
+                if (!latest) {
                     setPhase('idle');
                     message(text('게시된 앱 업데이트가 없습니다.', 'No app update has been published.'));
                 } else {
-                    const latest = available[0];
                     const asset = latest.assets.find(item => item.name === 'update.json');
                     const manifest = await json(asset.browser_download_url);
                     const result = utils.validateUpdate(manifest, installed, latest.tag_name);

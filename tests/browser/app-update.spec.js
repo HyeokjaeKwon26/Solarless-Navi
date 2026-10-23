@@ -6,9 +6,21 @@ async function updater(page, options = {}) {
     const manifest = { ...config, versionName: '9.0.0', versionCode: 900, schemaVersion: 1, sizeBytes: 400,
         sha256: 'a'.repeat(64), apkUrl: `${prefix}app-v9.0.0/SolarLessNavi-9.0.0.apk`,
         releaseNotes: '<img src=x onerror="window.injected=true">Test release', ...options.manifest };
-    await page.route('https://api.github.com/**', route => route.fulfill({ json: [{ tag_name: 'scene-2099' },
-        { tag_name: 'app-v9.0.0', assets: [{ name: 'update.json', browser_download_url: `${prefix}app-v9.0.0/update.json` }] }] }));
-    await page.route(`${prefix}**`, route => options.networkError ? route.fulfill({ status: 503, body: 'offline' }) : route.fulfill({ json: manifest }));
+    await page.route('https://api.github.com/**', route => {
+        const path = new URL(route.request().url()).pathname;
+        if (path.endsWith('/git/matching-refs/tags/app-v')) return route.fulfill({ json: options.refs || [
+            { ref: 'refs/tags/app-v9.0.0' }, { ref: 'refs/tags/app-v1.0.0' }
+        ] });
+        if (path.endsWith('/releases/tags/app-v10.0.0')) return route.fulfill({ status: 404, json: { message: 'Not Found' } });
+        if (path.endsWith('/releases/tags/app-v11.0.0')) return route.fulfill({ json: { tag_name: 'app-v11.0.0', prerelease: true, assets: [] } });
+        if (path.endsWith('/releases/tags/app-v9.0.0')) return route.fulfill({ json:
+            { tag_name: 'app-v9.0.0', assets: [{ name: 'update.json', browser_download_url: `${prefix}app-v9.0.0/update.json` }] } });
+        // The real repository has a multi-megabyte catalog of scene tile assets.
+        // Any regression to broad release discovery must fail instead of passing a tiny mock.
+        return route.fulfill({ json: [{ tag_name: 'scene-2099', body: 'x'.repeat(6 * 1024 * 1024) }] });
+    });
+    await page.route(`${prefix}**`, route => options.networkError ? route.fulfill({ status: 503, body: 'offline' })
+        : route.fulfill({ contentType: 'application/octet-stream', body: JSON.stringify(manifest) }));
     await page.addInitScript(({ config, options }) => {
         window.calls = { download: 0, install: 0, cancel: 0, removed: 0 };
         window.driving = !!options.driving;
@@ -118,6 +130,28 @@ test('same or older version is never offered', async ({ page }) => {
     await updater(page, { manifest: { versionCode: 1 } });
     await expect(page.locator('#update-check-status')).toContainText('Up to date');
     await expect(page.locator('#update-modal')).toBeVisible();
+    await expect(page.locator('#btn-download-update')).toBeHidden();
+});
+
+test('app-only discovery skips scene catalogs, unpublished tags and prereleases in semantic order', async ({ page }) => {
+    const requests = [];
+    page.on('request', request => { if (request.url().startsWith('https://api.github.com/')) requests.push(new URL(request.url()).pathname); });
+    await updater(page, { refs: [
+        { ref: 'refs/tags/app-v9.0.0' }, { ref: 'refs/tags/app-v11.0.0' },
+        { ref: 'refs/tags/app-v10.0.0' }, { ref: 'refs/tags/scene-2099' },
+        { ref: 'refs/tags/app-v99.0.0-beta' }, { ref: 'refs/tags/app-v1.0.0' }
+    ] });
+    await expect(page.locator('#update-status')).toContainText('new version');
+    expect(requests.map(path => path.split('/Solarless-Navi/')[1])).toEqual([
+        'git/matching-refs/tags/app-v', 'releases/tags/app-v11.0.0',
+        'releases/tags/app-v10.0.0', 'releases/tags/app-v9.0.0'
+    ]);
+    expect(await page.evaluate(() => window.calls.download)).toBe(0);
+});
+
+test('no published app tags reports no update without downloading scene releases', async ({ page }) => {
+    await updater(page, { refs: [] });
+    await expect(page.locator('#update-status')).toContainText('No app update has been published');
     await expect(page.locator('#btn-download-update')).toBeHidden();
 });
 
