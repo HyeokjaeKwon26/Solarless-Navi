@@ -1250,3 +1250,44 @@ body.battery-saver-active .route-summary-floating {
 .input-wrapper.origin-wrapper input { padding-right: 122px; }
 .origin-wrapper .address-search-btn { right: 76px; }
 .toggle-switch input:focus-visible + .slider { outline: 2px solid #fff; outline-offset: 3px; }
+
+/* Shared settings actions: one size, typography and interaction treatment. */
+.nav-btn {
+    appearance: none; -webkit-appearance: none; width: 100%; min-height: 44px;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    padding: 12px 14px; border: 1px solid #38bdf8; border-radius: 10px;
+    background: rgba(56, 189, 248, 0.14); color: #7dd3fc;
+    font: 700 13px/1.4 var(--font-main); text-align: center; cursor: pointer;
+    white-space: normal; overflow-wrap: anywhere; touch-action: manipulation;
+}
+.nav-btn i { flex: 0 0 18px; }
+.nav-btn span { min-width: 0; }
+.nav-btn.secondary { background: rgba(148, 163, 184, 0.08); border-color: #64748b; color: #cbd5e1; }
+.nav-btn.primary { background: #0284c7; color: #fff; }
+.nav-btn:hover:not(:disabled) { filter: brightness(1.18); }
+.nav-btn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.nav-btn:disabled { cursor: default; opacity: .5; }
+.nav-btn[hidden], .update-card [hidden] { display: none !important; }
+.settings-section { display: flex; flex-direction: column; gap: 10px; padding-top: 16px; margin-top: 6px; border-top: 1px solid var(--border-color); }
+.settings-section h4 { margin: 0 0 2px; font: 700 13px/1.4 var(--font-main); color: #e2e8f0; }
+.settings-section small { font-size: 11px; line-height: 1.5; color: #94a3b8; overflow-wrap: anywhere; }
+.settings-section small:empty { display: none; }
+.settings-option { padding: 12px 0; }
+.settings-attribution { font-size: 10px !important; }
+#update-modal { z-index: 12000; }
+.update-card { border-color: #38bdf8; }
+.update-card #update-status { margin-bottom: 14px; font-size: 13px; line-height: 1.5; }
+.update-card #update-progress { width: 100%; accent-color: #38bdf8; margin: 10px 0; }
+.update-card #btn-retry-update, .update-card #btn-cancel-update { margin-bottom: 10px; }
+.settings-notice { padding: 12px; border-radius: 10px; background: rgba(245,158,11,.12); color: #fcd34d; font-size: 12px; line-height: 1.5; margin-bottom: 12px; }
+/* Reserve the settings touch target even on narrow phones and enlarged text. */
+@media (max-width: 440px) {
+    .app-header .logo-group { min-width: 0; flex: 1 1 auto; gap: 6px; }
+    .app-header .logo-text { min-width: 0; }
+    .app-header .logo-text h1 { overflow: hidden; text-overflow: ellipsis; }
+    .app-header .shaded-rest-btn { width: 36px; height: 36px; padding: 0; justify-content: center; }
+    .app-header .shaded-rest-btn span { display: none !important; }
+    .app-header .header-status { display: none; }
+    .app-header .header-voice-controls { gap: 4px; }
+    .app-header #mobile-toggle-panel { margin-left: 0; }
+}

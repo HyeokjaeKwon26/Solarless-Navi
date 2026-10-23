@@ -9,16 +9,29 @@
         const button = byId('btn-download-update');
         const status = byId('update-status');
         let candidate = null, phase = 'idle', deferred = false, busy = false, cancelled = false;
+        let manualDisplay = false, dismissed = false, previousFocus = null, installedVersion = '';
+        let startupChecked = false;
         const ko = () => options.language().startsWith('ko');
         const text = (kr, en) => ko() ? kr : en;
         function message(value) {
             status.textContent = value;
             byId('update-check-status').textContent = value;
         }
+        function refreshActions() {
+            button.hidden = !candidate;
+            button.disabled = busy || !candidate || options.isDriving();
+            const restriction = byId('update-driving-status');
+            if (restriction) {
+                restriction.hidden = !candidate || !options.isDriving();
+                restriction.textContent = text('버전 확인은 완료했습니다. 주행 안내를 종료한 뒤 다운로드·설치할 수 있습니다.', 'Version checked. End navigation before downloading or installing.');
+            }
+            const retry = byId('btn-retry-update');
+            if (retry) { retry.hidden = phase !== 'error'; retry.disabled = busy; retry.textContent = text('다시 확인', 'Try again'); }
+        }
         function setPhase(value) {
             phase = value;
             modal.dataset.updateState = value;
-            button.disabled = busy;
+            refreshActions();
             byId('btn-cancel-update').hidden = value !== 'downloading';
             byId('update-progress').hidden = value !== 'downloading';
             byId('update-download-btn-text').textContent = value === 'ready'
@@ -34,43 +47,73 @@
                 HASH_MISMATCH: text('파일 검증에 실패했습니다. 다시 다운로드해 주세요.', 'File verification failed. Download again.'),
                 VERSION_MISMATCH: text('APK 버전이 일치하지 않아 설치를 중단했습니다.', 'The APK version did not match; installation was stopped.'),
                 INVALID_UPDATE: text('업데이트 정보가 올바르지 않습니다.', 'Invalid update information.'),
+                TIMEOUT: text('업데이트 확인 시간이 초과되었습니다. 연결을 확인한 뒤 다시 시도해 주세요.', 'Update check timed out. Check your connection and try again.'),
                 VERSION_READ_FAILED: text('설치된 앱 버전을 확인하지 못했습니다.', 'Could not read the installed app version.')
             };
             message(descriptions[code] || text('업데이트 서버에 연결하거나 파일을 처리하지 못했습니다. 다시 시도해 주세요.', 'Could not reach the update service or process the file. Try again.'));
         }
+        async function bounded(operation, onTimeout = () => {}) {
+            let timer;
+            try {
+                return await Promise.race([operation, new Promise((_, reject) => {
+                    timer = setTimeout(() => { onTimeout(); reject(new Error('TIMEOUT')); }, options.timeoutMs || 15000);
+                })]);
+            } finally { clearTimeout(timer); }
+        }
         async function json(url) {
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 15000);
-            try {
+            return bounded((async () => {
                 const response = await fetch(url, { signal: controller.signal, cache: 'no-store', headers: { Accept: 'application/json' } });
                 if (!response.ok) throw new Error('HTTP_' + response.status);
                 const body = await response.text();
                 if (body.length > 2 * 1024 * 1024) throw new Error('INVALID_UPDATE');
                 return JSON.parse(body);
-            } finally { clearTimeout(timer); }
+            })(), () => controller.abort());
         }
-        function show() {
-            if (!candidate || options.isDriving() || document.visibilityState === 'hidden') { deferred = true; return; }
+        function show(manual = false) {
+            if (dismissed) return;
+            if (document.visibilityState === 'hidden' || (!manual && options.isDriving())) { deferred = true; return; }
+            if (!candidate && !manual) return;
             deferred = false;
-            if (byId('update-modal-title')) byId('update-modal-title').textContent = text('새 버전 업데이트', 'App update available');
-            if (byId('update-modal-sub')) byId('update-modal-sub').textContent = text('SolarLess Navi 업데이트', 'SolarLess Navi update');
-            if (byId('update-later-btn-text')) byId('update-later-btn-text').textContent = text('나중에 하기', 'Later');
-            byId('update-info-msg').textContent = text(`새 버전 ${candidate.versionName}`, `New version ${candidate.versionName}`);
-            byId('update-release-notes').textContent = String(candidate.releaseNotes || '').slice(0, 4000);
+            manualDisplay = manual;
+            if (byId('update-modal-title')) byId('update-modal-title').textContent = candidate
+                ? text('새 버전이 있습니다', 'An update is available') : text('업데이트 확인', 'Check for updates');
+            if (byId('update-modal-sub')) byId('update-modal-sub').textContent = text('SolarLess Navi 앱 업데이트', 'SolarLess Navi app update');
+            if (byId('update-later-btn-text')) byId('update-later-btn-text').textContent = text('일단 계속 사용', 'Continue for now');
+            byId('update-info-msg').textContent = candidate
+                ? text(`${installedVersion} → ${candidate.versionName}`, `${installedVersion} → ${candidate.versionName}`)
+                : (installedVersion ? text(`현재 버전 ${installedVersion}`, `Installed version ${installedVersion}`) : 'SolarLess Navi');
+            byId('update-release-notes').textContent = String(candidate?.releaseNotes || '').slice(0, 4000);
+            if (modal.classList.contains('hidden')) previousFocus = document.activeElement;
             modal.classList.remove('hidden');
+            refreshActions();
+            byId('btn-close-update-modal').focus({ preventScroll: true });
+        }
+        function close() {
+            dismissed = true; deferred = false; manualDisplay = false;
+            modal.classList.add('hidden');
+            if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
         }
         async function check(manual = false) {
+            if (manual && busy) { dismissed = false; show(true); return; }
             if (busy) return;
-            if (!native) { if (manual) message(text('업데이트 설치는 Android 앱에서 사용할 수 있습니다.', 'Update installation is available in the Android app.')); return; }
-            if (options.isDriving()) { deferred = true; if (manual) failure(new Error('DRIVING')); return; }
-            if (!manual) {
-                try { if (Date.now() - Number(localStorage.getItem('solarless_update_checked_at')) < 6 * 3600000) return; } catch { /* optional cache */ }
+            if (!manual && startupChecked) return;
+            if (!manual && document.visibilityState === 'hidden') { deferred = true; return; }
+            if (!manual) startupChecked = true;
+            dismissed = false;
+            if (manual && phase === 'ready' && candidate) { show(true); return; }
+            if (!native) {
+                if (manual) { setPhase('idle'); message(text('업데이트 설치는 Android 앱에서 사용할 수 있습니다.', 'Update installation is available in the Android app.')); show(true); }
+                return;
             }
+            manualDisplay = manual;
             busy = true; candidate = null; setPhase('checking');
-            byId('btn-check-update').disabled = true;
+            byId('btn-check-update').setAttribute('aria-busy', 'true');
             message(text('업데이트 확인 중…', 'Checking for updates…'));
+            if (manual) show(true);
             try {
-                const installed = await plugin.getInstalledInfo();
+                const installed = await bounded(plugin.getInstalledInfo());
+                installedVersion = installed.versionName;
                 if (byId('about-app-version')) byId('about-app-version').textContent = `${installed.versionName} (${installed.versionCode})`;
                 const releases = [];
                 for (let page = 1; page <= 5; page++) {
@@ -88,12 +131,12 @@
                     const asset = latest.assets.find(item => item.name === 'update.json');
                     const manifest = await json(asset.browser_download_url);
                     const result = utils.validateUpdate(manifest, installed, latest.tag_name);
-                    if (result.available) { candidate = manifest; setPhase('available'); message(text('새 버전을 다운로드할 수 있습니다.', 'A new version is ready to download.')); show(); }
+                    if (result.available) { candidate = manifest; setPhase('available'); message(text('새 버전을 다운로드할 수 있습니다.', 'A new version is ready to download.')); show(manualDisplay); }
                     else { setPhase('idle'); message(text(`최신 버전입니다 (${installed.versionName}).`, `Up to date (${installed.versionName}).`)); }
                 }
-                try { localStorage.setItem('solarless_update_checked_at', String(Date.now())); } catch { /* optional cache */ }
+                if (manualDisplay && !dismissed) show(true);
             } catch (error) { setPhase('error'); failure(error); }
-            finally { busy = false; button.disabled = !candidate; byId('btn-check-update').disabled = false; }
+            finally { busy = false; refreshActions(); byId('btn-check-update').removeAttribute('aria-busy'); }
         }
         async function install() {
             if (options.isDriving()) { failure(new Error('DRIVING')); return; }
@@ -109,7 +152,7 @@
                 if (['DOWNLOAD_REQUIRED', 'HASH_MISMATCH', 'VERSION_MISMATCH', 'SIGNATURE_MISMATCH'].includes(error.message)) setPhase('available');
                 failure(error);
             }
-            finally { busy = false; button.disabled = false; }
+            finally { busy = false; refreshActions(); }
         }
         button.addEventListener('click', async event => {
             event.preventDefault();
@@ -133,17 +176,31 @@
             } catch (error) { setPhase('available'); failure(error); }
             finally {
                 try { if (listener) await listener.remove(); } catch { /* A stale listener must not lock the controls. */ }
-                busy = false; button.disabled = false;
+                busy = false; refreshActions();
             }
         });
         byId('btn-check-update').addEventListener('click', () => check(true));
         byId('btn-cancel-update').addEventListener('click', () => { cancelled = true; plugin.cancelDownload().catch(failure); });
-        byId('btn-close-update-modal').addEventListener('click', () => { deferred = false; modal.classList.add('hidden'); });
+        byId('btn-close-update-modal').addEventListener('click', close);
+        byId('btn-retry-update')?.addEventListener('click', () => check(true));
+        modal.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { event.preventDefault(); close(); }
+            if (event.key === 'Tab') {
+                const controls = [...modal.querySelectorAll('button:not([disabled]):not([hidden])')].filter(el => el.getClientRects().length);
+                if (!controls.length) return;
+                if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1).focus(); }
+                else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0].focus(); }
+            }
+        });
         const timer = setInterval(() => {
-            if (options.isDriving()) { if (!modal.classList.contains('hidden')) { modal.classList.add('hidden'); deferred = true; } return; }
-            if (deferred && !busy && document.visibilityState !== 'hidden') {
+            refreshActions();
+            if (options.isDriving()) {
+                if (!manualDisplay && !modal.classList.contains('hidden')) { modal.classList.add('hidden'); deferred = !dismissed; }
+                return;
+            }
+            if (deferred && !busy && !dismissed && document.visibilityState !== 'hidden') {
                 deferred = false;
-                if (candidate) show(); else check(true);
+                if (candidate) show(); else check(false);
             }
         }, 1000);
         root.addEventListener('pagehide', event => { if (!event.persisted) clearInterval(timer); });

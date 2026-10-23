@@ -76,7 +76,7 @@
             </div>
 
             <!-- Settings Drawer Toggle Button (Sliders Icon) -->
-            <button class="mobile-toggle-btn" id="mobile-toggle-panel" title="주행 설정 및 옵션 열기">
+            <button class="mobile-toggle-btn" id="mobile-toggle-panel" title="주행 설정 및 옵션 열기" aria-label="설정 / Settings" aria-controls="sidebar-panel" aria-expanded="false">
                 <i class="fa-solid fa-sliders"></i>
             </button>
         </header>
@@ -197,13 +197,13 @@
             </div>
 
             <!-- Update Notification Modal Overlay (Z-Index 9500) -->
-            <div class="start-search-overlay hidden" id="update-modal">
+            <div class="start-search-overlay hidden" id="update-modal" role="dialog" aria-modal="true" aria-labelledby="update-modal-title">
                 <div class="start-search-card update-card">
                     <div class="start-card-title">
                         <i class="fa-solid fa-cloud-arrow-down" style="color:#38bdf8; font-size: 24px;"></i>
                         <div>
-                            <h2 id="update-modal-title">🚀 최신 버전 업데이트 안내</h2>
-                            <p id="update-modal-sub">GitHub Release Notification</p>
+                            <h2 id="update-modal-title">업데이트 확인</h2>
+                            <p id="update-modal-sub">SolarLess Navi 앱 업데이트</p>
                         </div>
                     </div>
 
@@ -213,14 +213,16 @@
 
                     <pre id="update-release-notes" style="white-space:pre-wrap;max-height:160px;overflow:auto;font:inherit"></pre>
                     <p id="update-status" role="status" aria-live="polite"></p>
+                    <p id="update-driving-status" class="settings-notice" hidden></p>
                     <progress id="update-progress" max="100" value="0" aria-label="Update download" hidden></progress>
-                    <button type="button" id="btn-cancel-update" hidden>취소 / Cancel download</button>
+                    <button type="button" id="btn-cancel-update" class="nav-btn secondary" hidden>다운로드 취소</button>
+                    <button type="button" id="btn-retry-update" class="nav-btn" hidden>다시 확인</button>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <button type="button" class="confirm-start-btn" id="btn-download-update" style="text-align: center; text-decoration: none; background: linear-gradient(135deg, #0284c7, #2563eb); display: flex; align-items: center; justify-content: center; gap: 8px;">
+                        <button type="button" class="nav-btn primary" id="btn-download-update">
                             <i class="fa-solid fa-download"></i> <span id="update-download-btn-text">지금 업데이트 다운로드</span>
                         </button>
-                        <button type="button" class="about-app-link-btn" id="btn-close-update-modal" style="font-size: 13px; color: #94a3b8; padding: 8px;">
-                            <span id="update-later-btn-text">나중에 하기</span>
+                        <button type="button" class="nav-btn secondary" id="btn-close-update-modal">
+                            <span id="update-later-btn-text">일단 계속 사용</span>
                         </button>
                     </div>
                 </div>
@@ -482,19 +484,32 @@
                         <!-- Real Driving Control & App Info Link at Bottom of Drawer -->
                         <div class="action-buttons-group">
                             <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> GPS 내비 시작</button>
-                            <label><input type="checkbox" id="junction-auto-zoom" checked> 교차로 자동 확대 / Junction auto zoom</label>
-                            <button type="button" id="btn-road-pack" class="nav-btn">현재 지도 주변 도로 저장 (약 3km) / Save local roads</button>
-                            <button type="button" id="btn-road-pack-clear" class="nav-btn">저장 도로 삭제 / Delete road pack</button>
-                            <small id="road-pack-status" role="status"></small>
-                            <small>7일 유효 · 저장 지역에서만 오프라인 재탐색 · 지도 타일 미포함 · © OpenStreetMap contributors (ODbL)</small>
+                            <div class="option-row settings-option">
+                                <div class="option-label-group"><span class="option-title" id="junction-auto-label">교차로 자동 확대</span></div>
+                                <label class="toggle-switch"><input type="checkbox" id="junction-auto-zoom" aria-labelledby="junction-auto-label" checked><span class="slider"></span></label>
+                            </div>
+                            <section class="settings-section" aria-labelledby="app-update-section-title">
+                                <h4 id="app-update-section-title">앱 업데이트</h4>
+                                <button type="button" id="btn-check-update" class="nav-btn"><i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i><span id="check-update-label">업데이트 확인</span></button>
+                                <small id="update-check-status" role="status" aria-live="polite"></small>
+                            </section>
+                            <section class="settings-section" aria-labelledby="offline-section-title">
+                                <h4 id="offline-section-title">오프라인 도로</h4>
+                                <button type="button" id="btn-road-pack" class="nav-btn"><i class="fa-solid fa-download" aria-hidden="true"></i><span id="road-save-label">주변 도로 저장 (약 3km)</span></button>
+                                <button type="button" id="btn-road-pack-clear" class="nav-btn secondary"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span id="road-delete-label">저장 도로 삭제</span></button>
+                                <small id="road-pack-status" role="status"></small>
+                                <small id="road-pack-help">7일 유효 · 저장 지역에서만 재탐색 · 지도 타일 미포함</small>
+                                <small class="settings-attribution">© OpenStreetMap contributors (ODbL)</small>
+                            </section>
                             <small id="traffic-status" role="status"></small>
                             <small id="remaining-solar-status" role="status"></small>
-                            <button type="button" id="btn-drive-record" class="nav-btn">주행 진단 기록 시작 / Record drive</button>
-                            <button type="button" id="btn-drive-clear" class="nav-btn">저장된 진단 삭제 / Delete recordings</button>
-                            <button type="button" id="btn-drive-export" class="nav-btn">진단 기록 저장 / Save recording</button>
-                            <button type="button" id="btn-check-update" class="nav-btn">업데이트 확인 / Check for updates</button>
-                            <small id="update-check-status" role="status" aria-live="polite"></small>
-                            <small>선택 시 위치·시간을 기기에만 기록합니다. / Opt-in location and time recording; no upload.</small>
+                            <section class="settings-section" aria-labelledby="diagnostics-section-title">
+                                <h4 id="diagnostics-section-title">주행 진단</h4>
+                                <button type="button" id="btn-drive-record" class="nav-btn" data-recording="false"><i class="fa-solid fa-circle-dot" aria-hidden="true"></i><span id="drive-record-label">주행 기록 시작</span></button>
+                                <button type="button" id="btn-drive-export" class="nav-btn"><i class="fa-solid fa-file-export" aria-hidden="true"></i><span id="drive-export-label">기록 내보내기</span></button>
+                                <button type="button" id="btn-drive-clear" class="nav-btn secondary"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span id="drive-delete-label">저장 기록 삭제</span></button>
+                                <small id="drive-record-help">선택 시 위치·시간을 기기에만 기록합니다. 외부 업로드는 없습니다.</small>
+                            </section>
                             <div class="about-menu-wrapper" style="margin-top: 8px; display: flex; justify-content: center;">
                                 <button type="button" class="about-app-link-btn" id="btn-about-app" style="font-size: 12px; color: #a78bfa; font-weight: 700;">
                                     ℹ️ 앱 정보 및 개발자 정보

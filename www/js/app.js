@@ -177,21 +177,25 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-road-pack-clear').addEventListener('click', () => RoadPack.clear().catch(() => showApiNotice('삭제 실패 / Delete failed')));
     let lastSolarStaleNotice = 0;
 
-    DriveArchive.init().then(active => { if (active) { driveRecorder.start(); document.getElementById('btn-drive-record').textContent = '기록 중지 / Stop recording'; } }).catch(() => {});
+    DriveArchive.init().then(active => { if (active) { driveRecorder.start(); setDriveRecordLabel(true); } }).catch(() => {});
     document.getElementById('btn-drive-clear').addEventListener('click', async () => {
         try { await DriveArchive.clear(); } catch (e) { showApiNotice('삭제하지 못했습니다 / Could not delete recording'); return; }
         driveRecorder.stop();
-        document.getElementById('btn-drive-record').textContent = '주행 진단 기록 시작 / Record drive';
+        setDriveRecordLabel(false);
     });
-    document.getElementById('btn-drive-record').addEventListener('click', async event => {
+    function setDriveRecordLabel(active) {
+        const button = document.getElementById('btn-drive-record');
+        button.dataset.recording = String(active);
+        document.getElementById('drive-record-label').textContent = I18n.getText(active ? 'recordStop' : 'recordStart');
+    }
+    document.getElementById('btn-drive-record').addEventListener('click', async () => {
         try { await DriveArchive.setActive(!driveRecorder.active); } catch (e) { showApiNotice('기록을 시작하지 못했습니다 / Recording unavailable'); return; }
         if (driveRecorder.active) driveRecorder.stop();
         else {
             driveRecorder.start();
             if (selectedRouteObj) DriveArchive.record('route', { id: selectedRouteObj.id, coordinates: selectedRouteObj.analyzed?.coordinates, maneuvers: selectedRouteObj.maneuvers, distanceMeters: selectedRouteObj.distanceMeters });
         }
-        event.currentTarget.textContent = driveRecorder.active
-            ? '기록 중지 / Stop recording' : '주행 진단 기록 시작 / Record drive';
+        setDriveRecordLabel(driveRecorder.active);
     });
     document.getElementById('btn-drive-export').addEventListener('click', async () => {
         let json;
@@ -358,6 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function offerActiveNavigationSessionRestore() {
         if (isLiveNavActive || currentEnd) return;
+        if (!document.getElementById('update-modal').classList.contains('hidden')) { setTimeout(offerActiveNavigationSessionRestore, 1000); return; }
         let saved = null;
         try { saved = JSON.parse(localStorage.getItem(ACTIVE_NAVIGATION_SESSION_KEY) || 'null'); } catch (e) {}
         const valid = NavigationGuidance.validSession(saved, Date.now(), ACTIVE_NAVIGATION_SESSION_TTL_MS);
@@ -737,7 +742,6 @@ document.addEventListener('DOMContentLoaded', () => {
         applyBatterySaverState();
         if (window.DebugLogger) window.DebugLogger.init();
 
-        setTimeout(checkGitHubLatestVersion, 2500);
         setTimeout(offerActiveNavigationSessionRestore, 700);
     }
 
@@ -2351,6 +2355,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleHardwareBackButton() {
         const isKo = I18n.getLanguage().startsWith('ko');
+        if (!document.getElementById('update-modal').classList.contains('hidden')) {
+            document.getElementById('btn-close-update-modal').click();
+            return;
+        }
 
         if (isLiveNavActive) {
             const confirmExit = confirm(isKo ? "경로 안내를 종료하시겠습니까?" : "Exit route navigation?");
@@ -5498,9 +5506,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const appUpdater = SolarlessUpdater.create({
         language: () => I18n.getLanguage(),
-        isDriving: () => isLiveNavActive || lastNavigationSpeedKmh > 3.5
+        isDriving: () => isLiveNavActive || (lastNavigationSpeedKmh > 3.5 && Date.now() - gpsLastFixAt < 15000)
     });
-    function checkGitHubLatestVersion() { return appUpdater.check(false); }
+    // Check once per fresh app launch, independently of map or GPS readiness.
+    appUpdater.check(false);
 
     initMap();
 });

@@ -3,18 +3,19 @@
     let graph=null,pack=null,db=null,layer=null, drawnGraph=null, lastDownload=0;
     const req=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
     const status=text=>{const el=document.getElementById('road-pack-status');if(el)el.textContent=text;};
-    function show(){status(pack?`OSM 도로 저장됨 · ${new Date(pack.savedAt).toLocaleString()} · 7일 유효 / valid 7 days`:'저장된 도로 없음 / No offline road pack');}
+    const localized=(ko,en)=>root.I18n?.getLanguage().startsWith('ko')?ko:en;
+    function show(){status(pack?localized(`OSM 도로 저장됨 · ${new Date(pack.savedAt).toLocaleString()} · 7일 유효`,`Saved OSM roads · ${new Date(pack.savedAt).toLocaleString()} · valid 7 days`):localized('저장된 도로 없음','No offline road pack'));}
     async function init(){
         const r=indexedDB.open('solarless-road-pack',1);r.onupgradeneeded=()=>r.result.createObjectStore('packs');db=await req(r);
         const saved=await req(db.transaction('packs').objectStore('packs').get('local'));
-        if(saved){try{graph=RoadGraph.build(saved);pack=saved;}catch(e){status('도로 자료 만료 · 다시 저장하세요 / Road pack expired');return;}}show();
+        if(saved){try{graph=RoadGraph.build(saved);pack=saved;}catch(e){status(localized('도로 자료 만료 · 다시 저장하세요','Road pack expired. Save it again.'));return;}}show();
     }
     async function save(center){
         if(!db)throw Error('STORAGE_UNAVAILABLE');
         if(!Number.isFinite(center?.lat)||!Number.isFinite(center?.lng)||Math.abs(center.lat)>75)throw Error('LOCATION_UNAVAILABLE');
         if (Date.now()-lastDownload<60000) throw Error('DOWNLOAD_COOLDOWN');
         lastDownload=Date.now();
-        status('주변 도로 다운로드 중 / Downloading roads…');
+        status(localized('주변 도로 다운로드 중…','Downloading roads…'));
         const lat=.014,lng=.014/Math.cos(center.lat*Math.PI/180),bounds=[center.lat-lat,center.lng-lng,center.lat+lat,center.lng+lng];
         // Ways, their nodes, and all turn restrictions involving those ways. No map tiles are downloaded.
         const query=`[out:json][timeout:25];way[highway](${bounds.join(',')})->.roads;(.roads;rel(bw.roads)[type~"^restriction"];);(._;>;);out body;`;

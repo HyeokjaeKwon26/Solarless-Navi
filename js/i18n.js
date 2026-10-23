@@ -16,6 +16,7 @@ window.I18n = (function () {
 
     const translations = {
         'ko-KR': {
+            recordStart: '주행 기록 시작', recordStop: '기록 중지',
             docTitle: "SolarLess Navi | 햇빛을 피하는 스마트 내비게이션",
             logoTagline: "햇빛을 피하는 스마트 내비게이션",
             shadedRestBtn: "그늘 쉼터",
@@ -162,6 +163,7 @@ window.I18n = (function () {
             pipSupported: "이 Android 기기에서 PiP를 지원합니다."
         },
         'en-US': {
+            recordStart: 'Record drive', recordStop: 'Stop recording',
             docTitle: "SolarLess Navi | Smart Solar-Glare Avoidance Navigation",
             logoTagline: "Mobile Sun & Glare-Aware Navigation",
             shadedRestBtn: "Shaded Rest",
@@ -347,6 +349,23 @@ window.I18n = (function () {
             if (el && title !== undefined) el.title = title;
         };
 
+        const settingsText = currentLang.startsWith('ko') ? {
+            'junction-auto-label': '교차로 자동 확대', 'app-update-section-title': '앱 업데이트', 'check-update-label': '업데이트 확인',
+            'offline-section-title': '오프라인 도로', 'road-save-label': '주변 도로 저장 (약 3km)', 'road-delete-label': '저장 도로 삭제',
+            'road-pack-help': '7일 유효 · 저장 지역에서만 재탐색 · 지도 타일 미포함',
+            'diagnostics-section-title': '주행 진단', 'drive-export-label': '기록 내보내기', 'drive-delete-label': '저장 기록 삭제',
+            'drive-record-help': '선택 시 위치·시간을 기기에만 기록합니다. 외부 업로드는 없습니다.', 'btn-cancel-update': '다운로드 취소'
+        } : {
+            'junction-auto-label': 'Junction auto zoom', 'app-update-section-title': 'App update', 'check-update-label': 'Check for updates',
+            'offline-section-title': 'Offline roads', 'road-save-label': 'Save nearby roads (about 3 km)', 'road-delete-label': 'Delete road pack',
+            'road-pack-help': 'Valid for 7 days. Rerouting within saved roads only; map tiles are not included.',
+            'diagnostics-section-title': 'Drive diagnostics', 'drive-export-label': 'Export recording', 'drive-delete-label': 'Delete recordings',
+            'drive-record-help': 'Opt-in location and time recording on this device. No upload.', 'btn-cancel-update': 'Cancel download'
+        };
+        Object.entries(settingsText).forEach(([id, value]) => setElemText(id, value));
+        setElemText('drive-record-label', getText(document.getElementById('btn-drive-record')?.dataset.recording === 'true' ? 'recordStop' : 'recordStart'));
+        const settingsButton = document.getElementById('mobile-toggle-panel');
+        if (settingsButton) settingsButton.setAttribute('aria-label', currentLang.startsWith('ko') ? '설정' : 'Settings');
         // Title Attributes
         setElemTitle('btn-header-home', dict.titleHome);
         setElemTitle('btn-find-shaded-rest', dict.titleShadedRest);
@@ -468,10 +487,7 @@ window.I18n = (function () {
             bannerDist.innerText = dict.bannerDistPlaceholder;
         }
 
-        setElemText('update-modal-title', dict.updateTitle);
-        setElemText('update-info-msg', dict.updateMsg);
-        setElemText('update-download-btn-text', dict.updateDownloadBtn);
-        setElemText('update-later-btn-text', dict.updateLaterBtn);
+        // The updater owns these labels and the live version/result state.
 
         setElemText('arrival-modal-title', dict.arrivalTitle);
         setElemText('arrival-modal-sub', dict.arrivalSub);

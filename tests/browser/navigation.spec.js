@@ -1,6 +1,75 @@
 const { test, expect } = require('@playwright/test');
 const { version: mapVersion } = require('maplibre-gl/package.json');
 
+test('fresh start opens settings without free drive on narrow phones and actions share styling', async ({ page }) => {
+    const state = await fixtures(page, {brokenMap:true});
+    await page.goto('./');
+    for (const width of [320,360,384,412]) {
+        await page.setViewportSize({width,height:820});
+        await page.locator('#btn-header-home').click();
+        await expect(page.locator('#start-search-modal')).not.toHaveClass(/hidden/);
+        const settings = page.locator('#mobile-toggle-panel');
+        const rect = await settings.boundingBox();
+        expect(rect.x).toBeGreaterThanOrEqual(0);
+        expect(rect.x+rect.width).toBeLessThanOrEqual(width);
+        expect(rect.width).toBeGreaterThanOrEqual(44);
+        await settings.click();
+        await expect(page.locator('#start-search-modal')).toHaveClass(/hidden/);
+        await expect(page.locator('#sidebar-panel')).toHaveClass(/active/);
+        await expect(page.locator('#live-gps-nav-btn')).not.toHaveClass(/active/);
+        for (const id of ['btn-check-update','btn-road-pack','btn-road-pack-clear','btn-drive-record','btn-drive-clear','btn-drive-export']) {
+            const button=page.locator('#'+id);
+            await button.scrollIntoViewIfNeeded();
+            const style=await button.evaluate(el=>({height:el.getBoundingClientRect().height,radius:getComputedStyle(el).borderRadius,bg:getComputedStyle(el).backgroundColor,text:el.textContent}));
+            expect(style.height).toBeGreaterThanOrEqual(44);
+            expect(style.radius).toBe('10px');
+            expect(style.bg).not.toBe('rgb(239, 239, 239)');
+            expect(style.text).not.toMatch(/[가-힣]/);
+        }
+    }
+    await page.locator('#btn-check-update').scrollIntoViewIfNeeded();
+    await page.screenshot({path:test.info().outputPath('settings-actions.png')});
+    await page.locator('#btn-check-update').click();
+    await expect(page.locator('#update-modal')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#update-status')).toContainText('Android app');
+    expect(state.routes).toEqual([]);
+    expect(state.errors).toEqual([]);
+});
+
+test('real app launch offers update before free drive and Continue returns to destination entry', async ({ page }) => {
+    const state = await fixtures(page, {brokenMap:true});
+    const config = require('../../app-release.json');
+    const prefix='https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v9.0.0/';
+    await page.addInitScript(config=>{
+        localStorage.setItem('solarless_update_checked_at',String(Date.now()));
+        window.updateCalls={info:0,download:0,install:0};
+        window.Capacitor={isNativePlatform:()=>true,Plugins:{App:{addListener:async(name,callback)=>{if(name==='backButton')window.androidBack=callback;return {remove:async()=>{}};}},AppUpdate:{
+            getInstalledInfo:async()=>{window.updateCalls.info++;return {...config,sdkInt:34};},
+            downloadUpdate:async()=>{window.updateCalls.download++;return {verified:true};},
+            installUpdate:async()=>{window.updateCalls.install++;return {installerOpened:true};}
+        }}};
+    },config);
+    await page.route('https://api.github.com/repos/**',route=>route.fulfill({json:[{tag_name:'app-v9.0.0',assets:[{name:'update.json',browser_download_url:prefix+'update.json'}]}]}));
+    await page.route(prefix+'update.json',route=>route.fulfill({json:{...config,versionName:'9.0.0',versionCode:900,schemaVersion:1,sizeBytes:400,sha256:'a'.repeat(64),apkUrl:prefix+'SolarLessNavi-9.0.0.apk',releaseNotes:'Address search and settings improvements.'}}));
+    await page.goto('./');
+    await expect(page.locator('#update-modal')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#update-info-msg')).toContainText('9.0.0');
+    await expect(page.locator('#btn-close-update-modal')).toContainText('Continue for now');
+    await expect(page.locator('#update-modal')).toHaveCSS('opacity','1');
+    await page.screenshot({path:test.info().outputPath('launch-update.png')});
+    await page.locator('#btn-close-update-modal').click();
+    await expect(page.locator('#start-search-modal')).not.toHaveClass(/hidden/);
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-check-update').click();
+    await expect(page.locator('#update-modal')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#update-info-msg')).toContainText('9.0.0');
+    expect(await page.evaluate(()=>window.updateCalls)).toEqual({info:2,download:0,install:0});
+    await page.evaluate(()=>window.androidBack());
+    await expect(page.locator('#update-modal')).toHaveClass(/hidden/);
+    expect(state.routes).toEqual([]);
+    expect(state.errors).toEqual([]);
+});
+
 const places = {
     Alpha: [-71.065, 42.37],
     Bravo: [-71.06, 42.375],
