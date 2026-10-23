@@ -20,6 +20,10 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.ActivityCallback;
+import androidx.activity.result.ActivityResult;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 
 /** Small, optional PiP bridge. It never requests overlay/background location permission. */
 @CapacitorPlugin(name = "Pip")
@@ -28,6 +32,40 @@ public class PipPlugin extends Plugin {
     private static boolean navigationActive;
     private static boolean autoEnter = true;
     private BroadcastReceiver locationReceiver;
+
+    @PluginMethod
+    public void saveDriveRecording(PluginCall call) {
+        String json = call.getString("json");
+        if (json == null || json.length() > 12 * 1024 * 1024) {
+            call.reject("Recording is missing or too large");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_TITLE, "solarless-drive-" + System.currentTimeMillis() + ".json");
+        startActivityForResult(call, intent, "driveRecordingSaved");
+    }
+
+    @ActivityCallback
+    private void driveRecordingSaved(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            JSObject response = new JSObject();
+            response.put("saved", false);
+            call.resolve(response);
+            return;
+        }
+        try (OutputStream stream = getContext().getContentResolver().openOutputStream(result.getData().getData(), "wt")) {
+            if (stream == null) throw new java.io.IOException("No output stream");
+            stream.write(call.getString("json", "{}").getBytes(StandardCharsets.UTF_8));
+            JSObject response = new JSObject();
+            response.put("saved", true);
+            call.resolve(response);
+        } catch (Exception error) {
+            call.reject("Unable to save drive recording", error);
+        }
+    }
 
     @Override
     public void load() {

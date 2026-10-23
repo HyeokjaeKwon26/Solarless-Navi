@@ -319,8 +319,11 @@
         const lng = Number(candidate && candidate.lng);
         const timestamp = Number(candidate && candidate.timestamp);
         const accuracy = Number(candidate && candidate.accuracy);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(timestamp)) {
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || !Number.isFinite(timestamp)) {
             return { accepted: false, reason: 'INVALID_FIX' };
+        }
+        if (Number.isFinite(config.nowMs) && (config.nowMs - timestamp > 10000 || timestamp - config.nowMs > 2000)) {
+            return { accepted: false, reason: 'STALE_FIX' };
         }
 
         // A coarse indoor/network fix is useful for showing an uncertainty
@@ -476,7 +479,50 @@
         };
     }
 
+    // Use elapsed evidence, not GPS frequency: native GPS can send four fixes
+    // per second. Accuracy is subtracted before testing road separation.
+    function evaluateOffRoute(state = {}, sample = {}) {
+        const now = Number(sample.timestamp);
+        const distance = Number(sample.distanceMeters);
+        const accuracy = Number(sample.accuracy);
+        const reliable = [now, distance, accuracy].every(Number.isFinite) && accuracy > 0 && accuracy <= 50;
+        const outside = reliable && distance - accuracy > 45;
+        const continuous = outside && state.count > 0 && Number.isFinite(state.since) &&
+            Number.isFinite(state.lastAt) && now > state.lastAt && now - state.lastAt <= 5000;
+        const since = outside ? (continuous ? state.since : now) : null;
+        const count = outside ? (continuous ? state.count + 1 : 1) : 0;
+        const confirmed = outside && count >= 3 && now - since >= 2000;
+        const lastAttempt = Number.isFinite(state.lastAttempt) ? state.lastAttempt : -Infinity;
+        const shouldReroute = confirmed && sample.online !== false && !sample.pending && now - lastAttempt >= 8000;
+        return { since, count, lastAt: now, lastAttempt: shouldReroute ? now : lastAttempt,
+            confirmed, shouldReroute };
+    }
+
+    function canConfirmArrival(distanceMeters, remainingMeters, accuracy, speedKmh) {
+        // Passing the destination on a nearby/parallel road must not finish a trip.
+        return [distanceMeters, remainingMeters, accuracy, speedKmh].every(Number.isFinite) &&
+            accuracy > 0 && accuracy <= 25 && distanceMeters <= 35 && remainingMeters <= 65 && speedKmh < 20;
+    }
+
+    function maneuverLaneGuidance(step) {
+        // Only the intersection AT this maneuver describes its approach lanes.
+        // Later intersections in the step must not be attributed to this turn.
+        const first = step && Array.isArray(step.intersections) && step.intersections[0];
+        const location = step && step.maneuver && step.maneuver.location;
+        if (!first || !Array.isArray(location) || !Array.isArray(first.location) ||
+            ![location[0], location[1], first.location[0], first.location[1]].every(Number.isFinite) ||
+            Math.abs(first.location[0] - location[0]) > 0.0001 ||
+            Math.abs(first.location[1] - location[1]) > 0.0001 || !Array.isArray(first.lanes)) return null;
+        const lanes = first.lanes;
+        if (lanes.length < 2 || lanes.length > 12 || lanes.some(lane => typeof lane.valid !== 'boolean')) return null;
+        const valid = lanes.flatMap((lane, index) => lane.valid ? [index + 1] : []);
+        return valid.length && valid.length < lanes.length ? { total: lanes.length, valid } : null;
+    }
+
     return {
+        evaluateOffRoute,
+        canConfirmArrival,
+        maneuverLaneGuidance,
         createRouteRequestKey,
         isRouteRequestKeyCurrent,
         inverseRotateScreenDelta,

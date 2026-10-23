@@ -81,8 +81,13 @@ async function fixtures(page, { brokenMap = false, holdBravo = false } = {}) {
             await json({ code: 'Ok', waypoints: [{ location: start }, { location: end }], routes: [{
                 distance: 2400, duration: 300, geometry,
                 legs: [{ distance: 2400, duration: 300, steps: [
-                    { name: 'Fixture Road', distance: 2400, duration: 300, mode: 'driving', geometry,
+                    { name: 'Fixture Road', distance: 600, duration: 75, mode: 'driving',
+                        geometry: { type: 'LineString', coordinates: coordinates.slice(0, 11) },
                         maneuver: { type: 'depart', location: start, bearing_after: 45 }, intersections: [] },
+                    { name: 'Fixture Road', distance: 1800, duration: 225, mode: 'driving',
+                        geometry: { type: 'LineString', coordinates: coordinates.slice(10) },
+                        maneuver: { type: 'turn', modifier: 'slight right', location: coordinates[10], bearing_after: 45 },
+                        intersections: [{ location: coordinates[10], lanes: [{ valid: false }, { valid: true }, { valid: true }] }] },
                     { name: 'Fixture Road', distance: 0, duration: 0, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: [end, end] },
                         maneuver: { type: 'arrive', location: end, bearing_before: 45 }, intersections: [] }
@@ -108,6 +113,15 @@ async function changeDestination(page, name) {
     await page.locator('#mobile-toggle-panel').click();
     await page.locator('#btn-open-search-modal').click();
     await selectDestination(page, name);
+}
+
+async function establishReliableGuidance(page) {
+    // A route origin older than two seconds correctly starts provisionally.
+    // Supply live fixes until its forward replacement and first turn are ready.
+    await expect.poll(async () => {
+        await page.evaluate(() => window.testGps.emit({ latitude: 42.36005, accuracy: 5 }));
+        return page.locator('#banner-lanes').textContent();
+    }, { timeout: 15000, intervals: [500] }).toContain('Use lane 2, 3 from left');
 }
 
 test('MapLibre renders a GeoJSON source using the shipped local module worker', async ({ page, baseURL }) => {
@@ -185,4 +199,78 @@ test('a delayed destination response cannot replace newer live guidance', async 
     await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);
     expect(state.errors).toEqual([]);
     await expect(page.locator('#route-summary-box')).toHaveAttribute('aria-busy', 'false');
+});
+
+test('uncertain GPS preserves guidance and local recording exports the sample', async ({ page }) => {
+    const state = await fixtures(page);
+    await page.goto('./');
+    await selectDestination(page, 'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-map-start-nav').click();
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-drive-record').click();
+    await page.waitForTimeout(300);
+    const before = state.routes.length;
+    await page.evaluate(() => window.testGps.emit({ latitude: 42.365, longitude: -71.06, accuracy: 180 }));
+    await expect(page.locator('#api-status-banner')).toContainText('GPS accuracy');
+    expect(state.routes.length).toBe(before);
+    await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#btn-drive-export').click();
+    const download = await downloadPromise;
+    const fs = require('node:fs');
+    const recording = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
+    expect(recording.samples.some(sample => sample.accuracy === 180)).toBe(true);
+    expect(recording.type).toBe('solarless-drive-quality');
+    expect(state.errors).toEqual([]);
+});
+
+test('offline deviation pauses old turns and reconnect reroutes from the current position', async ({ page }) => {
+    const state = await fixtures(page);
+    await page.goto('./');
+    await selectDestination(page, 'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-map-start-nav').click();
+    await establishReliableGuidance(page);
+    // Let optional analysis complete before measuring route requests.
+    await expect(page.locator('#route-summary-box')).toHaveAttribute('aria-busy', 'false');
+    await page.evaluate(() => {
+        Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+        window.dispatchEvent(new Event('offline'));
+    });
+    await page.waitForTimeout(2400);
+    const before = state.routes.length;
+    for (let i = 0; i < 3; i++) {
+        await page.evaluate(index => window.testGps.emit({ latitude: 42.36 + index * 0.00005,
+            longitude: -71.0686, accuracy: 5, speed: 12 }), i);
+        await page.waitForTimeout(1100);
+    }
+    await expect(page.locator('#guidance-health')).toContainText('Offline');
+    await expect(page.locator('#banner-desc')).toContainText('turn guidance paused');
+    expect(state.routes.length).toBe(before);
+    await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);
+    await page.evaluate(() => {
+        Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
+        window.dispatchEvent(new Event('online'));
+    });
+    await expect.poll(() => state.routes.length).toBeGreaterThan(before);
+    await expect(page.locator('#bar-dest-text')).toContainText('Alpha');
+    expect(state.errors).toEqual([]);
+});
+
+test('lane guidance renders and GPS silence is reported until a reliable fix returns', async ({ page }) => {
+    const state = await fixtures(page);
+    await page.goto('./');
+    await selectDestination(page, 'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-map-start-nav').click();
+    await establishReliableGuidance(page);
+    await expect(page.locator('#banner-lanes')).toContainText('Use lane 2, 3 from left');
+    await expect(page.locator('#banner-lanes')).toBeVisible();
+    await expect(page.locator('#guidance-health')).toBeHidden();
+    await page.screenshot({ path: `.codex-remote-attachments/lanes-${test.info().project.name}.png` });
+    await expect(page.locator('#guidance-health')).toContainText('Waiting for GPS', { timeout: 13000 });
+    await page.evaluate(() => window.testGps.emit({ latitude: 42.3601 }));
+    await expect(page.locator('#guidance-health')).toBeHidden();
+    expect(state.errors).toEqual([]);
 });

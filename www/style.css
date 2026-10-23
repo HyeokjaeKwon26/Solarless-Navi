@@ -1219,3 +1219,13 @@ body.battery-saver-active .route-summary-floating {
 }
 .arrival-stat-box .val.highlight { color: #38bdf8; }
 .arrival-stat-box .val.comfort { color: #34d399; }
+#guidance-health {
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: #3b2c08;
+    color: #fff3c4;
+    font-size: 13px;
+    line-height: 1.4;
+}
+#guidance-health[hidden], #banner-lanes[hidden] { display: none; }
+#banner-lanes { font-size: 12px; color: #b8f2cd; line-height: 1.4; }

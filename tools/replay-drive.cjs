@@ -1,0 +1,16 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { replay } = require('../js/drive-quality.js');
+const input = process.argv[2];
+if (!input) throw new Error('Usage: npm run replay:drive -- drive.json [report.json]');
+const recording = JSON.parse(fs.readFileSync(input, 'utf8'));
+if (recording.version !== 1 || !Array.isArray(recording.samples)) throw new Error('Unsupported drive recording');
+const sandbox = { window: {}, console, Math, Date, setTimeout, clearTimeout };
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/shadow-router.js'), 'utf8'), sandbox);
+const report = replay(recording.samples, sandbox.window.ShadowRouter.calculateDistanceMeters);
+report.dropped = recording.dropped || 0;
+const json = JSON.stringify(report, null, 2) + '\n';
+if (process.argv[3]) fs.writeFileSync(process.argv[3], json);
+else process.stdout.write(json);

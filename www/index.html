@@ -476,6 +476,9 @@
                         <!-- Real Driving Control & App Info Link at Bottom of Drawer -->
                         <div class="action-buttons-group">
                             <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> GPS 내비 시작</button>
+                            <button type="button" id="btn-drive-record" class="nav-btn">주행 진단 기록 시작 / Record drive</button>
+                            <button type="button" id="btn-drive-export" class="nav-btn">진단 기록 저장 / Save recording</button>
+                            <small>선택 시 위치·시간을 기기에만 기록합니다. / Opt-in location and time recording; no upload.</small>
                             <div class="about-menu-wrapper" style="margin-top: 8px; display: flex; justify-content: center;">
                                 <button type="button" class="about-app-link-btn" id="btn-about-app" style="font-size: 12px; color: #a78bfa; font-weight: 700;">
                                     ℹ️ 앱 정보 및 개발자 정보
@@ -506,6 +509,7 @@
                     <div class="banner-info">
                         <div class="turn-dist" id="banner-dist">--m 앞</div>
                         <div class="turn-desc" id="banner-desc"></div>
+                        <div id="banner-lanes" hidden></div>
                     </div>
                 </div>
 
@@ -655,6 +659,7 @@
     <script src="js/suncalc.js"></script>
     <script src="js/i18n.js"></script>
     <script src="js/route-state.js"></script>
+    <script src="js/drive-quality.js"></script>
     <script src="js/fflate.js"></script>
     <script src="js/scene-shadow.js"></script>
     <script src="js/debug-logger.js"></script>

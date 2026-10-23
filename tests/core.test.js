@@ -42,6 +42,38 @@ const Geocoder = sandbox.Geocoder;
 const VersionUtils = sandbox.SolarlessVersionUtils;
 const SolarPhysics = sandbox.SolarPhysics;
 
+test('via candidates follow a bent road corridor instead of crossing its OD chord', () => {
+    const route = { geometry: { coordinates: [[-71, 42], [-71, 42.03], [-70.96, 42.03]] } };
+    const points = ShadowRouter.buildExplorationViaPoints(route);
+    assert.equal(points.length, 2);
+    for (const point of points) {
+        assert.ok(ShadowRouter.distanceToRoute(point.lat, point.lng, route.geometry.coordinates) < 1250);
+        assert.ok(point.lat > 42.02);
+    }
+    assert.equal(ShadowRouter.buildExplorationViaPoints({ geometry: { coordinates: [[0, 0], [0, 0]] } }).length, 0);
+});
+
+test('road rules match either direction of a two-way road and ignore unrelated or behind signs', async () => {
+    const oldFetch = sandbox.fetch;
+    sandbox.fetch = async () => ({ ok: true, json: async () => ({ elements: [
+        { type: 'way', id: 1, nodes: [11, 12], tags: { highway: 'primary', maxspeed: '35 mph', name: 'Main' },
+            geometry: [{ lat: 42.001, lon: -71 }, { lat: 41.999, lon: -71 }] },
+        { type: 'way', id: 2, tags: { highway: 'primary', maxspeed: '60 mph' },
+            geometry: [{ lat: 41.999, lon: -71.0002 }, { lat: 42.001, lon: -71.0002 }] },
+        { type: 'node', id: 99, lat: 42.0001, lon: -71, tags: { highway: 'stop' } },
+        { type: 'node', id: 11, lat: 41.9999, lon: -71, tags: { barrier: 'toll_booth' } }
+    ] }) });
+    try {
+        const result = await Geocoder.fetchCurrentRoadSpeedLimitAndRules(42, -71, {
+            countryCode: 'us', roadContext: { heading: 0 }
+        });
+        assert.equal(result.roadName, 'Main');
+        assert.equal(result.rawSpeedLimit, 35);
+        assert.equal(result.isStopSignAhead, false);
+        assert.equal(result.isTollBoothAhead, false);
+    } finally { sandbox.fetch = oldFetch; }
+});
+
 function runSolarWorkerMessage(data, importAvailable = true) {
     const messages = [];
     const workerSandbox = {
@@ -2242,6 +2274,22 @@ test('toll-free routing adds exclusion to direct and via-point OSRM requests', a
     }
     assert.equal(requestedUrls.length, 3);
     assert.ok(requestedUrls.every(url => url.includes('exclude=toll')));
+});
+
+test('explicit zero via budget does not send exploratory requests', async () => {
+    const originalFetch = sandbox.fetch;
+    const requestedUrls = [];
+    sandbox.window.SceneShadow = null;
+    sandbox.fetch = async url => {
+        requestedUrls.push(String(url));
+        return { ok: true, json: async () => ({ routes: [{ distance: 1000, duration: 100,
+            geometry: { coordinates: [[0, 0], [0.01, 0]] }, legs: [{ steps: [] }] }] }) };
+    };
+    try {
+        await ShadowRouter.fetchAndAnalyzeRoutes({ lat: 0, lng: 0 }, { lat: 0, lng: 0.01 },
+            new Date(0), false, { viaRequestBudget: 0, preferredRouteRole: 'shade' });
+        assert.equal(requestedUrls.length, 1);
+    } finally { sandbox.fetch = originalFetch; sandbox.window.SceneShadow = SceneShadow; }
 });
 
 test('continental-scale coordinates are valid inputs and are not rejected by distance alone', () => {

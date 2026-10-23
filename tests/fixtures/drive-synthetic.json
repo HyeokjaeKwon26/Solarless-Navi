@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "type": "solarless-drive-quality",
+  "synthetic": true,
+  "dropped": 0,
+  "samples": [
+    {"lat":42,"lng":-71,"timestamp":1000,"receivedAt":1000,"accuracy":5,"reportedSpeedKmh":30,"distanceMeters":5,"online":true},
+    {"lat":42.0001,"lng":-71,"timestamp":2000,"receivedAt":2000,"accuracy":5,"reportedSpeedKmh":30,"distanceMeters":8,"online":true},
+    {"lat":42.001,"lng":-71,"timestamp":3000,"receivedAt":3000,"accuracy":180,"reportedSpeedKmh":30,"distanceMeters":110,"online":true},
+    {"lat":42.0002,"lng":-71,"timestamp":4000,"receivedAt":4000,"accuracy":5,"reportedSpeedKmh":30,"distanceMeters":90,"online":false},
+    {"lat":42.0003,"lng":-71,"timestamp":5000,"receivedAt":5000,"accuracy":5,"reportedSpeedKmh":30,"distanceMeters":90,"online":false},
+    {"lat":42.0004,"lng":-71,"timestamp":6000,"receivedAt":6000,"accuracy":5,"reportedSpeedKmh":30,"distanceMeters":90,"online":false},
+    {"lat":42.0005,"lng":-71,"timestamp":7000,"receivedAt":7000,"accuracy":5,"reportedSpeedKmh":30,"distanceMeters":90,"online":true,"expectedOffRoute":true},
+    {"lat":42.0005,"lng":-71,"timestamp":8000,"receivedAt":30000,"accuracy":5,"reportedSpeedKmh":30,"distanceMeters":90,"online":true}
+  ]
+}

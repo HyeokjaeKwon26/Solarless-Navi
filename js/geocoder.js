@@ -416,15 +416,19 @@ window.Geocoder = (function () {
                 const wayCandidates = data.elements.filter(elem => elem.type === 'way' && elem.tags &&
                     (elem.tags.highway || elem.tags.maxspeed) && Array.isArray(elem.geometry) && elem.geometry.length >= 2);
                 const roadContext = options.roadContext || {};
-                const targetBearing = Number.isFinite(Number(roadContext.heading)) ? Number(roadContext.heading) : null;
+                const targetBearing = roadContext.heading !== null && roadContext.heading !== undefined &&
+                    Number.isFinite(Number(roadContext.heading)) ? Number(roadContext.heading) : null;
                 const targetName = String(roadContext.name || roadContext.ref || '').trim().toLowerCase();
                 const matchedWay = wayCandidates
                     .map(elem => {
                         const distance = distanceToWayMeters(lat, lng, elem);
                         const candidateBearing = wayBearing(elem);
-                        const bearingPenalty = targetBearing !== null && candidateBearing !== null
-                            ? bearingDifference(candidateBearing, targetBearing) * 2
-                            : 0;
+                        const difference = targetBearing !== null && candidateBearing !== null
+                            ? bearingDifference(candidateBearing, targetBearing) : 0;
+                        const bearingPenalty = targetBearing === null || candidateBearing === null ? 0
+                            : elem.tags.oneway === 'yes' ? difference * 2
+                            : elem.tags.oneway === '-1' ? (180 - difference) * 2
+                            : Math.min(difference, 180 - difference) * 2;
                         const tags = elem.tags || {};
                         const candidateName = String(tags.name || tags.ref || '').trim().toLowerCase();
                         const nameBonus = targetName && candidateName && (targetName === candidateName || targetName.includes(candidateName) || candidateName.includes(targetName)) ? 80 : 0;
@@ -432,10 +436,14 @@ window.Geocoder = (function () {
                     })
                     .sort((a, b) => a.score - b.score)[0]?.elem || null;
 
-                // Point signs and toll booths are independent of the current
-                // way, but road properties must come from the nearest geometry.
+                // Suppress nearby side-road/behind signs. Missing way membership
+                // is unknown, not evidence that the sign applies to this car.
                 for (const elem of data.elements) {
                     const tags = elem.tags || {};
+                    if (!matchedWay || !Array.isArray(matchedWay.nodes) || !matchedWay.nodes.includes(elem.id) ||
+                        !Number.isFinite(elem.lat) || !Number.isFinite(elem.lon) || targetBearing === null) continue;
+                    const signBearing = wayBearing({ geometry: [{ lat, lon: lng }, { lat: elem.lat, lon: elem.lon }] });
+                    if (bearingDifference(signBearing, targetBearing) > 60) continue;
                     if (tags.highway === 'stop') isStopSignAhead = true;
                     if (tags.barrier === 'toll_booth' || tags.highway === 'toll_booth') isTollBoothAhead = true;
                 }

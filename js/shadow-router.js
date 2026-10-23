@@ -853,6 +853,8 @@ window.ShadowRouter = (function () {
         // own snapped waypoint rather than the original POI coordinate.
         const useRoadEntrance = hasTrailingUnnamedAccess && namedEndpoint && distanceToSnapped <= 300;
         route.roadDestination = useRoadEntrance ? namedEndpoint : (snapped || namedEndpoint || getRouteEndpoint(route));
+        route.arrivalAccess = { kind: useRoadEntrance ? 'inferred-road-access' : 'router-waypoint',
+            accessTailMeters: useRoadEntrance ? Math.round(distanceToSnapped) : 0 };
         if (useRoadEntrance) {
             const namedStep = drivingSteps[namedIndex];
             trimRouteToRoadDestination(route, finalLeg, steps.indexOf(namedStep), namedEndpoint);
@@ -1566,7 +1568,8 @@ window.ShadowRouter = (function () {
                             type: step.maneuver.type, modifier: step.maneuver.modifier || '',
                             location: step.maneuver.location, bearingBefore: step.maneuver.bearing_before,
                             bearingAfter: step.maneuver.bearing_after, name: step.name || '', ref: step.ref || '',
-                            distance: step.distance, duration: step.duration, cumulativeDistance: cumulativeStepDist
+                            distance: step.distance, duration: step.duration, cumulativeDistance: cumulativeStepDist,
+                            lanes: window.RouteState ? window.RouteState.maneuverLaneGuidance(step) : null
                         });
                     }
                     cumulativeStepDist += Number(step.distance) || 0;
@@ -1577,7 +1580,7 @@ window.ShadowRouter = (function () {
         return {
             id: createRouteIdentity(rawRoute, idx), candidateIndex: idx, raw: rawRoute,
             distanceMeters: Number(rawRoute.distance) || 0, durationSec: liveDuration,
-            baseDurationSec: baseDuration, analyzed, maneuvers, routeSteps,
+            baseDurationSec: baseDuration, analyzed, maneuvers, routeSteps, arrivalAccess: rawRoute.arrivalAccess,
             analysisMode: 'heuristic', sceneCoverage: analyzed.sceneCoverage, sceneSource: analyzed.sceneSource
         };
     }
@@ -1604,6 +1607,31 @@ window.ShadowRouter = (function () {
             routeCandidates: analyzedRoutes.map(route => route.raw),
             routes: { fastest, glareFree, shade, all: analyzedRoutes }
         };
+    }
+
+    function buildExplorationViaPoints(rawRoute) {
+        // Stay near the actual road corridor rather than the straight OD chord.
+        const coordinates = rawRoute && rawRoute.geometry && rawRoute.geometry.coordinates;
+        if (!Array.isArray(coordinates) || coordinates.length < 2) return [];
+        const lengths = coordinates.slice(1).map((point, i) =>
+            calculateDistanceMeters(coordinates[i][1], coordinates[i][0], point[1], point[0]));
+        const total = lengths.reduce((a, b) => a + b, 0);
+        if (!Number.isFinite(total) || total < 100) return [];
+        let walked = 0;
+        let i = 0;
+        while (i < lengths.length - 1 && walked + lengths[i] < total / 2) walked += lengths[i++];
+        const t = lengths[i] ? (total / 2 - walked) / lengths[i] : 0;
+        const a = coordinates[i], b = coordinates[i + 1];
+        const lat = a[1] + (b[1] - a[1]) * t;
+        const lng = a[0] + (b[0] - a[0]) * t;
+        const cosLat = Math.max(0.01, Math.cos(lat * Math.PI / 180));
+        const dx = (b[0] - a[0]) * cosLat, dy = b[1] - a[1];
+        const norm = Math.hypot(dx, dy);
+        if (!norm) return [];
+        const offset = Math.min(1200, Math.max(120, total * 0.12)) / 111320;
+        return [-1, 1].map(sign => ({ lat: lat + sign * dx / norm * offset,
+            lng: lng - sign * dy / norm * offset / cosLat })).filter(point =>
+                Math.abs(point.lat) <= 90 && Math.abs(point.lng) <= 180);
     }
 
     async function fetchAndAnalyzeRoutes(start, end, dateObj, isTollFreeOnly = false, options = {}) {
@@ -1658,24 +1686,13 @@ window.ShadowRouter = (function () {
             // Generate lateral via-points only after direct results are
             // available. These are optional enrichment, not a prerequisite
             // for displaying or starting the verified direct route.
-            const midLat = (start.lat + end.lat) / 2;
-            const midLng = (start.lng + end.lng) / 2;
-            const dLat = end.lat - start.lat;
-            const dLng = end.lng - start.lng;
-            const cosLat = Math.cos(midLat * Math.PI / 180);
-            const perpLat = -dLng / (cosLat || 1);
-            const perpLng = dLat * (cosLat || 1);
-            const norm = Math.sqrt(perpLat * perpLat + perpLng * perpLng) || 1;
-            const distDeg = Math.sqrt(dLat * dLat + dLng * dLng);
-            const offsetScale = Math.min(0.015, Math.max(0.0015, distDeg * 0.18));
-            const offsets = [
-                { lat: midLat + (perpLat / norm) * offsetScale, lng: midLng + (perpLng / norm) * offsetScale },
-                { lat: midLat - (perpLat / norm) * offsetScale, lng: midLng - (perpLng / norm) * offsetScale },
-                { lat: midLat + (perpLat / norm) * offsetScale * 1.8, lng: midLng + (perpLng / norm) * offsetScale * 1.8 },
-                { lat: midLat - (perpLat / norm) * offsetScale * 1.8, lng: midLng - (perpLng / norm) * offsetScale * 1.8 }
-            ];
+            const fastestRaw = rawCandidates.slice().sort((a, b) => a.duration - b.duration)[0];
+            const offsets = buildExplorationViaPoints(fastestRaw);
             const directDistinct = rawCandidates.filter((route, index) => rawCandidates.slice(0, index).every(previous => !areRoutesGeometricallySimilar(previous, route))).length;
-            const viaBudget = directDistinct >= 3 ? 0 : Math.min(2, Math.max(0, Number(options.viaRequestBudget || 2)));
+            const requestedBudget = options.viaRequestBudget === undefined ? 2 : Number(options.viaRequestBudget);
+            const solarExploration = options.preferredRouteRole === 'shade' || options.preferredRouteRole === 'glareFree';
+            const viaBudget = directDistinct >= 3 && !solarExploration ? 0
+                : (Number.isFinite(requestedBudget) ? Math.min(2, Math.max(0, Math.floor(requestedBudget))) : 0);
             if (viaBudget === 0) {
                 if (window.DebugLogger) window.DebugLogger.log('osrm-via-skipped', { reason: 'DIRECT_ALTERNATIVES_SUFFICIENT', directDistinct });
             }
@@ -2308,6 +2325,7 @@ window.ShadowRouter = (function () {
     }
 
     return {
+        buildExplorationViaPoints,
         calculateBearing: calculateBearing,
         calculateDistanceMeters: calculateDistanceMeters,
         distanceToRoute: distanceToRoute,
