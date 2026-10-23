@@ -130,17 +130,15 @@ async function establishReliableGuidance(page) {
 test('diagnostic opt-in survives reload, exports persisted events and deletes them', async ({ page }) => {
     const state = await fixtures(page, { brokenMap: true });
     await page.goto('./');
-    await page.locator('#btn-close-start-search').click();
     await page.locator('#mobile-toggle-panel').click();
     await page.locator('#btn-drive-record').click();
     await page.evaluate(() => DriveArchive.record('sample', { lat: 42.36, lng: -71.07, timestamp: 123, accuracy: 5 }));
     await page.reload();
-    await page.locator('#btn-close-start-search').click();
+    await page.locator('#mobile-toggle-panel').click();
     await expect(page.locator('#btn-drive-record')).toContainText('Stop recording');
     const saved = await page.evaluate(async () => JSON.parse(await DriveArchive.exportRecording({ samples: [] })));
     expect(saved.version).toBe(2);
     expect(saved.samples.some(s => s.timestamp === 123)).toBe(true);
-    await page.locator('#mobile-toggle-panel').click();
     await page.locator('#btn-drive-clear').click();
     await expect(page.locator('#btn-drive-record')).toContainText('Record drive');
     expect(await page.evaluate(async () => JSON.parse(await DriveArchive.exportRecording({})).samples.length)).toBe(0);
@@ -157,12 +155,11 @@ test('saved OSM roads survive reload and route in a worker without routing servi
     ];
     await page.route('https://overpass.private.coffee/api/interpreter', route => route.fulfill({ json: { elements } }));
     await page.goto('./');
-    await page.locator('#btn-close-start-search').click();
     await page.locator('#mobile-toggle-panel').click();
     await page.locator('#btn-road-pack').click();
     await expect(page.locator('#road-pack-status')).toContainText('valid 7 days');
     await page.reload();
-    await page.locator('#btn-close-start-search').click();
+    await page.locator('#mobile-toggle-panel').click();
     await expect(page.locator('#road-pack-status')).toContainText('valid 7 days');
     await page.route('**/route/v1/driving/**', route => route.abort());
     const route = await page.evaluate(async () => {
@@ -173,7 +170,6 @@ test('saved OSM roads survive reload and route in a worker without routing servi
     expect(route.offline).toBe(true);
     expect(route.maneuvers.at(-1).type).toBe('arrive');
     expect(route.raw.geometry.coordinates).toEqual([[-71.07,42.36],[-71.0675,42.365],[-71.065,42.37]]);
-    await page.locator('#mobile-toggle-panel').click();
     await page.locator('#btn-road-pack-clear').click();
     await expect(page.locator('#road-pack-status')).toContainText('No offline road pack');
     expect(state.errors).toEqual([]);
@@ -381,5 +377,96 @@ test('manual battery saver persists across a page restart', async ({ page }) => 
     await page.reload();
     await expect(page.locator('body')).toHaveClass(/battery-saver-active/);
     await expect(page.locator('#btn-toggle-battery-saver')).toHaveAttribute('aria-pressed', 'true');
+    expect(state.errors).toEqual([]);
+});
+
+test('numbered address search hides fuzzy suggestions and requires choosing the full address', async ({ page }) => {
+    const state = await fixtures(page, { brokenMap: true });
+    let submits = 0;
+    await page.route('https://photon.komoot.io/**', route => route.fulfill({json:{features:[{
+        geometry:{coordinates:[-79.183,42.219]}, properties:{name:'East Side Overland Hiking Trail - Gerry Rd',street:'Gerry-Ellington Road',housenumber:'1985'}
+    }]}}));
+    await page.route('https://nominatim.openstreetmap.org/search?**', route => {
+        submits++;
+        return route.fulfill({json:[
+            {lat:'42.3006881',lon:'-71.1570098',display_name:'94, Gerry Road, Brookline, Massachusetts, 02467',address:{house_number:'94',road:'Gerry Road'}},
+            {lat:'42.5261573',lon:'-71.0308517',display_name:'94, Gerry Road, Lynnfield, Massachusetts, 01940',address:{house_number:'94',road:'Gerry Road'}}
+        ]});
+    });
+    await page.goto('./');
+    await expect(page.locator('#btn-close-start-search')).toHaveCount(0);
+    await page.locator('#destination-input').fill('94 gerry rd');
+    await expect(page.locator('#destination-results')).toContainText('No matching suggestions');
+    expect(submits).toBe(0);
+    await expect(page.locator('#destination-results [role="option"]')).toHaveCount(0);
+    await page.locator('#destination-input-search').click();
+    await expect(page.locator('#destination-results [role="option"]')).toHaveCount(2);
+    expect(submits).toBe(1);
+    expect(state.routes.length).toBe(0);
+    await expect(page.locator('#start-search-modal')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#destination-results')).toContainText('Brookline');
+    await expect(page.locator('#destination-results')).toContainText('Lynnfield');
+    await page.screenshot({path: test.info().outputPath('address-candidates.png')});
+    await page.locator('#destination-results [role="option"]').first().click();
+    await expect(page.locator('#bar-dest-text')).toContainText('Brookline');
+    await expect.poll(() => state.routes.length).toBeGreaterThan(0);
+    expect(state.routes[0]).toEqual([-71.1570098,42.3006881]);
+    expect(state.errors).toEqual([]);
+});
+
+test('Enter and search button show choices, editing clears stale options and origin can be searched', async ({ page }) => {
+    const state = await fixtures(page, { brokenMap: true });
+    await page.goto('./');
+    await page.locator('#destination-input').fill('Alpha');
+    await page.locator('#destination-input').press('Enter');
+    await expect(page.locator('#destination-results [role="option"]')).toHaveCount(1);
+    expect(state.routes.length).toBe(0);
+    await page.locator('#destination-input').fill('Unknown');
+    await expect(page.locator('#destination-results [role="option"]')).toHaveCount(0);
+    await page.locator('#btn-confirm-destination').click();
+    await expect(page.locator('#destination-results')).toContainText('No matching address');
+    expect(state.routes.length).toBe(0);
+    await page.locator('#origin-input').fill('Bravo');
+    await page.locator('#origin-input-search').click();
+    await expect(page.locator('#origin-results [role="option"]')).toHaveCount(1);
+    await page.locator('#origin-results [role="option"]').first().click();
+    await selectDestination(page, 'Alpha');
+    await expect.poll(() => state.routes.length).toBeGreaterThan(0);
+    expect(state.errors).toEqual([]);
+});
+
+test('settings remain accessible without Map button and long free-drive labels cannot shrink switches', async ({ page }) => {
+    const state = await fixtures(page, { brokenMap: true });
+    await page.goto('./');
+    await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#start-search-modal')).toHaveClass(/hidden/);
+    for (const width of [320,360,384,412]) {
+        await page.setViewportSize({width,height:820});
+        const toggle = page.locator('#toggle-auto-free-drive');
+        await toggle.locator('..').scrollIntoViewIfNeeded();
+        for (const checked of [true,false]) {
+            if (await toggle.isChecked() !== checked) await toggle.locator('..').click();
+            await expect(toggle).toBeChecked({checked});
+            // Wait for the CSS knob transition before measuring containment.
+            await page.waitForTimeout(350);
+            const bounds = await toggle.evaluate(input => {
+                const control = input.parentElement;
+                const row = control.closest('.option-row');
+                const text = row.querySelector('.option-label-group');
+                const slider = control.querySelector('.slider');
+                const knob = getComputedStyle(slider,'::before');
+                const rect = control.getBoundingClientRect();
+                const translation = new DOMMatrix(knob.transform === 'none' ? undefined : knob.transform).m41;
+                return {width:rect.width, right:rect.right, rowRight:row.getBoundingClientRect().right,
+                    textRight:text.getBoundingClientRect().right, left:rect.left,
+                    knobRight:parseFloat(knob.left)+parseFloat(knob.width)+translation};
+            });
+            expect(bounds.width).toBe(44);
+            expect(bounds.right).toBeLessThanOrEqual(bounds.rowRight+0.5);
+            expect(bounds.textRight).toBeLessThan(bounds.left);
+            expect(bounds.knobRight).toBeLessThanOrEqual(bounds.width);
+        }
+    }
+    await page.screenshot({path:test.info().outputPath('settings-switches.png')});
     expect(state.errors).toEqual([]);
 });

@@ -491,7 +491,15 @@ window.Geocoder = (function () {
 
     async function searchPlaces(query, userCoords = null, options = {}) {
         if (!query || query.trim().length === 0) return [];
-        const cleanQ = query.trim();
+        // Expand common road suffixes before querying: Photon treats "rd" as
+        // fuzzy place text and can ignore a house number altogether.
+        const suffixes = { rd: 'road', st: 'street', ave: 'avenue', blvd: 'boulevard', dr: 'drive', ln: 'lane', ct: 'court', pkwy: 'parkway', hwy: 'highway' };
+        const normalizeAddress = value => String(value || '').toLowerCase()
+            .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/)
+            .map(word => suffixes[word] || word).join(' ');
+        const numberedAddress = /^\s*\d+[A-Za-z]?\s+\S+/.test(query);
+        const cleanQ = numberedAddress ? query.trim().replace(/^(\d+[A-Za-z]?\s+\S+(?:\s+\S+)*?)\s+(rd|st|ave|blvd|dr|ln|ct|pkwy|hwy)\b\.?/i,
+            (_, street, suffix) => `${street} ${suffixes[suffix.toLowerCase()]}`) : query.trim();
         const includeNominatim = options.includeNominatim !== false;
         const hasCoords = !!(userCoords && Number.isFinite(userCoords.lat) && Number.isFinite(userCoords.lng));
         const cacheKey = `${cleanQ.toLowerCase()}|${hasCoords ? `${userCoords.lat.toFixed(3)},${userCoords.lng.toFixed(3)}` : 'none'}|${includeNominatim ? 'all' : (options.fallbackNominatim ? 'photon-address' : 'photon')}`;
@@ -518,6 +526,22 @@ window.Geocoder = (function () {
         };
         const addResult = (result) => {
             if (!Number.isFinite(result.lat) || !Number.isFinite(result.lng)) return;
+            if (looksLikeStreetAddress) {
+                // Never present a bus stop, another house number, or a road
+                // containing the query only in its locality as this address.
+                const house = normalizeAddress(result.houseNumber || (result.displayName.match(/^\s*(\d+[a-z]?)\b/i) || [])[1]);
+                const road = normalizeAddress(result.road || result.displayName.split(',').slice(1, 2).join(''));
+                const requestedRoad = normalizeAddress(cleanQ).split(' ').slice(1);
+                const roadWords = road.split(' ');
+                if (house !== queryHouseNumber || !road || !requestedRoad.length) return;
+                // Road tokens must be a prefix of the requested street; any
+                // trailing city/state is checked against the full address.
+                const prefixLength = Math.min(roadWords.length, requestedRoad.length);
+                if (!roadWords.slice(0, prefixLength).every((word, i) => word === requestedRoad[i] ||
+                    (!includeNominatim && i === requestedRoad.length - 1 && word.startsWith(requestedRoad[i])))) return;
+                const fullWords = normalizeAddress(`${result.displayName} ${result.regionCode || ''}`).split(' ');
+                if (!requestedRoad.slice(prefixLength).every(word => fullWords.includes(word))) return;
+            }
             const duplicateIndex = results.findIndex(existing =>
                 Math.abs(existing.lat - result.lat) < 0.0005 && Math.abs(existing.lng - result.lng) < 0.0005);
             if (duplicateIndex < 0) results.push(result);
@@ -563,6 +587,7 @@ window.Geocoder = (function () {
                             source: 'nominatim',
                             houseNumber: String(item.address && item.address.house_number || ''),
                             road: String(item.address && item.address.road || ''),
+                            regionCode: String(item.address && item.address['ISO3166-2-lvl4'] || ''),
                             importance: Number(item.importance) || 0
                         });
                     });
@@ -590,13 +615,14 @@ window.Geocoder = (function () {
                     if (!Array.isArray(coords) || coords.length < 2) return;
                     const itemLat = Number(coords[1]);
                     const itemLng = Number(coords[0]);
-                    const nameParts = [props.name, props.street, props.city || props.town || props.district, props.state, props.country]
+                    const addressLabel = [props.housenumber, props.street].filter(Boolean).join(' ');
+                    const nameParts = [props.name, addressLabel, props.city || props.town || props.district, props.state, props.postcode, props.country]
                         .filter(Boolean).map(String);
                     const fullAddress = nameParts.join(', ');
                     if (!fullAddress) return;
                     addResult({
                         displayName: fullAddress,
-                        shortTitle: String(props.name || nameParts[0]),
+                        shortTitle: String(looksLikeStreetAddress ? addressLabel || props.name || nameParts[0] : props.name || addressLabel || nameParts[0]),
                         lat: itemLat,
                         lng: itemLng,
                         distKm: hasCoords ? getDistanceKm(userCoords.lat, userCoords.lng, itemLat, itemLng) : null,
@@ -612,14 +638,8 @@ window.Geocoder = (function () {
             console.warn("Photon search warning:", e);
         }
 
-        // Photon is deliberately first for autocomplete, but it can return a
-        // nearby road with a similar name instead of an exact house/street
-        // address (for example "94 Gerry Road" may match "94 Alton Tannery
-        // Road").  A submitted address, or an autocomplete query that looks
-        // like a street address, gets one Nominatim fallback when Photon has
-        // no result (or when the caller explicitly requests it).  This keeps
-        // Nominatim out of every keystroke while still making address search
-        // reliable on the mobile WebView.
+        // Legacy explicit fallback callers must opt in. The UI never uses
+        // this path for autocomplete; Nominatim requires an explicit search.
         const shouldFallbackToNominatim = options.fallbackNominatim === true &&
             (results.length === 0 || looksLikeStreetAddress);
         if (!includeNominatim && shouldFallbackToNominatim) {
@@ -654,6 +674,7 @@ window.Geocoder = (function () {
                             source: 'nominatim',
                             houseNumber: String(item.address && item.address.house_number || ''),
                             road: String(item.address && item.address.road || ''),
+                            regionCode: String(item.address && item.address['ISO3166-2-lvl4'] || ''),
                             importance: Number(item.importance) || 0
                         });
                     });
@@ -665,23 +686,15 @@ window.Geocoder = (function () {
             }
         }
 
+        if (options.signal && options.signal.aborted) throw createApiError('ABORTED', 'searchNetworkError', cleanQ);
         if (attemptedServices > 0 && failedServices === attemptedServices && results.length === 0) {
             throw createApiError('SEARCH_UNAVAILABLE', 'searchNetworkError', cleanQ);
         }
 
         if (hasCoords) {
             results.sort((a, b) => {
-                // For house-number queries, Nominatim carries the structured
-                // address match while Photon may only have a nearby fuzzy
-                // road.  Preserve provider priority before proximity sorting.
-                if (looksLikeStreetAddress && a.source !== b.source) {
-                    if (a.source === 'nominatim') return -1;
-                    if (b.source === 'nominatim') return 1;
-                }
-                if (looksLikeStreetAddress) {
-                    const scoreDifference = addressMatchScore(b) - addressMatchScore(a);
-                    if (Math.abs(scoreDifference) > 0.001) return scoreDifference;
-                }
+                // All numbered-address candidates have passed the same check.
+                // Rank duplicate street addresses by proximity, not provider.
                 if (a.distKm !== null && b.distKm !== null) return a.distKm - b.distKm;
                 return 0;
             });

@@ -1042,6 +1042,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const toggleSidebar = (e) => {
             if (e) { e.preventDefault(); e.stopPropagation(); }
             const sidebar = document.getElementById('sidebar-panel');
+            document.getElementById('start-search-modal').classList.add('hidden');
             setSidebarOpen(!(sidebar && sidebar.classList.contains('active')));
         };
 
@@ -3083,27 +3084,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (!currentEnd || destinationName !== typedText) {
-            const btn = document.getElementById('btn-confirm-destination');
-            if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${isKo ? '스마트 위치 검색 중...' : 'Searching place...'}`;
-
-            let results = [];
-            try {
-                // Explicit submit: use both providers, including Nominatim.
-                results = await Geocoder.searchPlaces(typedText, currentStart, { includeNominatim: true });
-            } catch (e) {
-                if (btn) btn.innerHTML = `<i class="fa-solid fa-route"></i> ${I18n.getText('confirmStartBtn')}`;
-                alert(I18n.getText(e && e.messageKey ? e.messageKey : 'searchNetworkError'));
-                return;
-            }
-            if (results && results.length > 0) {
-                currentEnd = { lat: results[0].lat, lng: results[0].lng };
-                destinationName = results[0].shortTitle || results[0].displayName;
-                destInput.value = destinationName;
-            } else {
-                if (btn) btn.innerHTML = `<i class="fa-solid fa-route"></i> ${I18n.getText('confirmStartBtn')}`;
-                alert(isKo ? `'${typedText}' 위치를 찾을 수 없습니다. 주소나 지역명을 다시 확인해 주세요.` : `Cannot find '${typedText}'. Please verify the address.`);
-                return;
-            }
+            // A typed query is not a selected destination. Show candidates
+            // with their full address instead of navigating to the first hit.
+            await destinationSearch.submit();
+            return;
         }
 
         if (isLiveNavActive) {
@@ -4190,90 +4174,106 @@ document.addEventListener('DOMContentLoaded', () => {
         input.addEventListener('pointerdown', markRecentRouteEditing, { passive: true });
         input.addEventListener('focus', markRecentRouteEditing);
 
-        input.addEventListener('input', (e) => {
-            markRecentRouteEditing();
+        const cancel = () => {
             clearTimeout(debounceTimer);
             requestGeneration += 1;
-            activeIndex = -1;
             if (requestController) requestController.abort();
-            const val = e.target.value;
-
-            if (inputId === 'destination-input') {
-                const btn = document.getElementById('btn-confirm-destination');
-                if (btn) btn.disabled = val.trim().length === 0;
+            activeIndex = -1;
+            input.removeAttribute('aria-activedescendant');
+        };
+        const status = (message) => {
+            dropdown.replaceChildren();
+            const item = document.createElement('div');
+            item.className = 'search-result-status';
+            item.setAttribute('role', 'status');
+            item.textContent = message;
+            dropdown.appendChild(item);
+            dropdown.classList.add('active');
+            input.setAttribute('aria-expanded', 'true');
+        };
+        const runSearch = async (submitted = false) => {
+            cancel();
+            const generation = requestGeneration;
+            const val = input.value.trim();
+            const isKo = I18n.getLanguage().startsWith('ko');
+            if (val.length < 2) { dropdown.classList.remove('active'); return; }
+            if (submitted) status(isKo ? '주소를 검색하고 있습니다…' : 'Searching addresses…');
+            let results = [];
+            requestController = new AbortController();
+            try {
+                results = await Geocoder.searchPlaces(val, currentStart, {
+                    includeNominatim: submitted,
+                    fallbackNominatim: false,
+                    signal: requestController.signal
+                });
+            } catch (e) {
+                if (generation !== requestGeneration || (e && e.name === 'AbortError')) return;
+                console.warn('Autocomplete search unavailable:', e);
+                status(isKo ? '검색 서비스에 연결하지 못했습니다. 다시 검색해 주세요.' : 'Search unavailable. Please try again.');
+                return;
             }
-
-            if (val.length < 2) {
-                dropdown.classList.remove('active');
+            if (generation !== requestGeneration) return;
+            dropdown.innerHTML = '';
+            activeIndex = -1;
+            if (!results || results.length === 0) {
+                status(submitted
+                    ? (isKo ? '일치하는 주소가 없습니다. 도시·주 또는 우편번호를 추가해 주세요.' : 'No matching address. Add a city, state or postal code.')
+                    : (isKo ? '일치하는 추천 주소가 없습니다. 돋보기를 눌러 주소를 검색해 주세요.' : 'No matching suggestions. Tap the search icon to search the address.'));
                 return;
             }
 
-            const generation = requestGeneration;
-            debounceTimer = setTimeout(async () => {
-                // Photon-only autocomplete keeps Nominatim for explicit submit
-                // searches, avoiding one request per partial keystroke.
-                let results = [];
-                requestController = new AbortController();
-                try {
-                    results = await Geocoder.searchPlaces(val, currentStart, {
-                        includeNominatim: false,
-                        // Nominatim is reserved for explicit submitted searches.
-                        fallbackNominatim: false,
-                        signal: requestController.signal
-                    });
-                } catch (e) {
-                    if (generation !== requestGeneration || (e && e.name === 'AbortError')) return;
-                    console.warn('Autocomplete search unavailable:', e);
-                    dropdown.classList.remove('active');
-                    return;
+            results.forEach(res => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'result-item';
+                item.setAttribute('role', 'option');
+                item.id = `${dropdownId}-option-${dropdown.children.length}`;
+                item.setAttribute('aria-selected', 'false');
+                const icon = document.createElement('i');
+                icon.className = 'fa-solid fa-location-dot';
+                icon.style.color = 'var(--accent-cyan)';
+                const content = document.createElement('div');
+                content.style.cssText = 'flex:1; min-width:0;';
+                const titleRow = document.createElement('div');
+                titleRow.style.cssText = 'font-weight:700; color:#fff; display:flex; align-items:center; justify-content:space-between; gap:6px;';
+                const title = document.createElement('span');
+                title.style.cssText = 'overflow-wrap:anywhere;';
+                title.textContent = res.shortTitle || res.displayName;
+                titleRow.appendChild(title);
+                if (res.distKm !== null && Number.isFinite(res.distKm)) {
+                    const distTag = document.createElement('span');
+                    distTag.className = 'dist-tag';
+                    distTag.style.cssText = 'color:#fbbf24; font-size:11px; font-weight:700;';
+                    distTag.textContent = `📍 ${res.distKm < 1 ? Math.round(res.distKm * 1000) + 'm' : res.distKm.toFixed(1) + 'km'}`;
+                    titleRow.appendChild(distTag);
                 }
-                if (generation !== requestGeneration) return;
-                dropdown.innerHTML = '';
-                activeIndex = -1;
-                if (!results || results.length === 0) {
+                const address = document.createElement('div');
+                address.style.cssText = 'font-size:11px; color:#94a3b8; white-space:normal; overflow-wrap:anywhere;';
+                address.textContent = res.displayName;
+                content.append(titleRow, address);
+                item.append(icon, content);
+                item.addEventListener('click', () => {
+                    cancel();
+                    input.value = res.displayName;
+                    input.setAttribute('aria-expanded', 'false');
                     dropdown.classList.remove('active');
-                    return;
-                }
-
-                results.forEach(res => {
-                    const item = document.createElement('div');
-                    item.className = 'result-item';
-                    item.setAttribute('role', 'option');
-                    item.id = `${dropdownId}-option-${dropdown.children.length}`;
-                    item.setAttribute('aria-selected', 'false');
-                    const icon = document.createElement('i');
-                    icon.className = 'fa-solid fa-location-dot';
-                    icon.style.color = 'var(--accent-cyan)';
-                    const content = document.createElement('div');
-                    content.style.cssText = 'flex:1; overflow:hidden;';
-                    const titleRow = document.createElement('div');
-                    titleRow.style.cssText = 'font-weight:700; color:#fff; display:flex; align-items:center; justify-content:space-between; gap:6px;';
-                    const title = document.createElement('span');
-                    title.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
-                    title.textContent = res.shortTitle || res.displayName;
-                    titleRow.appendChild(title);
-                    if (res.distKm !== null && Number.isFinite(res.distKm)) {
-                        const distTag = document.createElement('span');
-                        distTag.className = 'dist-tag';
-                        distTag.style.cssText = 'color:#fbbf24; font-size:11px; font-weight:700;';
-                        distTag.textContent = `📍 ${res.distKm < 1 ? Math.round(res.distKm * 1000) + 'm' : res.distKm.toFixed(1) + 'km'}`;
-                        titleRow.appendChild(distTag);
-                    }
-                    const address = document.createElement('div');
-                    address.style.cssText = 'font-size:11px; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
-                    address.textContent = res.displayName;
-                    content.append(titleRow, address);
-                    item.append(icon, content);
-                    item.addEventListener('click', () => {
-                        input.value = res.shortTitle || res.displayName;
-                        dropdown.classList.remove('active');
-                        onSelect({ lat: res.lat, lng: res.lng }, res.shortTitle || res.displayName);
-                    });
-                    dropdown.appendChild(item);
+                    onSelect({ lat: res.lat, lng: res.lng }, res.displayName);
                 });
+                dropdown.appendChild(item);
+            });
 
-                dropdown.classList.add('active');
-            }, 600);
+            dropdown.classList.add('active');
+            input.setAttribute('aria-expanded', 'true');
+        };
+        document.getElementById(`${inputId}-search`).addEventListener('click', () => runSearch(true));
+        input.addEventListener('input', () => {
+            markRecentRouteEditing();
+            cancel();
+            dropdown.replaceChildren();
+            dropdown.classList.remove('active');
+            input.setAttribute('aria-expanded', 'false');
+            if (inputId === 'destination-input') document.getElementById('btn-confirm-destination').disabled = !input.value.trim();
+            if (input.value.trim().length >= 2) debounceTimer = setTimeout(() => runSearch(false), 600);
         });
 
         input.addEventListener('keydown', (e) => {
@@ -4293,8 +4293,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (e.key === 'Escape') {
                 e.preventDefault();
-                requestGeneration += 1;
-                if (requestController) requestController.abort();
+                cancel();
+                input.setAttribute('aria-expanded', 'false');
                 dropdown.classList.remove('active');
                 input.removeAttribute('aria-activedescendant');
                 return;
@@ -4306,17 +4306,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
                 dropdown.classList.remove('active');
-                if (inputId === 'destination-input') {
-                    resolveAndStartNavigation();
-                }
+                runSearch(true);
             }
         });
 
         document.addEventListener('click', (e) => {
             if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+                if (e.target.closest(`#${inputId}-search, #btn-confirm-destination`)) return;
+                cancel();
+                input.setAttribute('aria-expanded', 'false');
                 dropdown.classList.remove('active');
             }
         });
+        return { submit: () => runSearch(true) };
     }
 
     setupAutocomplete('origin-input', 'origin-results', (coords, name) => {
@@ -4324,7 +4326,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentEnd) updateRoute();
     });
 
-    setupAutocomplete('destination-input', 'destination-results', (coords, name) => {
+    const destinationSearch = setupAutocomplete('destination-input', 'destination-results', (coords, name) => {
         const previousLiveDestination = captureLiveDestinationBackup();
         currentEnd = coords;
         destinationName = name;
@@ -4347,7 +4349,6 @@ document.addEventListener('DOMContentLoaded', () => {
         updateRoute(true, { reason: 'destination-change' });
     });
 
-    document.getElementById('btn-close-start-search').addEventListener('click', () => document.getElementById('start-search-modal').classList.add('hidden'));
     document.getElementById('btn-confirm-destination').addEventListener('click', resolveAndStartNavigation);
     ['btn-start-free-drive'].forEach(id => {
         const button = document.getElementById(id);
