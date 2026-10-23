@@ -1232,3 +1232,11 @@ body.battery-saver-active .route-summary-floating {
 
 .banner-following { font-size: 13px; line-height: 1.4; margin-top: 4px; color: #bae6fd; }
 .banner-following[hidden] { display: none; }
+
+/* Junction detail uses provider-confirmed lane numbers only. */
+.junction-close .turn-dist { font-size: 1.8rem; font-weight: 900; }
+.lane-chips { display: flex; gap: 4px; margin-top: 4px; }
+.lane-chips span { border-radius: 5px; padding: 3px 8px; border: 1px solid currentColor; }
+.lane-valid { background: #1d5937; color: #fff; font-weight: 800; }
+.lane-other { opacity: .45; }
+#traffic-status, #remaining-solar-status, #road-pack-status { display: block; line-height: 1.5; }

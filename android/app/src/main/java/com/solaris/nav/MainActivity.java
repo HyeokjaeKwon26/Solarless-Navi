@@ -7,6 +7,15 @@ import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    static volatile boolean foreground;
+    @Override public void onResume() {
+        super.onResume(); foreground = true;
+        NativeGuidance.get(this).setBackground(false);
+    }
+    @Override public void onPause() {
+        foreground = false; NativeGuidance.get(this).setBackground(true);
+        super.onPause();
+    }
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(PipPlugin.class);

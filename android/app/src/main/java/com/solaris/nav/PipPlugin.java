@@ -35,6 +35,56 @@ public class PipPlugin extends Plugin {
     private static boolean autoEnter = true;
     private BroadcastReceiver locationReceiver;
 
+    public static void dispatchSpeechResume() {
+        if (instance != null) instance.notifyListeners("speechResume", new JSObject());
+    }
+    @PluginMethod public void speakFocused(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            JSObject result = new JSObject();
+            result.put("accepted", NavigationSpeech.get(getContext()).speak(call.getString("text", ""), call.getString("lang", "en-US")));
+            call.resolve(result);
+        });
+    }
+    @PluginMethod public void stopFocusedSpeech(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> { NavigationSpeech.get(getContext()).stopForeground(); call.resolve(); });
+    }
+    @PluginMethod public void setGuidanceRoute(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            try { NativeGuidance.get(getContext()).configure(call.getObject("route", new JSObject())); call.resolve(); }
+            catch (Exception e) { call.reject("Invalid guidance route"); }
+        });
+    }
+    @PluginMethod public void clearGuidanceRoute(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> { NativeGuidance.get(getContext()).clear(call.getLong("revision", 0L)); call.resolve(); });
+    }
+    @PluginMethod public void setGuidanceMuted(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> { NativeGuidance.get(getContext()).setMuted(call.getBoolean("muted", false)); call.resolve(); });
+    }
+
+    @PluginMethod
+    public void setDriveRecording(PluginCall call) {
+        DriveJournal.get(getContext()).setActive(call.getBoolean("active", false));
+        call.resolve();
+    }
+    @PluginMethod
+    public void recordDriveEvent(PluginCall call) {
+        DriveJournal.get(getContext()).append(call.getString("type", "event"), call.getObject("data", new JSObject()));
+        call.resolve();
+    }
+    @PluginMethod
+    public void getDriveRecording(PluginCall call) {
+        DriveJournal journal = DriveJournal.get(getContext());
+        if (call.getBoolean("statusOnly", false)) {
+            JSObject result = new JSObject(); result.put("active", journal.isActive()); call.resolve(result); return;
+        }
+        journal.export(json -> {
+            if (json == null) { call.reject("Unable to read recording"); return; }
+            JSObject result = new JSObject(); result.put("json", json); result.put("active", journal.isActive()); call.resolve(result);
+        });
+    }
+    @PluginMethod
+    public void clearDriveRecording(PluginCall call) { DriveJournal.get(getContext()).clear(success -> { if (success) call.resolve(); else call.reject("Recording deletion failed"); }); }
+
     @PluginMethod
     public void getRuntimeHealth(PluginCall call) {
         JSObject result = new JSObject();
@@ -237,6 +287,7 @@ public class PipPlugin extends Plugin {
     @PluginMethod
     public void setNavigationActive(PluginCall call) {
         boolean requestedActive = call.getBoolean("active", false);
+        if (!requestedActive) new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> NativeGuidance.get(getContext()).clear());
         autoEnter = call.getBoolean("autoEnter", autoEnter);
         Activity activity = getActivity();
         boolean locationServiceStarted = false;

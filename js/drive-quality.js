@@ -1,4 +1,4 @@
-/* Opt-in, memory-only driving diagnostics. No upload or background recording. */
+/* Opt-in driving diagnostics. Persistence is supplied by DriveArchive on device. */
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) module.exports = factory(require('./route-state.js'));
     else root.DriveQuality = factory(root.RouteState);
@@ -46,11 +46,13 @@
             get active() { return active; },
             add(sample) {
                 if (!active) return;
+                if (typeof window !== 'undefined' && window.DriveArchive) window.DriveArchive.record('sample', sample);
                 if (samples.length >= limit) { dropped++; return; }
                 // Copy primitives so later route/GPS updates cannot mutate history.
                 samples.push({ ...sample });
             },
             annotate(timestamp, fields) {
+                if (active && typeof window !== 'undefined' && window.DriveArchive) window.DriveArchive.record('match', { timestamp, ...fields });
                 const last = samples[samples.length - 1];
                 if (active && last && last.timestamp === timestamp) Object.assign(last, fields);
             },

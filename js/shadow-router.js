@@ -1554,7 +1554,7 @@ window.ShadowRouter = (function () {
 
     async function analyzeRawRoute(rawRoute, idx, dateObj, timeOfDayAdjustment, signal) {
         const baseDuration = Number(rawRoute.duration) || 0;
-        const liveDuration = Math.round(baseDuration * timeOfDayAdjustment);
+        const liveDuration = Math.round((rawRoute.traffic?.duration || baseDuration) * timeOfDayAdjustment);
         let routeSteps = null;
         const maneuvers = [];
         if (Array.isArray(rawRoute.legs) && rawRoute.legs.length > 0) {
@@ -1577,11 +1577,12 @@ window.ShadowRouter = (function () {
                 }
             }
         }
+        if (rawRoute.traffic?.coverage > 0 && rawRoute.traffic.steps?.length) routeSteps = rawRoute.traffic.steps;
         const analyzed = await analyzeRouteSegmentsAsync(rawRoute.geometry.coordinates, dateObj, liveDuration, routeSteps, null, signal);
         return {
             id: createRouteIdentity(rawRoute, idx), candidateIndex: idx, raw: rawRoute,
             distanceMeters: Number(rawRoute.distance) || 0, durationSec: liveDuration,
-            baseDurationSec: baseDuration, analyzed, maneuvers, routeSteps, arrivalAccess: rawRoute.arrivalAccess,
+            baseDurationSec: baseDuration, traffic: rawRoute.traffic || null, offline: !!rawRoute.offline, analyzed, maneuvers, routeSteps, arrivalAccess: rawRoute.arrivalAccess,
             analysisMode: 'heuristic', sceneCoverage: analyzed.sceneCoverage, sceneSource: analyzed.sceneSource
         };
     }
@@ -1668,10 +1669,15 @@ window.ShadowRouter = (function () {
 
             const directStartedAt = Date.now();
             if (window.DebugLogger) window.DebugLogger.log('osrm-direct-start', { tollFree: isTollFreeOnly });
-            const directResponse = await fetchJsonWithTimeout(directUrl, {
-                signal: options.signal,
-                timeoutMs: options.directTimeoutMs || 10000
-            });
+            let directResponse;
+            try {
+                if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new Error('OFFLINE');
+                directResponse = await fetchJsonWithTimeout(directUrl, { signal: options.signal, timeoutMs: options.directTimeoutMs || 10000 });
+            } catch (error) {
+                if (options.signal?.aborted || !window.RoadPack?.graph) throw error;
+                const offline = await RoadPack.route(start, end, { heading: Number.isFinite(startHeading) ? startHeading : undefined, tollFree: isTollFreeOnly });
+                directResponse = { routes: [offline], waypoints: [{ location: offline.geometry.coordinates[0] }, { location: offline.geometry.coordinates.at(-1) }] };
+            }
             rawCandidates = directResponse && Array.isArray(directResponse.routes) ? directResponse.routes.slice() : [];
             rawCandidates.forEach(route => assignRoadDestination(route, directResponse && directResponse.waypoints));
             if (window.DebugLogger && typeof window.DebugLogger.log === 'function') {
@@ -1688,7 +1694,7 @@ window.ShadowRouter = (function () {
             // available. These are optional enrichment, not a prerequisite
             // for displaying or starting the verified direct route.
             const fastestRaw = rawCandidates.slice().sort((a, b) => a.duration - b.duration)[0];
-            const offsets = buildExplorationViaPoints(fastestRaw);
+            const offsets = fastestRaw?.offline ? [] : buildExplorationViaPoints(fastestRaw);
             const directDistinct = rawCandidates.filter((route, index) => rawCandidates.slice(0, index).every(previous => !areRoutesGeometricallySimilar(previous, route))).length;
             const requestedBudget = options.viaRequestBudget === undefined ? 2 : Number(options.viaRequestBudget);
             const solarExploration = options.preferredRouteRole === 'shade' || options.preferredRouteRole === 'glareFree';
@@ -1726,6 +1732,11 @@ window.ShadowRouter = (function () {
             if (progress) await options.onProgress(progress);
         }
 
+        if (window.PublicTraffic && (typeof navigator === 'undefined' || navigator.onLine !== false) && !rawCandidates.some(r => r.offline)) {
+            const feeds = await PublicTraffic.load(rawCandidates.flatMap(r => r.geometry.coordinates));
+            if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+            rawCandidates = rawCandidates.map(raw => ({ ...raw, traffic: PublicTraffic.evaluate(raw, feeds) }));
+        }
         cacheOsrmRoutes(routeCacheKey, rawCandidates);
 
         const filteredCandidates = isTollFreeOnly
@@ -1743,10 +1754,10 @@ window.ShadowRouter = (function () {
         // fixed-size sampled geometry comparison.  This preserves genuinely
         // different corridors that happen to have similar totals.
         const uniqueRoutes = [];
-        const minDuration = Math.min(...filteredCandidates.map(r => r.duration));
+        const minDuration = Math.min(...filteredCandidates.map(r => r.traffic?.duration || r.duration));
 
         for (const r of filteredCandidates) {
-            if (r.duration > minDuration * 1.60) continue;
+            if ((r.traffic?.duration || r.duration) > minDuration * 1.60) continue;
             const isDuplicate = uniqueRoutes.some(u => areRoutesGeometricallySimilar(u, r));
             if (!isDuplicate) {
                 uniqueRoutes.push(r);

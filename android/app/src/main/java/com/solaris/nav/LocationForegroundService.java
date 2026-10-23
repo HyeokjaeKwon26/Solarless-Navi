@@ -34,33 +34,19 @@ public final class LocationForegroundService extends Service implements Location
     private LocationManager locationManager;
     private boolean providerRegistered;
     private boolean updatesRequested;
+    private String notificationText = "Navigation location is active";
 
     @Override
     public void onCreate() {
         super.onCreate();
         instanceRunning = true;
         createNotificationChannel();
+        NativeGuidance.get(this).setBackground(!MainActivity.foreground);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-            ? new Notification.Builder(this, CHANNEL_ID)
-            : new Notification.Builder(this);
-        Notification notification = builder
-            .setContentTitle("SolarLess Navi")
-            .setContentText("Navigation location is active")
-            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentIntent(PendingIntent.getActivity(
-                this,
-                0,
-                new Intent(this, MainActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0
-            ))
-            .setOngoing(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .build();
+        Notification notification = buildNotification(notificationText);
         try {
             startForeground(NOTIFICATION_ID, notification);
         } catch (SecurityException error) {
@@ -74,6 +60,26 @@ public final class LocationForegroundService extends Service implements Location
         }
         requestLocationUpdates();
         return START_STICKY;
+    }
+
+    private Notification buildNotification(String text) {
+        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            ? new Notification.Builder(this, CHANNEL_ID)
+            : new Notification.Builder(this);
+        return builder
+            .setContentTitle("SolarLess Navi")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentIntent(PendingIntent.getActivity(
+                this,
+                0,
+                new Intent(this, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0
+            ))
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .build();
     }
 
     private void createNotificationChannel() {
@@ -139,6 +145,19 @@ public final class LocationForegroundService extends Service implements Location
     @Override
     public void onLocationChanged(Location location) {
         if (location == null) return;
+        NativeGuidance.get(this).onLocation(location);
+        String status = NativeGuidance.get(this).notificationText();
+        if (!status.equals(notificationText)) {
+            notificationText = status;
+            try { startForeground(NOTIFICATION_ID, buildNotification(status)); } catch (RuntimeException ignored) {}
+        }
+        try {
+            DriveJournal.get(this).append("native-location", new org.json.JSONObject()
+                .put("lat", location.getLatitude()).put("lng", location.getLongitude()).put("timestamp", location.getTime())
+                .put("heading", location.hasBearing() ? location.getBearing() : -1)
+                .put("accuracy68", location.hasAccuracy() ? location.getAccuracy() : -1)
+                .put("speedMps", location.hasSpeed() ? location.getSpeed() : -1));
+        } catch (org.json.JSONException ignored) { }
         long timestamp = location.getTime() > 0 ? location.getTime() : System.currentTimeMillis();
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         long previousTimestamp = prefs.getLong("timestamp", 0L);

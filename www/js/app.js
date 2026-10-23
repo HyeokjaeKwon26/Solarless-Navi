@@ -162,16 +162,40 @@ document.addEventListener('DOMContentLoaded', () => {
     let wakeLockSentinel = null;
     let apiNoticeTimer = null;
     let solarRefreshTimer = null;
+    let lastJourneyRefresh = 0, journeyRefreshBusy = false, lastJunctionZoom = 0;
+    const autoZoomToggle = document.getElementById('junction-auto-zoom');
+    autoZoomToggle.checked = localStorage.getItem('solarless_junction_zoom') !== 'false';
+    autoZoomToggle.addEventListener('change', () => localStorage.setItem('solarless_junction_zoom', String(autoZoomToggle.checked)));
+    RoadPack.init().catch(() => { document.getElementById('road-pack-status').textContent = '오프라인 저장소 사용 불가 / Offline storage unavailable'; });
+    document.getElementById('btn-road-pack').addEventListener('click', async event => {
+        if (isLiveNavActive) { showApiNotice('주행을 종료한 뒤 저장하세요 / Stop navigation before downloading roads'); return; }
+        event.currentTarget.disabled = true;
+        try { await RoadPack.save(map.getCenter()); RoadPack.draw(map); }
+        catch (e) { document.getElementById('road-pack-status').textContent = '도로 저장 실패 · 기존 자료 유지 / Download failed; existing pack kept'; }
+        finally { document.getElementById('btn-road-pack').disabled = false; }
+    });
+    document.getElementById('btn-road-pack-clear').addEventListener('click', () => RoadPack.clear().catch(() => showApiNotice('삭제 실패 / Delete failed')));
     let lastSolarStaleNotice = 0;
 
-    document.getElementById('btn-drive-record').addEventListener('click', event => {
+    DriveArchive.init().then(active => { if (active) { driveRecorder.start(); document.getElementById('btn-drive-record').textContent = '기록 중지 / Stop recording'; } }).catch(() => {});
+    document.getElementById('btn-drive-clear').addEventListener('click', async () => {
+        try { await DriveArchive.clear(); } catch (e) { showApiNotice('삭제하지 못했습니다 / Could not delete recording'); return; }
+        driveRecorder.stop();
+        document.getElementById('btn-drive-record').textContent = '주행 진단 기록 시작 / Record drive';
+    });
+    document.getElementById('btn-drive-record').addEventListener('click', async event => {
+        try { await DriveArchive.setActive(!driveRecorder.active); } catch (e) { showApiNotice('기록을 시작하지 못했습니다 / Recording unavailable'); return; }
         if (driveRecorder.active) driveRecorder.stop();
-        else driveRecorder.start();
+        else {
+            driveRecorder.start();
+            if (selectedRouteObj) DriveArchive.record('route', { id: selectedRouteObj.id, coordinates: selectedRouteObj.analyzed?.coordinates, maneuvers: selectedRouteObj.maneuvers, distanceMeters: selectedRouteObj.distanceMeters });
+        }
         event.currentTarget.textContent = driveRecorder.active
             ? '기록 중지 / Stop recording' : '주행 진단 기록 시작 / Record drive';
     });
     document.getElementById('btn-drive-export').addEventListener('click', async () => {
-        const json = JSON.stringify(driveRecorder.export(), null, 2);
+        let json;
+        try { json = await DriveArchive.exportRecording(driveRecorder.export()); } catch (e) { showApiNotice('기록 읽기 실패 / Could not read recording'); return; }
         const nativePlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Pip;
         if (window.Capacitor && window.Capacitor.isNativePlatform() && nativePlugin) {
             try { await nativePlugin.saveDriveRecording({ json }); }
@@ -201,7 +225,7 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshRuntimeHealth();
             const gpsStale = !lastReliableFixAt || Date.now() - lastReliableFixAt > 10000;
             if (gpsStale) message = isKo ? 'GPS 신호 확인 중 · 위치와 회전 안내가 갱신되지 않습니다' : 'Waiting for GPS · position and turn guidance are not updating';
-            else if (navigator.onLine === false) message = isKo ? '오프라인 · 기존 경로 유지, 새 경로 탐색 대기' : 'Offline · keeping existing route; rerouting unavailable';
+            else if (navigator.onLine === false) message = RoadPack.graph ? (isKo ? '오프라인 · 저장 지역 안에서 도로 재탐색 가능' : 'Offline · rerouting within saved roads') : isKo ? '오프라인 · 기존 경로 유지, 새 경로 탐색 대기' : 'Offline · keeping existing route; rerouting unavailable';
             else if (routingUnavailable) message = isKo ? '경로 서버 연결 대기 · 기존 경로 유지' : 'Routing service unavailable · keeping existing route';
             else if (offRouteEvidence.confirmed) message = isKo ? '경로 이탈 · 새 경로 확인 중' : 'Off route · waiting for a verified route';
             else if (automaticBatterySaver) message = isKo ? '기기 상태에 따라 자동 절전 중' : 'Automatic battery saver active';
@@ -216,10 +240,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         status.hidden = !message;
         if (status.textContent !== message) status.textContent = message;
+        if (selectedRouteObj?.traffic?.coverage > 0 && !selectedRouteObj.traffic.sources.some(source => source.source === 'NYC DOT' && PublicTraffic.fresh(source.updatedAt, Date.now()))) {
+            selectedRouteObj.durationSec = selectedRouteObj.baseDurationSec;
+            selectedRouteObj.routeSteps = selectedRouteObj.raw.legs?.flatMap(leg => leg.steps || []) || null;
+            selectedRouteObj.traffic = { ...selectedRouteObj.traffic, duration: selectedRouteObj.baseDurationSec, coverage: 0 };
+            document.getElementById('traffic-status').textContent = PublicTraffic.label(selectedRouteObj.traffic, isKo);
+        }
         // Retry only a still-confirmed deviation with a fresh accepted GPS fix.
         // An online event alone does not prove the routing service recovered.
         if (isLiveNavActive && !navigationSessionArrived && (offRouteEvidence.confirmed || navigationRouteNeedsReliableOrigin) &&
-            navigator.onLine !== false && Date.now() - lastReliableFixAt <= 10000 &&
+            (navigator.onLine !== false || !!RoadPack.graph) && Date.now() - lastReliableFixAt <= 10000 &&
             !pendingRouteRequestKey && !routeAbortController && Date.now() - lastRerouteTime >= 8000) {
             lastRerouteTime = Date.now();
             offRouteEvidence.lastAttempt = lastRerouteTime;
@@ -357,6 +387,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function resetNavigationRouteProgress(route = null) {
         if (window.TTSVoice) TTSVoice.resetGuidance();
+        if (route) DriveArchive.record('route', { id: route.id, coordinates: route.analyzed?.coordinates, maneuvers: route.maneuvers, distanceMeters: route.distanceMeters });
         offRouteEvidence = { lastAttempt: lastRerouteTime || undefined };
         navigationRouteProgress = {
             routeId: getRouteGeometryIdentity(route), value: 0,
@@ -373,6 +404,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const candidate = NavigationGuidance.match(route, { lat, lng, heading,
             speedKmh: lastNavigationSpeedKmh, accuracy: lastProcessedNavigationAccuracy,
             timestamp: lastGpsTimestamp || Date.now() }, previous.snap);
+        if (candidate.isSnapped && window.RoadPack?.graph?.conflictingRoad([lng, lat], heading, candidate.distMeters)) {
+            Object.assign(candidate, { isSnapped: false, lat, lng, reason: 'nearby-road-conflict' });
+        }
         // Keep raw route distance independent of continuity/heading rejection.
         candidate.rawDistanceMeters = candidate.isSnapped ? candidate.distMeters :
             ShadowRouter.distanceToRoute(lat, lng, route.analyzed.coordinates);
@@ -1235,6 +1269,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const bannerDesc = document.getElementById('banner-desc');
         const bannerIcon = document.getElementById('banner-turn-icon');
         const laneElement = document.getElementById('banner-lanes');
+        const camera = JourneyPolicy.camera(nextManeuver, lastNavigationSpeedKmh);
+        banner.classList.toggle('junction-close', camera.close);
+        if (isLiveNavActive && !isUserMapPanning && !isPipMode && autoZoomToggle.checked && map && Date.now() - lastJunctionZoom >= 5000) {
+            lastJunctionZoom = Date.now();
+            if (map.getZoom() !== camera.zoom) map.setZoom(camera.zoom, { animate: false });
+        }
         const lanes = nextManeuver && nextManeuver.distanceFromCar <= 500 && nextManeuver.lanes;
         let followingElement = document.getElementById('banner-following');
         if (!followingElement) {
@@ -1253,6 +1293,14 @@ document.addEventListener('DOMContentLoaded', () => {
             ? `왼쪽부터 ${lanes.valid.join(', ')}번 차로 이용 · 총 ${lanes.total}차로`
             : `Use lane ${lanes.valid.join(', ')} from left · ${lanes.total} lanes`) : '';
 
+        if (lanes && lanes.total <= 12) {
+            const chips = document.createElement('div'); chips.className = 'lane-chips'; chips.setAttribute('aria-hidden', 'true');
+            for (let i = 1; i <= lanes.total; i++) {
+                const chip = document.createElement('span'); chip.className = lanes.valid.includes(i) ? 'lane-valid' : 'lane-other';
+                chip.textContent = String(i); chips.appendChild(chip);
+            }
+            laneElement.appendChild(chips);
+        }
         if (nextManeuver && nextManeuver.type !== 'arrive') {
             const dist = nextManeuver.distanceFromCar || 0;
             const formattedDist = dist >= 1000
@@ -2083,6 +2131,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setupAppResumeListener() {
+        const speechPlugin = window.Capacitor?.Plugins?.Pip;
+        if (speechPlugin?.addListener) speechPlugin.addListener('speechResume', () => { if (document.visibilityState !== 'hidden') TTSVoice.handleInterruptionEnd(); });
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
             window.Capacitor.Plugins.App.addListener('appStateChange', (state) => {
                 if (!state.isActive) {
@@ -2238,10 +2288,44 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hud) hud.classList.toggle('hazard', !!hazard);
     }
 
+    async function refreshRemainingJourney() {
+        const snap = navigationRouteProgress.snap, route = selectedRouteObj, now = Date.now();
+        if (!route || !JourneyPolicy.shouldRefresh({ live: isLiveNavActive && !isFreeDriveMode, realtime: isRealTimeMode,
+            visible: document.visibilityState !== 'hidden', snapped: navigationRouteProgress.result?.isSnapped,
+            busy: journeyRefreshBusy || !!liveDestinationBackup, now, fixAt: lastGpsTimestamp, lastAt: lastJourneyRefresh || routeData?.calculatedAt || now,
+            remainingMeters: snap?.remainingMeters, next: NavigationGuidance.next(route, snap) })) return;
+        const remaining = JourneyPolicy.remaining(route, snap); if (!remaining) return;
+        journeyRefreshBusy = true; lastJourneyRefresh = now;
+        const ko = I18n.getLanguage().startsWith('ko');
+        try {
+            const feeds = navigator.onLine === false ? [] : await PublicTraffic.load(remaining.coordinates);
+            const traffic = PublicTraffic.evaluate({ geometry: { coordinates: remaining.coordinates }, duration: remaining.duration, legs: [{ steps: remaining.steps || [] }] }, feeds);
+            const raw = { geometry: { coordinates: remaining.coordinates }, durationSec: traffic.duration };
+            let weatherProfile = null;
+            if (navigator.onLine !== false && window.WeatherRadiation) {
+                try { const forecast = await WeatherRadiation.fetchForecastForRoutes([raw], new Date(now), { timeoutMs: 5000 });
+                    if (forecast?.available && forecast.coverage >= .999) weatherProfile = forecast; } catch (e) { /* Explicit clear-sky fallback below. */ }
+            }
+            const analyzed = await ShadowRouter.analyzeRouteSegmentsAsync(remaining.coordinates, new Date(now), traffic.duration, traffic.coverage > 0 ? traffic.steps : remaining.steps, null, null, { weatherProfile });
+            if (selectedRouteObj !== route || !isLiveNavActive) return;
+            const sunlight = Math.round(analyzed.sunlitTimeSeconds / 60);
+            document.getElementById('remaining-solar-status').textContent = ko
+                ? `남은 경로 재평가 ${new Date(now).toLocaleTimeString()} · 일광 약 ${sunlight}분 · ${weatherProfile ? '예보 반영' : '맑은 하늘 가정'} · 건물 차폐 미확인`
+                : `Remaining route refreshed ${new Date(now).toLocaleTimeString()} · ~${sunlight} min sun · ${weatherProfile ? 'forecast' : 'clear-sky assumption'} · building shade unverified`;
+            document.getElementById('traffic-status').textContent = PublicTraffic.label(traffic, ko);
+            const steps = traffic.coverage > 0 ? traffic.steps : remaining.steps;
+            route.remainingForecast = { at: now, progressMeters: snap.progressMeters, startIndex: snap.segmentIndex, startT: snap.t,
+                analyzed, traffic, steps, lookup: ShadowRouter.buildStepTimeLookup(remaining.coordinates, steps, traffic.duration) };
+            DriveArchive.record('remaining-forecast', { timestamp: now, sunlitSeconds: analyzed.sunlitTimeSeconds, weather: !!weatherProfile, trafficCoverage: traffic.coverage });
+        } catch (e) {
+            document.getElementById('remaining-solar-status').textContent = ko ? '남은 경로 갱신 실패 · 기존 추정 유지' : 'Refresh failed · previous estimate retained';
+        } finally { journeyRefreshBusy = false; }
+    }
+
     function setupSolarRefreshTimer() {
         clearInterval(solarRefreshTimer);
         solarRefreshTimer = setInterval(() => {
-            if (document.visibilityState !== 'hidden') updateSunInfo();
+            if (document.visibilityState !== 'hidden') { updateSunInfo(); refreshRemainingJourney(); }
         }, 60000);
         window.addEventListener('pagehide', () => {
             clearInterval(solarRefreshTimer);
@@ -3190,7 +3274,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         checkAndUpdateMapTileTheme();
         if (isRealTimeMode && routeData && Number.isFinite(Number(routeData.calculatedAt))) {
-            const routeAgeMs = Date.now() - Number(routeData.calculatedAt);
+            const routeAgeMs = Date.now() - Math.max(Number(routeData.calculatedAt), Number(selectedRouteObj?.remainingForecast?.at) || 0);
             if (routeAgeMs >= 5 * 60 * 1000 && Date.now() - lastSolarStaleNotice >= 5 * 60 * 1000) {
                 lastSolarStaleNotice = Date.now();
                 showApiNotice(I18n.getLanguage().startsWith('ko')
@@ -3220,6 +3304,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateRemainingSummary(remainingSec, remainingMeters) {
         const isKo = I18n.getLanguage().startsWith('ko');
+        const forecast = selectedRouteObj?.remainingForecast, snap = navigationRouteProgress.snap;
+        if (forecast && snap?.isSnapped && snap.progressMeters >= forecast.progressMeters && Date.now() - forecast.at <= 10 * 60000) {
+            const index = snap.segmentIndex - forecast.startIndex;
+            const fraction = index === 0 ? (snap.t - forecast.startT) / Math.max(.0001, 1 - forecast.startT) : snap.t;
+            remainingSec = ShadowRouter.calculateRemainingRouteDuration(forecast.analyzed.coordinates, forecast.steps, forecast.traffic.duration, index, fraction, forecast.lookup);
+        }
         const seconds = Math.max(30, Number(remainingSec) || 0);
         const arrivalEl = document.getElementById('sum-time');
         const durationEl = document.getElementById('sum-duration');
@@ -3298,6 +3388,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showLiveDestinationReroutePending() {
+        NativeNavigation.clear();
         const isKo = I18n.getLanguage().startsWith('ko');
         const banner = document.getElementById('mobile-turn-banner');
         const icon = document.getElementById('banner-turn-icon');
@@ -3321,7 +3412,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const rerouteReason = String(routeOptions.reason || (isMidDrive ? 'off-route' : 'planning'));
         const destinationBackup = isMidDrive && rerouteReason === 'destination-change' ? liveDestinationBackup : null;
-        if (isMidDrive && navigator.onLine === false) {
+        if (isMidDrive && navigator.onLine === false && !RoadPack.graph) {
             if (destinationBackup) restoreLiveDestinationBackup(destinationBackup);
             gpsOriginReroutePending = false;
             refreshGuidanceHealth();
@@ -4053,6 +4144,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateHUDWithRoute(selectedRouteObj, sunPos) {
         const isKo = I18n.getLanguage().startsWith('ko');
+        document.getElementById('traffic-status').textContent = selectedRouteObj.offline
+            ? (isKo ? '저장 도로 경로 · 정체/통제 미반영 · 기본 ETA' : 'Saved-road route · no live traffic/closures · base ETA')
+            : PublicTraffic.label(selectedRouteObj.traffic, isKo);
+        if (selectedRouteObj.offline && map) RoadPack.draw(map);
         const glarePct = selectedRouteObj.analyzed ? Math.round(selectedRouteObj.analyzed.avgGlareRisk * 100) : 0;
         document.getElementById('glare-pct-val').innerText = `${glarePct}%`;
         document.getElementById('glare-meter-fill').style.width = `${glarePct}%`;
@@ -4252,6 +4347,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateRoute(true, { reason: 'destination-change' });
     });
 
+    document.getElementById('btn-close-start-search').addEventListener('click', () => document.getElementById('start-search-modal').classList.add('hidden'));
     document.getElementById('btn-confirm-destination').addEventListener('click', resolveAndStartNavigation);
     ['btn-start-free-drive'].forEach(id => {
         const button = document.getElementById(id);
@@ -4693,6 +4789,7 @@ document.addEventListener('DOMContentLoaded', () => {
         stopPassiveDrivingDetection();
         isLiveNavActive = true;
         isFreeDriveMode = requestedFreeDrive;
+        if (isFreeDriveMode) NativeNavigation.clear(true);
         setFreeDriveUi(isFreeDriveMode);
         if (!isFreeDriveMode) ensureRouteSummaryCycling();
         setLiveNavigationMapMode(true);
@@ -4837,7 +4934,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const accuracy = Number(coords.accuracy);
             const activeGeometry = selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates;
             if (driveRecorder.active) driveRecorder.add({ lat, lng, timestamp, receivedAt: Date.now(), accuracy,
-                reportedSpeedKmh: getPositionSpeedKmh(position), online: navigator.onLine !== false,
+                reportedSpeedKmh: getPositionSpeedKmh(position), online: navigator.onLine !== false || !!RoadPack.graph,
                 heading: coords.heading,
                 batteryPercent: runtimeHealth?.batteryPercent, batteryTemperatureC: runtimeHealth?.batteryTemperatureC,
                 thermalStatus: runtimeHealth?.thermalStatus, batterySaver: isBatterySaverActive,
@@ -4973,6 +5070,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (liveDestinationBackup) {
+                NativeNavigation.clear();
                 // The old polyline may remain as visual context while OSRM is
                 // pending, but it belongs to the previous destination. Do not
                 // announce its turns or arrival after the user has confirmed
@@ -4984,6 +5082,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return true;
             }
 
+            if (selectedRouteObj && !isFreeDriveMode) NativeNavigation.sync(selectedRouteObj);
             if (Date.now() - lastSessionCheckpointAt >= 30000) saveActiveNavigationSession();
             const roadDestination = getActiveRoadDestination();
             if (roadDestination) {
@@ -5006,7 +5105,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 offRouteEvidence = RouteState.evaluateOffRoute(offRouteEvidence, {
                     timestamp: now, distanceMeters: offRouteDist, accuracy: incomingAccuracy,
                     oppositeDirection: navigationSnap && navigationSnap.reason === 'opposite-direction',
-                    online: navigator.onLine !== false, pending: !!pendingRouteRequestKey || !!routeAbortController
+                    online: navigator.onLine !== false || !!RoadPack.graph, pending: !!pendingRouteRequestKey || !!routeAbortController
                 });
                 if (offRouteEvidence.shouldReroute) {
                     lastRerouteTime = now;

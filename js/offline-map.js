@@ -1,12 +1,4 @@
-/**
- * OfflineMap helpers.
- *
- * Map tiles may be cached after they are loaded, but route calculation still
- * requires a real road-network response from OSRM.  We intentionally do not
- * synthesize a route when the network is unavailable: a curved line is not a
- * safe navigation route and must never be used for turn-by-turn guidance.
- */
-
+/** Offline road routing lives in RoadPack; no synthetic routes or bulk tile downloads. */
 window.OfflineMap = (function () {
 
     // Do not call cache.add() after tileload: that starts a second network
@@ -19,7 +11,7 @@ window.OfflineMap = (function () {
 
     /**
      * Kept as a compatibility guard for older callers.  It must never return
-     * navigation data: no local road graph is bundled with this app.
+     * navigation data: callers must use the validated RoadPack router.
      */
     function generateStandaloneRoute() {
         return null;
@@ -28,6 +20,6 @@ window.OfflineMap = (function () {
     return {
         registerOfflineTileCache: registerOfflineTileCache,
         generateStandaloneRoute: generateStandaloneRoute,
-        canCalculateRouteOffline: () => false
+        canCalculateRouteOffline: () => !!window.RoadPack?.graph
     };
 })();

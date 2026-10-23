@@ -5,6 +5,7 @@
 
 window.TTSVoice = (function () {
     let isMuted = false;
+    try { isMuted = window.localStorage?.getItem('solarless_voice_muted') === 'true'; } catch (e) {}
     // Auto-detect browser language at load time to match I18n initial detection
     let currentLang = (navigator.language || navigator.userLanguage || '').toLowerCase().startsWith('ko') ? 'ko-KR' : 'en-US';
     let lastSpokenText = '';
@@ -94,6 +95,7 @@ window.TTSVoice = (function () {
     }
 
     function setLanguage(lang) {
+        if (window.NativeNavigation) window.NativeNavigation.invalidate();
         stopSpeech();
         if (lang === 'en' || lang === 'en-US') {
             currentLang = 'en-US';
@@ -106,6 +108,9 @@ window.TTSVoice = (function () {
 
     function toggleMute() {
         isMuted = !isMuted;
+        try { window.localStorage?.setItem('solarless_voice_muted', String(isMuted)); } catch (e) {}
+        const native = window.Capacitor?.Plugins?.Pip;
+        if (native?.setGuidanceMuted) native.setGuidanceMuted({ muted: isMuted }).catch(() => {});
         if (isMuted) {
             stopSpeech();
         }
@@ -118,7 +123,8 @@ window.TTSVoice = (function () {
         const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech;
         // Serialize native stop operations. A delayed stop must not cut off a
         // newer utterance, and a rejected stop must not become unhandled.
-        stopBarrier = stopBarrier.then(() => plugin ? plugin.stop() : undefined).catch(() => {});
+        stopBarrier = stopBarrier.then(() => window.Capacitor?.Plugins?.Pip?.stopFocusedSpeech
+            ? window.Capacitor.Plugins.Pip.stopFocusedSpeech() : plugin ? plugin.stop() : undefined).catch(() => {});
         return stopBarrier;
     }
 
@@ -180,8 +186,19 @@ window.TTSVoice = (function () {
         const generation = speechGeneration;
         await stopped;
         if (generation !== speechGeneration || isMuted || interruptionActive) return false;
-        if (playChimeType) playWarningChime(playChimeType);
+        if (playChimeType && !window.Capacitor?.Plugins?.Pip?.speakFocused) playWarningChime(playChimeType);
         showVoiceToast(text);
+        if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, timestamp: now, priority, status: 'requested' } }));
+        const focused = window.Capacitor?.Plugins?.Pip;
+        if (focused?.speakFocused) {
+            try {
+                const result = await focused.speakFocused({ text, lang: currentLang });
+                if (generation !== speechGeneration) return false;
+                if (!result.accepted) { spokenStages.clear(); lastTurnAnnounceTime = 0; }
+                if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, timestamp: Date.now(), status: result.accepted ? 'accepted' : 'denied', source: 'native-foreground' } }));
+            } catch (e) { spokenStages.clear(); }
+            return;
+        }
 
         // 1. Native Android Capacitor TextToSpeech Plugin
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech) {

@@ -127,6 +127,58 @@ async function establishReliableGuidance(page) {
     }, { timeout: 15000, intervals: [500] }).toContain('Use lane 2, 3 from left');
 }
 
+test('diagnostic opt-in survives reload, exports persisted events and deletes them', async ({ page }) => {
+    const state = await fixtures(page, { brokenMap: true });
+    await page.goto('./');
+    await page.locator('#btn-close-start-search').click();
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-drive-record').click();
+    await page.evaluate(() => DriveArchive.record('sample', { lat: 42.36, lng: -71.07, timestamp: 123, accuracy: 5 }));
+    await page.reload();
+    await page.locator('#btn-close-start-search').click();
+    await expect(page.locator('#btn-drive-record')).toContainText('Stop recording');
+    const saved = await page.evaluate(async () => JSON.parse(await DriveArchive.exportRecording({ samples: [] })));
+    expect(saved.version).toBe(2);
+    expect(saved.samples.some(s => s.timestamp === 123)).toBe(true);
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-drive-clear').click();
+    await expect(page.locator('#btn-drive-record')).toContainText('Record drive');
+    expect(await page.evaluate(async () => JSON.parse(await DriveArchive.exportRecording({})).samples.length)).toBe(0);
+    expect(state.errors).toEqual([]);
+});
+
+test('saved OSM roads survive reload and route in a worker without routing service', async ({ page }) => {
+    const state = await fixtures(page, { brokenMap: true });
+    const elements = [
+        { type: 'node', id: 1, lat: 42.36, lon: -71.07 },
+        { type: 'node', id: 2, lat: 42.365, lon: -71.0675 },
+        { type: 'node', id: 3, lat: 42.37, lon: -71.065 },
+        { type: 'way', id: 10, nodes: [1, 2, 3], tags: { highway: 'residential', name: 'Saved road' } }
+    ];
+    await page.route('https://overpass.private.coffee/api/interpreter', route => route.fulfill({ json: { elements } }));
+    await page.goto('./');
+    await page.locator('#btn-close-start-search').click();
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-road-pack').click();
+    await expect(page.locator('#road-pack-status')).toContainText('valid 7 days');
+    await page.reload();
+    await page.locator('#btn-close-start-search').click();
+    await expect(page.locator('#road-pack-status')).toContainText('valid 7 days');
+    await page.route('**/route/v1/driving/**', route => route.abort());
+    const route = await page.evaluate(async () => {
+        Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+        const result = await ShadowRouter.fetchAndAnalyzeRoutes({lat:42.36,lng:-71.07},{lat:42.37,lng:-71.065},new Date(),false,{disableWeatherRefinement:true});
+        return result.routes.fastest;
+    });
+    expect(route.offline).toBe(true);
+    expect(route.maneuvers.at(-1).type).toBe('arrive');
+    expect(route.raw.geometry.coordinates).toEqual([[-71.07,42.36],[-71.0675,42.365],[-71.065,42.37]]);
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-road-pack-clear').click();
+    await expect(page.locator('#road-pack-status')).toContainText('No offline road pack');
+    expect(state.errors).toEqual([]);
+});
+
 test('MapLibre renders a GeoJSON source using the shipped local module worker', async ({ page, baseURL }) => {
     const requests = [];
     page.on('response', response => { if (response.ok()) requests.push(response.url()); });

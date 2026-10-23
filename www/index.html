@@ -87,6 +87,7 @@
             <!-- Destination-First Start Search Overlay Modal -->
             <div class="start-search-overlay" id="start-search-modal">
                 <div class="start-search-card">
+                    <button type="button" id="btn-close-start-search" class="bar-change-btn" aria-label="지도로 돌아가기 / Back to map">지도 / Map</button>
                     <div class="start-card-title">
                         <i class="fa-solid fa-compass"></i>
                         <div>
@@ -480,7 +481,15 @@
                         <!-- Real Driving Control & App Info Link at Bottom of Drawer -->
                         <div class="action-buttons-group">
                             <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> GPS 내비 시작</button>
+                            <label><input type="checkbox" id="junction-auto-zoom" checked> 교차로 자동 확대 / Junction auto zoom</label>
+                            <button type="button" id="btn-road-pack" class="nav-btn">현재 지도 주변 도로 저장 (약 3km) / Save local roads</button>
+                            <button type="button" id="btn-road-pack-clear" class="nav-btn">저장 도로 삭제 / Delete road pack</button>
+                            <small id="road-pack-status" role="status"></small>
+                            <small>7일 유효 · 저장 지역에서만 오프라인 재탐색 · 지도 타일 미포함 · © OpenStreetMap contributors (ODbL)</small>
+                            <small id="traffic-status" role="status"></small>
+                            <small id="remaining-solar-status" role="status"></small>
                             <button type="button" id="btn-drive-record" class="nav-btn">주행 진단 기록 시작 / Record drive</button>
+                            <button type="button" id="btn-drive-clear" class="nav-btn">저장된 진단 삭제 / Delete recordings</button>
                             <button type="button" id="btn-drive-export" class="nav-btn">진단 기록 저장 / Save recording</button>
                             <button type="button" id="btn-check-update" class="nav-btn">업데이트 확인 / Check for updates</button>
                             <small id="update-check-status" role="status" aria-live="polite"></small>
@@ -674,6 +683,12 @@
     <script src="js/shadow-router.js"></script>
     <script src="js/geocoder.js"></script>
     <script src="js/navigation-guidance.js"></script>
+    <script src="js/journey-policy.js"></script>
+    <script src="js/public-traffic.js"></script>
+    <script src="js/road-network.js"></script>
+    <script src="js/road-pack.js"></script>
+    <script src="js/native-navigation.js"></script>
+    <script src="js/drive-archive.js"></script>
     <script src="js/tts-voice.js"></script>
     <script src="js/offline-map.js"></script>
     <script src="js/pip-controller.js"></script>
