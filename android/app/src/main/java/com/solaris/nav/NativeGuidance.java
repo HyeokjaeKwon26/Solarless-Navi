@@ -17,7 +17,7 @@ final class NativeGuidance {
     private int[] phases = new int[0];
     private String language = "en-US";
     private boolean muted, background, uncertain;
-    private long lastVoice, revision;
+    private long lastVoice, revision, lastLocationAt;
     private final java.util.concurrent.ExecutorService io = Executors.newSingleThreadExecutor();
     static synchronized NativeGuidance get(Context context) {
         if (instance == null) instance = new NativeGuidance(context.getApplicationContext());
@@ -42,8 +42,16 @@ final class NativeGuidance {
             points[i][0] = coordinates.getJSONArray(i).getDouble(0); points[i][1] = coordinates.getJSONArray(i).getDouble(1);
             if (!NavigationProgress.finite(points[i][0]) || !NavigationProgress.finite(points[i][1]) || Math.abs(points[i][0]) > 180 || Math.abs(points[i][1]) > 90) throw new JSONException("Coordinates invalid");
         }
+        JSONArray candidateTurns = snapshot.getJSONArray("turns");
+        if (candidateTurns.length() > 10000) throw new JSONException("Too many turns");
+        for (int i = 0; i < candidateTurns.length(); i++) {
+            JSONObject turn = candidateTurns.getJSONObject(i);
+            double meters = turn.optDouble("progressMeters", Double.NaN);
+            if (!NavigationProgress.finite(meters) || meters < 0) throw new JSONException("Invalid turn position");
+        }
         progress = new NavigationProgress(points);
-        turns = snapshot.getJSONArray("turns"); phases = new int[turns.length()];
+        turns = candidateTurns; phases = new int[turns.length()];
+        lastLocationAt = 0; uncertain = false;
         language = snapshot.optString("language", "en-US");
     }
     synchronized void configure(JSONObject snapshot) throws JSONException {
@@ -82,11 +90,19 @@ final class NativeGuidance {
     }
     synchronized void onLocation(Location location) {
         if (!background || muted || progress == null) return;
+        if (location.getTime() <= lastLocationAt) return;
+        lastLocationAt = location.getTime();
         long now = System.currentTimeMillis();
         double speed = location.hasSpeed() ? Math.max(0, location.getSpeed()) : 0;
         double at = progress.match(location.getLongitude(), location.getLatitude(), location.hasAccuracy() ? location.getAccuracy() * 1.62 : Double.NaN,
             location.hasBearing() ? location.getBearing() : Double.NaN, speed, location.getTime(), now);
-        if (!NavigationProgress.finite(at)) { uncertain = true; return; }
+        if (!NavigationProgress.finite(at)) {
+            if (!uncertain) {
+                NavigationSpeech.get(context).stop();
+                java.util.Arrays.fill(phases, 0);
+            }
+            uncertain = true; return;
+        }
         uncertain = false;
         for (int i = 0; i < turns.length(); i++) {
             JSONObject turn = turns.optJSONObject(i);

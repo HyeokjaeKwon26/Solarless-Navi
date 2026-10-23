@@ -41,7 +41,10 @@ public class PipPlugin extends Plugin {
     @PluginMethod public void speakFocused(PluginCall call) {
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
             JSObject result = new JSObject();
-            result.put("accepted", NavigationSpeech.get(getContext()).speak(call.getString("text", ""), call.getString("lang", "en-US")));
+            // A PiP WebView can still execute JS while the Activity is paused.
+            // Only the native route engine owns speech then; otherwise both
+            // providers could interrupt each other on the same GPS update.
+            result.put("accepted", MainActivity.foreground && NavigationSpeech.get(getContext()).speak(call.getString("text", ""), call.getString("lang", "en-US")));
             call.resolve(result);
         });
     }
