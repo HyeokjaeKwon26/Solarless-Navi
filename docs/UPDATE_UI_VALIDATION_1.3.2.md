@@ -16,13 +16,13 @@
 
 ## 자동 검증 범위
 
-- Node 테스트 231개.
-- 브라우저 root/www: 업데이트 성공·서명 불일치·취소·손상 파일·최신 버전·네트워크 오류·네이티브 응답 지연·재시도·주행 중 수동 확인/자동 안내 지연.
+- Node 테스트 231개 통과.
+- 브라우저 root/www 총 58개 통과: 업데이트 성공·서명 불일치·취소·손상 파일·최신 버전·네트워크 오류·네이티브 응답 지연·재시도·주행 중 수동 확인/자동 안내 지연.
 - 최근 확인 시간이 저장돼 있어도 새 실행에서 확인하고, 계속 사용 시 자동 재표시와 다운로드/설치가 없는지 확인.
 - 실제 앱 HTML에 네이티브 플러그인 응답을 모의 주입해 시작 팝업→계속 사용→목적지 입력→설정→수동 확인과 Android 뒤로가기 이벤트를 검증.
 - 첫 화면에서 320/360/384/412px 설정 클릭, 버튼 가시성/최소 크기/공통 스타일, 주행 미시작 및 오류 없음 확인.
 - 기존 경로/차로/오프라인/진단/배터리/주소 검색 테스트를 함께 수행.
-- Android JVM 11개, debug 빌드/lint. 네이티브 코드는 변경하지 않았다.
+- Android JVM 11개 통과, debug 빌드/lint 성공. 네이티브 코드는 변경하지 않았다.
 - root/www 50개 파일의 SHA-256 일치, npm audit 취약점 0개.
 
 브라우저의 네이티브 플러그인은 모의 응답이다. 실제 Android 설치기, 서비스 및 권한 흐름의 실기기 검증을 대신하지 않는다.
@@ -37,3 +37,14 @@
 6. 설치 권한 승인·취소 및 앱 복귀 동작 확인.
 
 실제 폰 및 실제 주행으로 확인한 항목은 없다.
+
+## 공개 배포 확인
+
+- 앱 소스: `75a7ed147e0e7f535a02a979c114a06b74870905`
+- [기본 CI 성공](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40027661760)
+- [APK 검증/배포 성공](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40027660754), attempt 2. 첫 시도는 Ubuntu 패키지 미러의 느린 다운로드로 중단하고 같은 소스를 새 runner에서 재실행했다. 검증 단계는 생략하지 않았다.
+- [1.3.2 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.2)
+- 공개 APK 재다운로드 후 apksigner/aapt 검증 통과: `com.solaris.nav`, 1.3.2/code 6, non-debuggable, 4,380,186 bytes.
+- 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`
+- APK SHA-256: `772018f4c9b6aece8cf561800cffcb3b70911f155e69a3c914dd9bdc729d0b34`
+- 공개 update.json 및 SHA256SUMS.txt와 파일 일치. 앱의 검증 함수는 1.3.0/code 4와 1.3.1/code 5에 업데이트를 제안하고 1.3.2/code 6은 최신으로 판정했다. 이는 실기기 설치·데이터 유지 검증을 대신하지 않는다.
