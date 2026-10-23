@@ -99,38 +99,15 @@ if not exist "%OUT_APK%" (
     exit /b 3
 )
 
-rem Existence alone is not proof of a signed release. Verify v1/v2/v3 with
-rem the Android SDK apksigner before exporting anything to the repository root.
-set "APKSIGNER="
-if defined ANDROID_SDK_ROOT if exist "%ANDROID_SDK_ROOT%\build-tools\35.0.0\apksigner.bat" set "APKSIGNER=%ANDROID_SDK_ROOT%\build-tools\35.0.0\apksigner.bat"
-if not defined APKSIGNER if defined ANDROID_HOME if exist "%ANDROID_HOME%\build-tools\35.0.0\apksigner.bat" set "APKSIGNER=%ANDROID_HOME%\build-tools\35.0.0\apksigner.bat"
-if not defined APKSIGNER if defined ANDROID_SDK_ROOT for /f "delims=" %%D in ('dir /b /ad /o-n "%ANDROID_SDK_ROOT%\build-tools" 2^>nul') do if exist "%ANDROID_SDK_ROOT%\build-tools\%%D\apksigner.bat" if not defined APKSIGNER set "APKSIGNER=%ANDROID_SDK_ROOT%\build-tools\%%D\apksigner.bat"
-if not defined APKSIGNER if defined ANDROID_HOME for /f "delims=" %%D in ('dir /b /ad /o-n "%ANDROID_HOME%\build-tools" 2^>nul') do if exist "%ANDROID_HOME%\build-tools\%%D\apksigner.bat" if not defined APKSIGNER set "APKSIGNER=%ANDROID_HOME%\build-tools\%%D\apksigner.bat"
-if not defined APKSIGNER (
-    echo [ERROR] Android SDK apksigner was not found. Refusing to export an unverified APK.
-    exit /b 4
+rem Enforce the same original certificate, version and package as GitHub releases.
+rem Preserve the original v1.0 APK; new outputs belong in dist-release.
+pushd "%ROOT_DIR%"
+node tools/generate-update.mjs "%OUT_APK%" "dist-release"
+set "VERIFY_EXIT=!ERRORLEVEL!"
+popd
+if !VERIFY_EXIT! NEQ 0 (
+    echo [ERROR] Release verification failed. No verified release was exported.
+    exit /b !VERIFY_EXIT!
 )
-set "VERIFY_LOG=%TEMP%\solarless-apksigner-%RANDOM%.txt"
-call "%APKSIGNER%" verify --verbose --print-certs "%OUT_APK%" > "%VERIFY_LOG%" 2>&1
-if !ERRORLEVEL! NEQ 0 (
-    echo [ERROR] apksigner rejected the release APK. It may be unsigned or corrupt.
-    type "%VERIFY_LOG%"
-    del /q "%VERIFY_LOG%" >nul 2>&1
-    exit /b 5
-)
-if defined EXPECTED_SIGNING_CERT_SHA256 (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$expected=$env:EXPECTED_SIGNING_CERT_SHA256; $text=Get-Content -Raw -LiteralPath '%VERIFY_LOG%'; $m=[regex]::Match($text, 'certificate SHA-256 digest:\s*([0-9a-f:]+)', 'IgnoreCase'); if ($m.Success -eq $false -or (($m.Groups[1].Value -replace ':','').ToLower() -ne ($expected -replace ':','').ToLower())) { exit 1 }"
-    if !ERRORLEVEL! NEQ 0 (
-        echo [ERROR] Release certificate fingerprint does not match EXPECTED_SIGNING_CERT_SHA256.
-        type "%VERIFY_LOG%"
-        del /q "%VERIFY_LOG%" >nul 2>&1
-        exit /b 6
-    )
-)
-del /q "%VERIFY_LOG%" >nul 2>&1
-
-copy /y "%OUT_APK%" "%ROOT_DIR%SolarLessNavi_v1.0.apk" >nul
-echo [SUCCESS] Signed release APK exported to %ROOT_DIR%SolarLessNavi_v1.0.apk
-dir "%ROOT_DIR%SolarLessNavi_v1.0.apk" | findstr /i "SolarLessNavi"
-echo ===================================================
+echo [SUCCESS] Verified APK and update manifest exported to %ROOT_DIR%dist-release
 exit /b 0

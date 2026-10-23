@@ -73,4 +73,4 @@ jobs:
           test -n "$sdk_root"
           printf 'sdk.dir=%s\n' "$sdk_root" > local.properties
           chmod +x gradlew
-          bash ./gradlew assembleDebug --no-daemon
+          bash ./gradlew testDebugUnitTest assembleDebug lintDebug --no-daemon --max-workers=2

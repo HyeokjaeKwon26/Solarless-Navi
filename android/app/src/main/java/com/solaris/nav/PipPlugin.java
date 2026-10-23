@@ -101,8 +101,8 @@ public class PipPlugin extends Plugin {
         try {
             IntentFilter filter = new IntentFilter(LocationForegroundService.ACTION_LOCATION_UPDATE);
             filter.addAction(LocationForegroundService.ACTION_SERVICE_STATUS);
-            if (Build.VERSION.SDK_INT >= 33) getContext().registerReceiver(locationReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-            else getContext().registerReceiver(locationReceiver, filter);
+            androidx.core.content.ContextCompat.registerReceiver(getContext(), locationReceiver, filter,
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
         } catch (Exception ignored) { }
     }
 
@@ -279,6 +279,7 @@ public class PipPlugin extends Plugin {
         }
     }
 
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
     private static PictureInPictureParams buildParams() {
         PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

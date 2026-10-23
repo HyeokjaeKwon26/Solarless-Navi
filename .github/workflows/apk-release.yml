@@ -1,0 +1,119 @@
+name: APK release
+
+on:
+  push:
+    tags: ['app-v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a signed APK using the original signing key (false = validation only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apk-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm test
+      - run: npm run check:mirrors
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: 13114758
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - run: npx cap sync android
+      - name: Compile and test native update policy
+        run: |
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
+          chmod +x android/gradlew
+          cd android
+          ./gradlew testDebugUnitTest assembleDebug lintDebug --no-daemon --max-workers=2
+
+  publish:
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/app-v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: 13114758
+      - name: Validate release identity and monotonic version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          node tools/check-release-version.mjs
+          tag="app-v$(node -p "require('./app-release.json').versionName")"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$tag" ]]; then exit 1; fi
+          if gh release view "$tag" >/dev/null 2>&1; then echo 'Release already exists; refusing to overwrite.'; exit 1; fi
+      - name: Restore original signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in KEYSTORE_BASE64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then echo "Missing required signing secret: $name. Original key is required."; exit 1; fi
+          done
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/solarless-original.keystore"
+      - run: npm ci
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - run: npx cap sync android
+      - name: Build signed release
+        env:
+          RELEASE_STORE_FILE: ${{ runner.temp }}/solarless-original.keystore
+          RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleRelease --no-daemon --max-workers=2
+      - name: Verify signature and generate update manifest
+        run: node tools/generate-update.mjs android/app/build/outputs/apk/release/app-release.apk dist-release
+      - name: Publish immutable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="app-v$(node -p "require('./app-release.json').versionName")"
+          gh release create "$tag" dist-release/* --target "$GITHUB_SHA" --title "SolarLess Navi ${tag#app-v}" --notes-file docs/RELEASE_NOTES.md
+      - name: Remove signing key
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/solarless-original.keystore"

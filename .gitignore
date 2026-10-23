@@ -35,6 +35,7 @@ data/release/
 logs/
 test-results/
 playwright-report/
+dist-release/
 
 # OS / Editor Files
 .DS_Store

@@ -5393,60 +5393,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    /* GITHUB AUTOMATIC APK UPDATE CHECKER. Scene releases are not app updates. */
-    let latestDetectedVersionTag = "";
-    let latestDetectedReleaseUrl = "";
-
-    async function checkGitHubLatestVersion() {
-        try {
-            // `/releases/latest` may point at a scene archive. Inspect a
-            // bounded list and choose the newest release that actually looks
-            // like an APK release instead of treating scene data as app code.
-            const repoUrl = "https://api.github.com/repos/HyeokjaeKwon26/Solarless-Navi/releases?per_page=30";
-            const res = await fetch(repoUrl, { cache: 'no-store' });
-            if (!res.ok) return;
-
-            const payload = await res.json();
-            const versionUtils = window.SolarlessVersionUtils;
-            const data = Array.isArray(payload)
-                ? payload.find(release => versionUtils && versionUtils.isApkRelease(release))
-                : (versionUtils && versionUtils.isApkRelease(payload) ? payload : null);
-            if (!versionUtils || !data || !data.tag_name) return;
-
-            latestDetectedVersionTag = data.tag_name;
-            latestDetectedReleaseUrl = data.html_url || "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/latest";
-            let currentVersion = '0.0.0';
-            const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Pip;
-            if (plugin && plugin.getAppVersion) {
-                const version = await plugin.getAppVersion();
-                currentVersion = version && version.versionName ? version.versionName : currentVersion;
-            }
-            if (versionUtils.compareSemver(data.tag_name, currentVersion) > 0) showUpdateModal(data.tag_name, latestDetectedReleaseUrl);
-            if (window.DebugLogger) window.DebugLogger.log('apk-update-check', { latestTag: data.tag_name, currentVersion, apkRelease: true });
-        } catch (err) {
-            if (window.DebugLogger) window.DebugLogger.log('apk-update-check-error', { message: String(err && err.message || err) });
-        }
-    }
-
-    function showUpdateModal(latestTagName, releaseHtmlUrl) {
-        const modal = document.getElementById('update-modal');
-        const titleEl = document.getElementById('update-modal-title');
-        const bodyEl = document.getElementById('update-info-msg');
-        const btnDlText = document.getElementById('update-download-btn-text');
-        const btnDl = document.getElementById('btn-download-update');
-        const btnLaterText = document.getElementById('update-later-btn-text');
-
-        if (titleEl) titleEl.innerText = I18n.getText('updateTitle');
-        if (bodyEl) {
-            const rawMsg = I18n.getText('updateMsg');
-            bodyEl.innerText = rawMsg.replace('{VER}', latestTagName || "v1.1");
-        }
-        if (btnDlText) btnDlText.innerText = I18n.getText('updateDownloadBtn');
-        if (btnLaterText) btnLaterText.innerText = I18n.getText('updateLaterBtn');
-        if (btnDl && releaseHtmlUrl) btnDl.href = releaseHtmlUrl;
-
-        if (modal) modal.classList.remove('hidden');
-    }
+    const appUpdater = SolarlessUpdater.create({
+        language: () => I18n.getLanguage(),
+        isDriving: () => isLiveNavActive || lastNavigationSpeedKmh > 3.5
+    });
+    function checkGitHubLatestVersion() { return appUpdater.check(false); }
 
     initMap();
 });

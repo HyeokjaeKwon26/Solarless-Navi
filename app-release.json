@@ -1,0 +1,7 @@
+{
+  "packageName": "com.solaris.nav",
+  "versionName": "1.1.0",
+  "versionCode": 2,
+  "minSdk": 22,
+  "certificateSha256": "8ec1a26e9c1eefeac384660973a0a9a99341071f1233ab196d315b3ce40a0a0d"
+}

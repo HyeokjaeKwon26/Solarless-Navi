@@ -161,7 +161,7 @@
                         </div>
                         <div class="about-row">
                             <span class="about-lbl" id="lbl-app-ver">버전 정보</span>
-                            <span class="about-val">v1.0 (Build 2026.08)</span>
+                            <span class="about-val" id="about-app-version">Android 앱에서 확인 / Available in Android app</span>
                         </div>
                         <div class="about-row">
                             <span class="about-lbl" id="lbl-app-dev">개발자 정보</span>
@@ -209,10 +209,14 @@
                         SolarLess Navi의 새로운 기능과 안정성이 향상된 최신 버전이 출시되었습니다.
                     </div>
 
+                    <pre id="update-release-notes" style="white-space:pre-wrap;max-height:160px;overflow:auto;font:inherit"></pre>
+                    <p id="update-status" role="status" aria-live="polite"></p>
+                    <progress id="update-progress" max="100" value="0" aria-label="Update download" hidden></progress>
+                    <button type="button" id="btn-cancel-update" hidden>취소 / Cancel download</button>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <a href="https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/latest" target="_blank" rel="noopener noreferrer" class="confirm-start-btn" id="btn-download-update" style="text-align: center; text-decoration: none; background: linear-gradient(135deg, #0284c7, #2563eb); display: flex; align-items: center; justify-content: center; gap: 8px;">
+                        <button type="button" class="confirm-start-btn" id="btn-download-update" style="text-align: center; text-decoration: none; background: linear-gradient(135deg, #0284c7, #2563eb); display: flex; align-items: center; justify-content: center; gap: 8px;">
                             <i class="fa-solid fa-download"></i> <span id="update-download-btn-text">지금 업데이트 다운로드</span>
-                        </a>
+                        </button>
                         <button type="button" class="about-app-link-btn" id="btn-close-update-modal" style="font-size: 13px; color: #94a3b8; padding: 8px;">
                             <span id="update-later-btn-text">나중에 하기</span>
                         </button>
@@ -478,6 +482,8 @@
                             <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> GPS 내비 시작</button>
                             <button type="button" id="btn-drive-record" class="nav-btn">주행 진단 기록 시작 / Record drive</button>
                             <button type="button" id="btn-drive-export" class="nav-btn">진단 기록 저장 / Save recording</button>
+                            <button type="button" id="btn-check-update" class="nav-btn">업데이트 확인 / Check for updates</button>
+                            <small id="update-check-status" role="status" aria-live="polite"></small>
                             <small>선택 시 위치·시간을 기기에만 기록합니다. / Opt-in location and time recording; no upload.</small>
                             <div class="about-menu-wrapper" style="margin-top: 8px; display: flex; justify-content: center;">
                                 <button type="button" class="about-app-link-btn" id="btn-about-app" style="font-size: 12px; color: #a78bfa; font-weight: 700;">
@@ -664,6 +670,7 @@
     <script src="js/scene-shadow.js"></script>
     <script src="js/debug-logger.js"></script>
     <script src="js/app-version.js"></script>
+    <script src="js/app-updater.js"></script>
     <script src="js/shadow-router.js"></script>
     <script src="js/geocoder.js"></script>
     <script src="js/tts-voice.js"></script>
