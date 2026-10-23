@@ -48,5 +48,12 @@
 
 - Node 24: 211개 단위 테스트 통과. `npm audit`: 취약점 0개. root/www 43개 자산 SHA-256 일치.
 - Android: 단위 테스트 7개, `assembleDebug`, `lintDebug` 통과. Lint 오류 0개·경고 17개.
-- 새 브라우저 시나리오(연속 회전/방향 불일치, 복구 설정, 절전 저장)는 개별 실행에서 통과했다. Windows 전체 실행에서는 일부 기존 시나리오의 시간 초과가 있어, 릴리스와 같은 최종 소스의 전체 검사는 GitHub 워크플로에서 다시 수행한다. 통과 전에는 배포하지 않는다.
+- 새 브라우저 시나리오(연속 회전/방향 불일치, 복구 설정, 절전 저장)는 개별 실행에서 통과했다. Windows 전체 실행에서는 일부 기존 시나리오에 시간 초과가 있었다. 동일한 최종 소스 `2f2c621`의 GitHub Ubuntu CI에서는 34개 전체 브라우저 검사와 단위 211개·구문·미러·Android 검사가 모두 통과했다. [전체 CI 실행 로그](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/39983130563).
 - PC 합성 계산 측정: 10,001개 좌표·100개 회전의 모델 생성 약 87ms, 14,400개 위치의 매칭/다음 회전 계산 약 891ms. 지도 렌더링·네이티브 GPS·배터리를 포함하지 않는 계산 측정이며 실제 1시간 주행 또는 메모리 안정성 검증이 아니다.
+
+## 배포 완료 검증
+
+- [배포 워크플로](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40000651143): 단위 211개·브라우저 34개·Android 검사 및 정식 서명 빌드 모두 성공. 앱 소스 커밋 `2f2c621f0aedea75e1feb6653be5fce5168ab2fe`.
+- [공개 1.2.0 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.2.0)의 APK·update.json·SHA256SUMS.txt를 인증 없이 다시 내려받았다. 실제 APK가 `com.solaris.nav`, 1.2.0, versionCode 3, 정식 인증서 `59ea18b8…11f6977`이며 디버그 앱이 아님을 확인했다.
+- APK 크기 4,347,281바이트. SHA-256: `f5e52a281d79653b502f69a38e4c1b0dcb177de63e5088e952fb188c722edb35`.
+- 공개 업데이트 정보가 정식 1.1.0/versionCode 2에 업데이트를 제안하고, 1.2.0/versionCode 3에는 최신 버전으로 판정되는지 클라이언트 검증 함수로 확인했다. 실제 폰에서 설치·데이터 유지·주행을 수행한 결과는 아니다.
