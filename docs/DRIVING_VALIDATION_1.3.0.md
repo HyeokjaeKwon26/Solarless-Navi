@@ -66,4 +66,13 @@
 
 ## 배포 검증
 
-GitHub Actions 전체 검증과 서명 APK 생성 후 공개 APK·manifest·체크섬을 다시 내려받아 패키지/버전/인증서/무결성을 확인한다. 최종 결과와 공개 링크는 완료 후 이 절에 기록한다.
+2026-10-23 공개 배포와 재다운로드 검증을 완료했다.
+
+- 배포 소스/태그: `6436cb5bbc75dd4e359e8251045b75c6b81d58e6` / `app-v1.3.0`.
+- [최종 소스 기본 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40019396774)와 [정식 배포 검증·서명·게시](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40019403544) 모두 성공. 배포 검증 서버의 Ubuntu 패키지 다운로드 지연으로 같은 소스의 작업을 재실행했으며 검증 단계를 생략하지 않았다.
+- [공개 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.0) / [APK 다운로드](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.0/SolarLessNavi-1.3.0.apk). 공개 APK, `update.json`, `SHA256SUMS.txt`를 인증 없이 다시 내려받았다.
+- APK 크기: 4,376,902 bytes. SHA-256: `f706ac08a0441315f74d4114757f5a1a7918f514dc7a2d36fc814e3fb76cdaaa`.
+- APK 암호학적 서명 검증 통과. 위의 기존 정식 인증서, `com.solaris.nav`, 1.3.0/code 4, 디버그 비활성 확인.
+- 앱 업데이트 검증 함수가 정식 1.2.0/code 3에는 업데이트를 제안하고 1.3.0/code 4에는 최신 버전으로 판정함을 확인했다.
+- 버전 2 진단 파일의 네이티브 GPS 30개 재생 smoke 검사: 유효 fix 30개, 경로 매칭 30개. 정답 라벨이 없으므로 오재탐색률은 `null`로 유지했다.
+- ADB 연결 기기는 없었다. 실제 폰 설치·설정 유지·차량 음성·주행 결과는 위 체크리스트에 따라 별도 확인해야 한다.
