@@ -20,9 +20,11 @@
 - `node tools/check-live-update.cjs`는 실제 공개 GitHub 응답을 Chromium에서 실행하는 배포 코드에 전달한다. 현재 코드와 이전 설치 코드의 판정을 모두 확인한다.
 - 이 smoke 검증의 설치 정보는 모의 값이며 HTTP 전달은 Node가 중계한다. Android HTTP 프록시와 실제 설치기/데이터 유지 검증을 대신하지 않는다.
 
-## 실제 폰 확인
+## 자동 검증 결과
 
 로컬 자동 검증 결과: Node 231개, 브라우저 root/www 62개, Android JVM 11개 통과. Android debug 빌드와 lint 성공(0 errors, 기존 19 warnings). root/www 50개 파일 SHA-256 일치, npm audit 취약점 0개. 공개 서버 smoke 검증에서 최신/새 버전 판정 모두 통과했다.
+
+## 실제 폰 확인
 
 1. 1.3.2는 조회 코드 자체에 오류가 있으므로 1.3.3 APK를 직접 받아 기존 앱 위에 설치한다. 기존 앱을 삭제하지 않는다.
 2. 설정의 업데이트 확인에서 `최신 버전입니다 (1.3.3)`가 표시되는지 확인한다.
@@ -30,3 +32,15 @@
 4. 다운로드, 설치 권한 승인/취소, Android 설치 완료 및 설정·즐겨찾기·기록 유지 여부를 확인한다.
 
 이 변경의 확인에는 실제 주행이 필요하지 않다. 연결된 실기기가 없어 폰에서의 확인은 아직 하지 않았다.
+
+## 공개 배포 검증
+
+- 앱 소스: `048a7ceb57935efbe00a88466f561bae1cf99466`
+- [전체 검증 및 서명 APK 배포 성공](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40030637513)
+- [1.3.3 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.3)
+- 공개 APK 재다운로드 후 apksigner/aapt 검증: `com.solaris.nav`, 1.3.3/code 7, minSdk 22, non-debuggable, 4,380,435 bytes.
+- 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`
+- APK SHA-256: `6efe5a8f293526877ef9a7370966240a8529dea0fd15d8aa8e27c13c0a5f6c5b`
+- update.json 및 SHA256SUMS.txt와 파일 일치. 동일 서명의 1.3.0/1.3.1/1.3.2는 업데이트 대상, 1.3.3은 최신으로 판정했다.
+- 배포 직후 실제 updater의 공개 서버 조회는 태그 2,245 bytes + 1.3.3 릴리스 8,073 bytes + manifest 1,506 bytes로 성공했다. 이전 설치 코드에서는 새 버전, 현재 설치 코드에서는 `Up to date (1.3.3).`가 표시됐다.
+- 별도 일반 CI의 첫 실행은 Ubuntu 패키지 미러 다운로드 지연으로 중단 후 동일 소스로 재시도했다. 배포용 전체 검증은 생략 없이 성공했다.
