@@ -245,7 +245,7 @@ gradlew.bat assembleDebug
 cd ..
 ```
 
-서명된 release는 저장소 밖의 `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`를 사용합니다. 배포 시 원본 APK의 인증서·패키지·버전을 필수 검증합니다. 앱 내 업데이트와 GitHub APK 자동 배포 설정, 현재 원본 키 미확보 상태 및 실기기 검증 항목은 [업데이트 문서](docs/APP_UPDATES.md)를 참고하세요.
+서명된 release는 저장소 밖의 `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`를 사용합니다. 배포 시 app-release.json에 고정된 정식 인증서·패키지·버전을 필수 검증합니다. 앱 내 업데이트와 GitHub APK 자동 배포 설정, 새 서명키로의 최초 재설치·키 백업 및 실기기 검증 항목은 [업데이트 문서](docs/APP_UPDATES.md)를 참고하세요.
 
 ## 면책조항
 

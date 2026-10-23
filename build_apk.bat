@@ -99,7 +99,7 @@ if not exist "%OUT_APK%" (
     exit /b 3
 )
 
-rem Enforce the same original certificate, version and package as GitHub releases.
+rem Enforce the pinned release certificate, version and package from app-release.json.
 rem Preserve the original v1.0 APK; new outputs belong in dist-release.
 pushd "%ROOT_DIR%"
 node tools/generate-update.mjs "%OUT_APK%" "dist-release"

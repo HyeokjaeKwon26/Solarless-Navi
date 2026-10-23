@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Publish a signed APK using the original signing key (false = validation only)'
+        description: 'Publish a signed APK using the pinned release key (false = validation only)'
         type: boolean
         default: false
 
@@ -20,6 +20,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -52,6 +53,7 @@ jobs:
     needs: validate
     if: startsWith(github.ref, 'refs/tags/app-v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -79,7 +81,7 @@ jobs:
           tag="app-v$(node -p "require('./app-release.json').versionName")"
           if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$tag" ]]; then exit 1; fi
           if gh release view "$tag" >/dev/null 2>&1; then echo 'Release already exists; refusing to overwrite.'; exit 1; fi
-      - name: Restore original signing key
+      - name: Restore pinned release signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
@@ -88,16 +90,16 @@ jobs:
         run: |
           set -euo pipefail
           for name in KEYSTORE_BASE64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
-            if [[ -z "${!name}" ]]; then echo "Missing required signing secret: $name. Original key is required."; exit 1; fi
+            if [[ -z "${!name}" ]]; then echo "Missing required signing secret: $name. Pinned release key is required."; exit 1; fi
           done
           umask 077
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/solarless-original.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/solarless-release.keystore"
       - run: npm ci
       - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
       - run: npx cap sync android
       - name: Build signed release
         env:
-          RELEASE_STORE_FILE: ${{ runner.temp }}/solarless-original.keystore
+          RELEASE_STORE_FILE: ${{ runner.temp }}/solarless-release.keystore
           RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -116,4 +118,4 @@ jobs:
           gh release create "$tag" dist-release/* --target "$GITHUB_SHA" --title "SolarLess Navi ${tag#app-v}" --notes-file docs/RELEASE_NOTES.md
       - name: Remove signing key
         if: always()
-        run: rm -f -- "$RUNNER_TEMP/solarless-original.keystore"
+        run: rm -f -- "$RUNNER_TEMP/solarless-release.keystore"

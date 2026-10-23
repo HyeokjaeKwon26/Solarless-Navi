@@ -13,6 +13,9 @@ for (const tag of tags) {
         continue;
     }
     const previous = JSON.parse(execFileSync('git', ['show', `${tag}:app-release.json`], { encoding: 'utf8' }));
+    if (config.packageName !== previous.packageName || config.certificateSha256 !== previous.certificateSha256) {
+        throw new Error(`Package and signing certificate must remain compatible with ${tag}`);
+    }
     if (config.versionCode <= previous.versionCode) throw new Error(`versionCode must exceed ${tag}`);
     const a = config.versionName.split('.').map(Number), b = previous.versionName.split('.').map(Number);
     const order = a.findIndex((value, i) => value !== b[i]);

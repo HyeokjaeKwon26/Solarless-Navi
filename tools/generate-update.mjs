@@ -9,7 +9,7 @@ export function validateApkMetadata(config, certificateOutput, badging) {
         config.versionCode < 2 || config.versionCode > 2100000000 || config.packageName !== 'com.solaris.nav' ||
         !/^[a-f0-9]{64}$/.test(config.certificateSha256)) throw new Error('Invalid release configuration');
     const signers = [...certificateOutput.matchAll(/certificate SHA-256 digest:\s*([a-f0-9]+)/gi)].map(match => match[1].toLowerCase());
-    if (signers.length !== 1 || signers[0] !== config.certificateSha256) throw new Error('SIGNATURE_MISMATCH: release must use the original SolarLessNavi_v1.0.apk key');
+    if (signers.length !== 1 || signers[0] !== config.certificateSha256) throw new Error('SIGNATURE_MISMATCH: release must use the pinned certificate in app-release.json');
     const info = badging.match(/package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'/);
     const minSdk = badging.match(/sdkVersion:'(\d+)'/);
     if (!info || info[1] !== config.packageName || Number(info[2]) !== config.versionCode || info[3] !== config.versionName ||
@@ -41,5 +41,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     fs.writeFileSync(path.join(outputFolder, `SolarLessNavi-${config.versionName}.apk`), apk);
     fs.writeFileSync(path.join(outputFolder, 'update.json'), JSON.stringify(manifest, null, 2) + '\n');
     fs.writeFileSync(path.join(outputFolder, 'SHA256SUMS.txt'), `${manifest.sha256}  SolarLessNavi-${config.versionName}.apk\n`);
-    console.log(`Verified ${config.packageName} ${config.versionName} (${config.versionCode}); signing certificate matches original APK.`);
+    console.log(`Verified ${config.packageName} ${config.versionName} (${config.versionCode}); signing certificate matches app-release.json.`);
 }

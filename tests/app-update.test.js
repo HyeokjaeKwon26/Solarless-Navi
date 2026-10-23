@@ -35,13 +35,16 @@ test('invalid update manifests cannot reach native download', () => {
         assert.throws(() => utils.validateUpdate({ ...manifest, ...patch }, installed, 'app-v1.1.0'), /INVALID_UPDATE/);
     }
 });
-test('release packaging verifies original signer and actual APK version before creating metadata', async () => {
+test('release packaging verifies pinned signer and actual APK version before creating metadata', async () => {
     const { validateApkMetadata, buildManifest } = await import('../tools/generate-update.mjs');
     const cert = `Signer #1 certificate SHA-256 digest: ${config.certificateSha256}`;
     const badge = "package: name='com.solaris.nav' versionCode='2' versionName='1.1.0'\nsdkVersion:'22'";
     validateApkMetadata(config, cert, badge);
     assert.throws(() => validateApkMetadata(config, cert.replace(config.certificateSha256, 'b'.repeat(64)), badge), /SIGNATURE_MISMATCH/);
     assert.throws(() => validateApkMetadata(config, cert + '\n' + cert, badge), /SIGNATURE_MISMATCH/);
+    const legacyCert = '8ec1a26e9c1eefeac384660973a0a9a99341071f1233ab196d315b3ce40a0a0d';
+    assert.notEqual(config.certificateSha256, legacyCert);
+    assert.throws(() => validateApkMetadata(config, cert.replace(config.certificateSha256, legacyCert), badge), /SIGNATURE_MISMATCH/);
     assert.throws(() => validateApkMetadata(config, cert, badge.replace("versionCode='2'", "versionCode='1'")), /package\/version/);
     const bytes = Buffer.from('fixture APK bytes');
     const output = buildManifest(config, bytes, '<script>plain release notes</script>');
