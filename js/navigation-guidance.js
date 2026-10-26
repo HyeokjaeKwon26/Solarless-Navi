@@ -122,7 +122,8 @@
     function shouldConserve(health, previous = false) {
         if (!health) return false;
         return health.powerSaveMode === true || Number(health.thermalStatus) >= 2 ||
-            (Number.isFinite(health.batteryPercent) && health.batteryPercent >= 0 && !health.charging && health.batteryPercent <= (previous ? 20 : 15));
+            (Number.isFinite(health.batteryPercent) && health.batteryPercent >= 0 && !health.charging &&
+                health.externalPowerConnected !== true && health.batteryPercent <= (previous ? 20 : 15));
     }
     return { model, match, next, thresholds, roadLabel, validSession, shouldConserve };
 });

@@ -66,9 +66,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let isBatterySaverActive = false;
     let manualBatterySaver = false;
     let automaticBatterySaver = false;
+    // A manual return to normal wins for this app run, including subsequent
+    // device-health polls. A fresh launch can apply automatic protection again.
+    let automaticBatterySaverSuppressed = false;
     let runtimeHealth = null;
     let lastRuntimeHealthAt = 0;
     let runtimeHealthPending = false;
+    let runtimeHealthRefreshQueued = false;
+    let runtimeHealthListener = null;
+    let runtimeHealthDisposed = false;
     try { manualBatterySaver = localStorage.getItem('solarless_battery_saver') === 'true'; } catch (e) {}
     isBatterySaverActive = manualBatterySaver;
     let isAutoFreeDriveEnabled = true;
@@ -216,6 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function refreshGuidanceHealth() {
+        if (document.visibilityState !== 'hidden') refreshRuntimeHealth();
         let status = document.getElementById('guidance-health');
         if (!status) {
             status = document.createElement('div');
@@ -226,13 +233,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const isKo = I18n.getLanguage().startsWith('ko');
         let message = '';
         if (isLiveNavActive && !navigationSessionArrived) {
-            refreshRuntimeHealth();
             const gpsStale = !lastReliableFixAt || Date.now() - lastReliableFixAt > 10000;
             if (gpsStale) message = isKo ? 'GPS 신호 확인 중 · 위치와 회전 안내가 갱신되지 않습니다' : 'Waiting for GPS · position and turn guidance are not updating';
             else if (navigator.onLine === false) message = RoadPack.graph ? (isKo ? '오프라인 · 저장 지역 안에서 도로 재탐색 가능' : 'Offline · rerouting within saved roads') : isKo ? '오프라인 · 기존 경로 유지, 새 경로 탐색 대기' : 'Offline · keeping existing route; rerouting unavailable';
             else if (routingUnavailable) message = isKo ? '경로 서버 연결 대기 · 기존 경로 유지' : 'Routing service unavailable · keeping existing route';
             else if (offRouteEvidence.confirmed) message = isKo ? '경로 이탈 · 새 경로 확인 중' : 'Off route · waiting for a verified route';
-            else if (automaticBatterySaver) message = isKo ? '기기 상태에 따라 자동 절전 중' : 'Automatic battery saver active';
+            else if (automaticBatterySaver && isBatterySaverActive && !manualBatterySaver) message = isKo ? '기기 상태에 따라 자동 절전 중' : 'Automatic battery saver active';
             if (gpsStale && !isFreeDriveMode) {
                 TTSVoice.pauseGuidance();
                 document.getElementById('banner-dist').textContent = '—';
@@ -1547,33 +1553,72 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* OLED HEAT & BATTERY SAVER MODE TOGGLE */
     function applyBatterySaverState() {
-        isBatterySaverActive = manualBatterySaver || automaticBatterySaver;
+        isBatterySaverActive = manualBatterySaver || (automaticBatterySaver && !automaticBatterySaverSuppressed);
         document.body.classList.toggle('battery-saver-active', isBatterySaverActive);
         const button = document.getElementById('btn-toggle-battery-saver');
         if (button) {
             button.classList.toggle('active', isBatterySaverActive);
             button.setAttribute('aria-pressed', String(isBatterySaverActive));
-            button.title = automaticBatterySaver
-                ? (I18n.getLanguage().startsWith('ko') ? '기기 발열·배터리 상태에 따른 자동 절전' : 'Automatic saver for device temperature or battery') : '';
+            const ko = I18n.getLanguage().startsWith('ko');
+            button.title = isBatterySaverActive
+                ? (ko ? '절전 중 · 눌러 일반 모드로 전환' : 'Battery saver active · Switch to normal mode')
+                : (ko ? '일반 모드 · 눌러 절전 모드로 전환' : 'Normal mode · Switch to battery saver');
         }
     }
     function toggleBatterySaverMode() {
-        manualBatterySaver = !manualBatterySaver;
+        manualBatterySaver = !isBatterySaverActive;
+        automaticBatterySaverSuppressed = !manualBatterySaver;
         try { localStorage.setItem('solarless_battery_saver', String(manualBatterySaver)); } catch (e) {}
         applyBatterySaverState();
     }
-    async function refreshRuntimeHealth() {
-        if (runtimeHealthPending || Date.now() - lastRuntimeHealthAt < 30000) return;
+    async function refreshRuntimeHealth(force = false) {
+        if (runtimeHealthDisposed) return;
+        if (runtimeHealthPending) {
+            if (force) runtimeHealthRefreshQueued = true;
+            return;
+        }
+        if (!force && Date.now() - lastRuntimeHealthAt < 30000) return;
         const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Pip;
         if (!plugin || typeof plugin.getRuntimeHealth !== 'function') return;
         runtimeHealthPending = true;
         lastRuntimeHealthAt = Date.now();
         try {
-            runtimeHealth = await plugin.getRuntimeHealth();
+            const health = await plugin.getRuntimeHealth();
+            // A charging event can arrive while the old reading is in flight.
+            // Discard it and fetch the latest state before updating the screen.
+            if (runtimeHealthDisposed || runtimeHealthRefreshQueued) return;
+            runtimeHealth = health;
             automaticBatterySaver = NavigationGuidance.shouldConserve(runtimeHealth, automaticBatterySaver);
             applyBatterySaverState();
         } catch (e) { /* Older bridge versions do not expose device health. */ }
-        finally { runtimeHealthPending = false; }
+        finally {
+            runtimeHealthPending = false;
+            if (runtimeHealthRefreshQueued && !runtimeHealthDisposed) {
+                runtimeHealthRefreshQueued = false;
+                refreshRuntimeHealth(true);
+            }
+        }
+    }
+
+    function setupRuntimeHealthListener() {
+        const plugin = window.Capacitor?.Plugins?.Pip;
+        if (plugin?.addListener) {
+            Promise.resolve(plugin.addListener('runtimeHealthChanged', () => refreshRuntimeHealth(true)))
+                .then(listener => {
+                    if (runtimeHealthDisposed) listener?.remove().catch(() => {});
+                    else runtimeHealthListener = listener;
+                }).catch(() => {});
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'hidden') refreshRuntimeHealth(true);
+        });
+        window.addEventListener('pageshow', event => { if (event.persisted) refreshRuntimeHealth(true); });
+        window.addEventListener('pagehide', event => {
+            if (event.persisted) return;
+            runtimeHealthDisposed = true;
+            runtimeHealthListener?.remove().catch(() => {});
+        });
+        refreshRuntimeHealth(true);
     }
 
     /* SHADED REST SPOT & PARKING WAYPOINT SEARCH */
@@ -2150,6 +2195,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     return;
                 }
+                refreshRuntimeHealth(true);
                 if (isLiveNavActive) {
                     resumeLiveNavigationAfterInterruption();
                 } else if (currentEnd) {
@@ -5510,6 +5556,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     // Check once per fresh app launch, independently of map or GPS readiness.
     appUpdater.check(false);
+    setupRuntimeHealthListener();
 
     initMap();
 });

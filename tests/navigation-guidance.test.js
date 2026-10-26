@@ -88,6 +88,8 @@ test('automatic saver uses thermal state and battery hysteresis without treating
     assert.equal(guidance.shouldConserve({ powerSaveMode: true }), true);
     assert.equal(guidance.shouldConserve({ batteryPercent: 14, charging: false }), true);
     assert.equal(guidance.shouldConserve({ batteryPercent: 14, charging: true }), false);
+    assert.equal(guidance.shouldConserve({ batteryPercent: 14, charging: false, externalPowerConnected: true }), false);
+    assert.equal(guidance.shouldConserve({ batteryPercent: 14, externalPowerConnected: true, thermalStatus: 2 }), true);
     assert.equal(guidance.shouldConserve({ batteryPercent: 18 }, true), true);
     assert.equal(guidance.shouldConserve({ batteryPercent: 18 }, false), false);
     assert.equal(guidance.shouldConserve({ batteryPercent: 21 }, true), false);

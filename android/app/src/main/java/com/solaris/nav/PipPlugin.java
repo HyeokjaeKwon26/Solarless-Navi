@@ -34,6 +34,7 @@ public class PipPlugin extends Plugin {
     private static boolean navigationActive;
     private static boolean autoEnter = true;
     private BroadcastReceiver locationReceiver;
+    private BroadcastReceiver runtimeHealthReceiver;
 
     public static void dispatchSpeechResume() {
         if (instance != null) instance.notifyListeners("speechResume", new JSObject());
@@ -102,6 +103,8 @@ public class PipPlugin extends Plugin {
             if (level >= 0 && scale > 0) result.put("batteryPercent", 100.0 * level / scale);
             int status = battery.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
             result.put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL);
+            // Battery protection can pause charging while external power remains connected.
+            result.put("externalPowerConnected", battery.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0);
             if (battery.hasExtra(BatteryManager.EXTRA_TEMPERATURE)) {
                 result.put("batteryTemperatureC", battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0);
             }
@@ -146,6 +149,17 @@ public class PipPlugin extends Plugin {
     @Override
     public void load() {
         instance = this;
+        runtimeHealthReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                notifyListeners("runtimeHealthChanged", new JSObject());
+            }
+        };
+        IntentFilter healthFilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+        healthFilter.addAction(Intent.ACTION_POWER_CONNECTED);
+        healthFilter.addAction(Intent.ACTION_POWER_DISCONNECTED);
+        healthFilter.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
+        androidx.core.content.ContextCompat.registerReceiver(getContext(), runtimeHealthReceiver, healthFilter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
         navigationActive = LocationForegroundService.isRunning();
         locationReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
@@ -184,6 +198,10 @@ public class PipPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        if (runtimeHealthReceiver != null) {
+            try { getContext().unregisterReceiver(runtimeHealthReceiver); } catch (Exception ignored) { }
+            runtimeHealthReceiver = null;
+        }
         if (locationReceiver != null) {
             try { getContext().unregisterReceiver(locationReceiver); } catch (Exception ignored) { }
             locationReceiver = null;

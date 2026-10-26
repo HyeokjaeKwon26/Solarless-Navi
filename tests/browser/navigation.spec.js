@@ -437,6 +437,110 @@ test('restart restores the saved destination and toll preference through a fresh
     expect(state.errors).toEqual([]);
 });
 
+async function batteryFixture(page, health) {
+    const state = await fixtures(page, { brokenMap: true });
+    await page.addInitScript(initial => {
+        const callbacks = new Map();
+        window.healthTest = {
+            health: initial, calls: 0, deferNext: false,
+            emit(next) { this.health = { ...this.health, ...next }; callbacks.get('runtimeHealthChanged')?.(); }
+        };
+        window.Capacitor = { isNativePlatform: () => false, Plugins: { Pip: {
+            addListener: async (name, callback) => {
+                callbacks.set(name, callback);
+                return { remove: async () => callbacks.delete(name) };
+            },
+            getRuntimeHealth: async () => {
+                window.healthTest.calls++;
+                const snapshot = { ...window.healthTest.health };
+                if (window.healthTest.deferNext) {
+                    window.healthTest.deferNext = false;
+                    return new Promise(resolve => { window.healthTest.finishRead = () => resolve(snapshot); });
+                }
+                return snapshot;
+            }
+        } } };
+    }, health);
+    await page.goto('./');
+    await expect.poll(() => page.evaluate(() => window.healthTest.calls)).toBeGreaterThan(0);
+    return state;
+}
+
+test('automatic saver can be turned off and later health checks respect normal mode', async ({ page }) => {
+    const state = await batteryFixture(page, { batteryPercent: 10, charging: false, powerSaveMode: true, thermalStatus: 2 });
+    await expect(page.locator('body')).toHaveClass(/battery-saver-active/);
+    await page.locator('#btn-start-free-drive').click();
+    const button = page.locator('#btn-toggle-battery-saver');
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('body')).not.toHaveClass(/battery-saver-active/);
+    expect(await page.evaluate(() => localStorage.getItem('solarless_battery_saver'))).toBe('false');
+    const before = await page.evaluate(() => window.healthTest.calls);
+    await page.clock.setFixedTime(new Date(Date.now() + 31000));
+    await expect.poll(() => page.evaluate(() => window.healthTest.calls)).toBeGreaterThan(before);
+    await expect(page.locator('body')).not.toHaveClass(/battery-saver-active/);
+    await expect(page.locator('#guidance-health')).not.toContainText('Automatic battery saver active');
+    await page.evaluate(() => window.healthTest.emit({ charging: true, externalPowerConnected: true }));
+    await expect(button).toHaveAttribute('aria-pressed', 'false');
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'true');
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'false');
+    await page.reload();
+    await expect(page.locator('body')).toHaveClass(/battery-saver-active/);
+    expect(state.errors).toEqual([]);
+});
+
+test('charging and resume update automatic saver even before navigation starts', async ({ page }) => {
+    const state = await batteryFixture(page, { batteryPercent: 10, charging: false });
+    await expect(page.locator('body')).toHaveClass(/battery-saver-active/);
+    await page.evaluate(() => window.healthTest.emit({ externalPowerConnected: true }));
+    await expect(page.locator('body')).not.toHaveClass(/battery-saver-active/);
+    await page.evaluate(() => window.healthTest.emit({ externalPowerConnected: false }));
+    await expect(page.locator('body')).toHaveClass(/battery-saver-active/);
+    await page.evaluate(() => {
+        window.healthTest.health.charging = true;
+        document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect(page.locator('body')).not.toHaveClass(/battery-saver-active/);
+    expect(state.routes).toEqual([]);
+    expect(state.errors).toEqual([]);
+});
+
+test('charging event supersedes an in-flight device reading', async ({ page }) => {
+    const state = await batteryFixture(page, { batteryPercent: 10, charging: true });
+    await expect(page.locator('body')).not.toHaveClass(/battery-saver-active/);
+    await page.evaluate(() => {
+        window.healthTest.deferNext = true;
+        window.healthTest.emit({ charging: false });
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.healthTest.finishRead)).toBe('function');
+    const before = await page.evaluate(() => window.healthTest.calls);
+    await page.evaluate(() => {
+        window.healthTest.emit({ charging: true });
+        window.healthTest.finishRead();
+    });
+    await expect.poll(() => page.evaluate(() => window.healthTest.calls)).toBeGreaterThan(before);
+    await expect(page.locator('body')).not.toHaveClass(/battery-saver-active/);
+    expect(state.errors).toEqual([]);
+});
+
+test('manual saver remains on when plugged in and can still be switched off', async ({ page }) => {
+    const state = await batteryFixture(page, { batteryPercent: 90, charging: false });
+    await page.locator('#btn-start-free-drive').click();
+    const button = page.locator('#btn-toggle-battery-saver');
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'true');
+    await page.evaluate(() => window.healthTest.emit({ charging: true, externalPowerConnected: true }));
+    await expect(button).toHaveAttribute('aria-pressed', 'true');
+    await page.reload();
+    await expect(page.locator('body')).toHaveClass(/battery-saver-active/);
+    await page.locator('#btn-start-free-drive').click();
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'false');
+    expect(state.errors).toEqual([]);
+});
+
 test('manual battery saver persists across a page restart', async ({ page }) => {
     const state = await fixtures(page);
     await page.goto('./');
