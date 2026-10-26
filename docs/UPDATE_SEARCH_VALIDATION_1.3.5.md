@@ -26,3 +26,23 @@
 3. 폰의 현재 위치에서 선택한 목적지의 경로·동일 경로 안내 확인. 지도상의 출발점과 목적지가 의도한 위치인지 확인.
 4. 이후 더 높은 버전이 배포되면 앱 내 다운로드 진행률, 검증 완료, 알 수 없는 앱 설치 허용, 설치 화면 전환 및 데이터 유지 확인. 이번 JVM 테스트는 Android 기기에서의 실제 설치를 대신하지 않는다.
 5. 실제 도로 진입·회전 안내·GPS 추종은 별도 주행 확인. 운전 중 화면을 조작하지 않고 동승자 또는 저장 진단 기록으로 확인.
+
+## 실행 결과
+
+- 소스 커밋: `e6e53114a12efb34e00e376faa5ed92de42618ed`.
+- 로컬 Node 233개, root/www 브라우저 72개, Android JVM 15개: 총 320개 통과. 브라우저 검색 버튼의 이벤트 전파 문제를 테스트에서 발견해 수정한 뒤 전체 72개를 다시 통과했다.
+- `assembleDebug`, `lintDebug` 성공. lint 오류 0개, 기존 경고 19개. root/www 50개 파일 SHA-256 일치. npm audit 취약점 0개.
+- [일반 GitHub CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40390541625) 및 [APK 검증·배포 워크플로](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40390559504)의 validate/publish 모두 성공.
+- 실제 공개 검색 API로 `94 gerry road` 전체 검색 시 Brookline 후보를 첫 번째로 확인했다. 자동완성만으로는 여전히 Photon에 해당 주소가 없으므로 명시적 전체 검색을 사용한다.
+- ADB 연결 기기는 없었다. 설치 화면·설정 보존·실제 주행은 확인하지 않았다.
+
+## 공개 배포 파일 검증
+
+- [1.3.5 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.5), [APK 직접 다운로드](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.5/SolarLessNavi-1.3.5.apk).
+- 버전 `1.3.5` / code `9`, 패키지 `com.solaris.nav`, minSdk `22`, debuggable=false.
+- APK 크기: `4,381,688` bytes.
+- APK SHA-256: `765a2dbebc531cb3aaabfd4bcbe3a466656ec29b9038fb6d911797a94bdbe6f4`.
+- 서명 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`. 기존 1.1.0 이후 정식 APK와 동일.
+- 공개 APK를 다시 다운로드해 `apksigner`, `aapt`, 업데이트 manifest 및 SHA256SUMS와 대조했다. APK 안의 app.js/geocoder.js/style.css는 배포 커밋의 Git 원본과 바이트 단위로 일치하며 새 네이티브 UpdateRequest 클래스도 포함돼 있다.
+- 공개 update.json을 실제 Capacitor PluginCall JSON으로 재파싱하고 배포 코드의 UpdateRequest에 전달: 기존 getter는 0, 수정된 파서는 크기 4381688 / 버전 9를 읽고 검증 통과. 내려받은 APK의 실제 바이트 수와 해시도 일치했다. JVM 재현이며 Android 기기의 다운로드·설치 전체 실행은 아니다.
+- 실제 공개 GitHub 응답을 사용하는 브라우저 업데이트 확인: 현재 버전은 최신, 이전 버전은 업데이트 가능으로 표시. 설치 앱 정보는 시뮬레이션했다.
