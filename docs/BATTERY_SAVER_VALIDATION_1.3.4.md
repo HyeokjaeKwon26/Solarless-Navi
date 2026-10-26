@@ -38,3 +38,16 @@
 5. 화면 꺼짐/잠금 및 앱 백그라운드 동안 충전 상태를 바꾼 뒤 복귀해 상태 확인.
 6. 수동 절전 켜기 → 충전기 연결 → 절전 유지 → 버튼으로 해제.
 7. 일반 모드를 수동 선택한 실행에서는 자동 전환이 억제되고, 앱을 완전히 새로 실행하면 자동 판단이 다시 적용되는지 확인.
+
+## 공개 배포 검증
+
+- 앱 소스: `3b4992bdc32a97e59324e8cdc68b78981510cf03`
+- [일반 CI 성공](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40379878695)
+- [전체 검증 및 APK 배포 성공](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40379877586)
+- [1.3.4 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.4)
+- 공개 APK 재다운로드 후 apksigner/aapt 검증: `com.solaris.nav`, 1.3.4/code 8, minSdk 22, non-debuggable, 4,380,808 bytes.
+- 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`
+- APK SHA-256: `ffc44af2a370c73a7c6311bb85e5c197854f2aeb8989390823a663de9ff01c8b`
+- 공개 update.json 및 SHA256SUMS.txt와 파일 일치. 동일 서명의 1.3.3/code 7은 업데이트 대상, 1.3.4/code 8은 최신으로 판정했다.
+- 공개 APK의 `assets/public/js/app.js`, `js/navigation-guidance.js`가 위 소스 커밋의 www 파일과 바이트 단위로 일치함을 확인했다. DEX에도 `runtimeHealthChanged`, `externalPowerConnected`가 포함됐다.
+- 실제 공개 GitHub 응답을 앱의 updater 코드에 전달하는 Chromium smoke 검증에서 최신/새 버전 판정 모두 성공했다. 설치 정보 및 Android 이벤트는 모의 검증이므로 실기기 설치·충전 동작 검증을 대신하지 않는다.
