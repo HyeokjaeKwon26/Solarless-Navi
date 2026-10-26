@@ -3877,7 +3877,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 2. Glare-Free Route (estimated glare possibility and solar exposure)
         const glrDiffText = glr.id === fst.id
-            ? (isKo ? '유의미한 대안 경로 없음' : 'No meaningful alternative route')
+            ? (isKo ? '최단시간 경로와 동일 · 탐색한 후보 중 허용 우회시간 내 역광 감소 기준을 충족한 경로가 없습니다.' : 'Same as fastest · No explored alternative met the glare-reduction and detour limits.')
             : formatRouteDetourText(glrMin, glrKmNum, fstMin, fstKmNum);
         document.getElementById('eta-glare').innerText = `⏱️ ${glrMin}${isKo ? '분' : 'm'} (${glrKm}km)`;
 
@@ -3894,7 +3894,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 3. Shade Route (estimated shade possibility and solar exposure)
         const shdDiffText = shd.id === fst.id
-            ? (isKo ? '유의미한 대안 경로 없음' : 'No meaningful alternative route')
+            ? (isKo ? '최단시간 경로와 동일 · 탐색한 후보 중 허용 우회시간 내 햇빛 노출 감소 기준을 충족한 경로가 없습니다.' : 'Same as fastest · No explored alternative met the sun-exposure and detour limits.')
             : formatRouteDetourText(shdMin, shdKmNum, fstMin, fstKmNum);
         document.getElementById('eta-shade').innerText = `⏱️ ${shdMin}${isKo ? '분' : 'm'} (${shdKm}km)`;
 
@@ -4245,6 +4245,23 @@ document.addEventListener('DOMContentLoaded', () => {
             dropdown.classList.add('active');
             input.setAttribute('aria-expanded', 'true');
         };
+        const offerAddressSearch = () => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'result-item search-address-action';
+            item.textContent = I18n.getLanguage().startsWith('ko')
+                ? `입력한 주소 검색: ${input.value.trim()}`
+                : `Search this address: ${input.value.trim()}`;
+            item.addEventListener('click', event => {
+                // runSearch replaces this button; do not let the outside-click
+                // handler mistake the detached target for dismissing the search.
+                event.stopPropagation();
+                runSearch(true);
+            });
+            dropdown.prepend(item);
+            dropdown.classList.add('active');
+            input.setAttribute('aria-expanded', 'true');
+        };
         const runSearch = async (submitted = false) => {
             cancel();
             const generation = requestGeneration;
@@ -4264,6 +4281,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (generation !== requestGeneration || (e && e.name === 'AbortError')) return;
                 console.warn('Autocomplete search unavailable:', e);
                 status(isKo ? '검색 서비스에 연결하지 못했습니다. 다시 검색해 주세요.' : 'Search unavailable. Please try again.');
+                offerAddressSearch();
                 return;
             }
             if (generation !== requestGeneration) return;
@@ -4272,7 +4290,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!results || results.length === 0) {
                 status(submitted
                     ? (isKo ? '일치하는 주소가 없습니다. 도시·주 또는 우편번호를 추가해 주세요.' : 'No matching address. Add a city, state or postal code.')
-                    : (isKo ? '일치하는 추천 주소가 없습니다. 돋보기를 눌러 주소를 검색해 주세요.' : 'No matching suggestions. Tap the search icon to search the address.'));
+                    : (isKo ? '추천 목록에 없어도 주소를 검색할 수 있습니다. 위 버튼을 눌러 확인해 주세요.' : 'This address may still be available. Tap above to run a full address search.'));
+                if (!submitted) offerAddressSearch();
                 return;
             }
 
@@ -4318,6 +4337,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             dropdown.classList.add('active');
             input.setAttribute('aria-expanded', 'true');
+            if (!submitted) offerAddressSearch();
         };
         document.getElementById(`${inputId}-search`).addEventListener('click', () => runSearch(true));
         input.addEventListener('input', () => {

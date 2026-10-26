@@ -3407,10 +3407,12 @@ test('weather outage never prevents a valid OSRM candidate from returning with B
     }
 });
 
-test('identical purpose routes are labeled as no meaningful alternative', () => {
+test('identical purpose routes explain the fastest fallback and explored-candidate limits', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
-    assert.ok(appSource.includes('유의미한 대안 경로 없음'));
-    assert.ok(appSource.includes('No meaningful alternative route'));
+    assert.ok(appSource.includes('최단시간 경로와 동일'));
+    assert.ok(appSource.includes('Same as fastest'));
+    assert.ok(appSource.includes('No explored alternative met the glare-reduction and detour limits.'));
+    assert.ok(appSource.includes('No explored alternative met the sun-exposure and detour limits.'));
     assert.ok(appSource.includes('glr.id === fst.id'));
     assert.ok(appSource.includes('shd.id === fst.id'));
 });

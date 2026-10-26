@@ -687,7 +687,9 @@ window.Geocoder = (function () {
         }
 
         if (options.signal && options.signal.aborted) throw createApiError('ABORTED', 'searchNetworkError', cleanQ);
-        if (attemptedServices > 0 && failedServices === attemptedServices && results.length === 0) {
+        // A partial outage cannot establish that an address does not exist.
+        // In particular, Photon may have no match when Nominatim is offline.
+        if (failedServices > 0 && results.length === 0) {
             throw createApiError('SEARCH_UNAVAILABLE', 'searchNetworkError', cleanQ);
         }
 
@@ -701,7 +703,8 @@ window.Geocoder = (function () {
         } else if (looksLikeStreetAddress) results.sort((a, b) => addressMatchScore(b) - addressMatchScore(a));
 
         const finalResults = results.slice(0, 7);
-        cacheSearchResults(cacheKey, finalResults);
+        // Do not retain a transient empty/partial response for the whole session.
+        if (finalResults.length > 0 && failedServices === 0) cacheSearchResults(cacheKey, finalResults);
         return finalResults.map(item => ({ ...item }));
     }
 

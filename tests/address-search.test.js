@@ -13,6 +13,32 @@ const reply = data => ({ ok: true, json: async () => data });
 const feature = (house, street, name = '', locality = '') => ({ geometry: { coordinates: [-71.157, 42.3007] }, properties: {
     housenumber: house, street, name, locality, city: 'Brookline', state: 'Massachusetts', country: 'United States'
 } });
+test('submitted search reports a partial outage and retries instead of caching a false no-match', async () => {
+    let offline = true;
+    let calls = 0;
+    const api = geocoder(async url => {
+        if (url.includes('photon')) return reply({features:[]});
+        calls++;
+        if (offline) throw new Error('network unavailable');
+        return reply([{lat:'42.3006881',lon:'-71.1570098',
+            display_name:'94, Gerry Road, Brookline, Massachusetts, 02467',
+            address:{house_number:'94',road:'Gerry Road'}}]);
+    });
+    await assert.rejects(api.searchPlaces('94 gerry road'), {code:'SEARCH_UNAVAILABLE'});
+    offline = false;
+    const results = await api.searchPlaces('94 gerry road');
+    assert.equal(calls, 2);
+    assert.equal(results[0].lat, 42.3006881);
+    assert.match(results[0].displayName, /Brookline/);
+});
+
+test('empty successful search can be retried without reloading the app', async () => {
+    let available = false;
+    const api = geocoder(async () => reply({features:available ? [feature('94','Gerry Road')] : []}));
+    assert.equal((await api.searchPlaces('94 Gerry Rd', null, {includeNominatim:false})).length, 0);
+    available = true;
+    assert.equal((await api.searchPlaces('94 Gerry Rd', null, {includeNominatim:false})).length, 1);
+});
 test('numbered autocomplete rejects the screenshot bus stops, wrong number and a matching locality on another road', async () => {
     const urls = [];
     const api = geocoder(async url => { urls.push(url); return reply({ features: [

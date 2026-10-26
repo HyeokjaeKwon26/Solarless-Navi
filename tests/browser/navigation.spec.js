@@ -569,10 +569,10 @@ test('numbered address search hides fuzzy suggestions and requires choosing the 
     await page.goto('./');
     await expect(page.locator('#btn-close-start-search')).toHaveCount(0);
     await page.locator('#destination-input').fill('94 gerry rd');
-    await expect(page.locator('#destination-results')).toContainText('No matching suggestions');
+    await expect(page.locator('#destination-results')).toContainText('This address may still be available');
     expect(submits).toBe(0);
     await expect(page.locator('#destination-results [role="option"]')).toHaveCount(0);
-    await page.locator('#destination-input-search').click();
+    await page.getByRole('button', {name:'Search this address: 94 gerry rd', exact:true}).click();
     await expect(page.locator('#destination-results [role="option"]')).toHaveCount(2);
     expect(submits).toBe(1);
     expect(state.routes.length).toBe(0);
@@ -584,6 +584,38 @@ test('numbered address search hides fuzzy suggestions and requires choosing the 
     await expect(page.locator('#bar-dest-text')).toContainText('Brookline');
     await expect.poll(() => state.routes.length).toBeGreaterThan(0);
     expect(state.routes[0]).toEqual([-71.1570098,42.3006881]);
+    await expect(page.locator('#desc-glare')).toContainText('Same as fastest');
+    await expect(page.locator('#desc-shade')).toContainText('Same as fastest');
+    await expect(page.locator('#desc-glare')).not.toContainText('No meaningful alternative');
+    expect(state.errors).toEqual([]);
+});
+
+test('failed address lookup offers retry and recovers without restarting', async ({ page }) => {
+    const state = await fixtures(page, {brokenMap:true});
+    let offline = true;
+    await page.route('https://photon.komoot.io/**', route => route.fulfill({json:{features:[]}}));
+    await page.route('https://nominatim.openstreetmap.org/search?**', route => offline
+        ? route.fulfill({status:503,body:'unavailable'})
+        : route.fulfill({json:[{lat:'42.3006881',lon:'-71.1570098',
+            display_name:'94, Gerry Road, Brookline, Massachusetts, 02467',
+            address:{house_number:'94',road:'Gerry Road'}}]}));
+    await page.goto('./');
+    await page.locator('#destination-input').fill('94 gerry road');
+    await page.locator('#destination-input').press('Enter');
+    await expect(page.locator('#destination-results')).toContainText('Search unavailable');
+    await expect(page.locator('#destination-results')).not.toContainText('No matching address');
+    offline = false;
+    const retry = page.getByRole('button', {name:'Search this address: 94 gerry road',exact:true});
+    await page.setViewportSize({width:320,height:820});
+    await retry.scrollIntoViewIfNeeded();
+    const bounds = await retry.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    await retry.click();
+    await expect(page.locator('#destination-results [role="option"]')).toHaveCount(1);
+    await expect(page.locator('#destination-results')).toContainText('Brookline');
+    expect(state.routes).toEqual([]);
     expect(state.errors).toEqual([]);
 });
 

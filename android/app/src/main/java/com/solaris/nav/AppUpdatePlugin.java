@@ -130,12 +130,11 @@ public class AppUpdatePlugin extends Plugin {
             File target = null;
             try {
                 if (LocationForegroundService.isRunning()) throw new Exception("DRIVING");
-                String address = call.getString("url", "");
-                String hash = call.getString("sha256", "");
-                long size = call.getLong("sizeBytes", 0L);
-                long code = call.getLong("versionCode", 0L);
-                UpdatePolicy.checkUrl(address, false);
-                UpdatePolicy.checkMetadata(hash, size, code);
+                UpdateRequest metadata = UpdateRequest.fromCall(call);
+                String address = metadata.url;
+                String hash = metadata.sha256;
+                long size = metadata.sizeBytes;
+                long code = metadata.versionCode;
                 File folder = new File(getContext().getCacheDir(), "app-updates");
                 if (!folder.exists() && !folder.mkdirs()) throw new Exception("STORAGE_FAILED");
                 partial = new File(folder, "update.part");
