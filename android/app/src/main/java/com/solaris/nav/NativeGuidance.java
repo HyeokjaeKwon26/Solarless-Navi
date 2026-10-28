@@ -112,10 +112,22 @@ final class NativeGuidance {
             double distance = turn.optDouble("progressMeters", -1000) - at;
             if (distance < -8) continue;
             int phase = NavigationProgress.phase(distance, speed);
-            if (phase <= phases[i] || now - lastVoice < 2500) return;
+            if (phase <= phases[i] || (phase != 3 && now - lastVoice < 2500)) return;
             boolean ko = language.startsWith("ko");
-            String text = (phase == 1 ? GuidanceUnits.spokenDistance(distance, unitSystem, language) + (ko ? " 앞에서 " : " ahead, ") : (ko ? "잠시 후 " : "Shortly, ")) + turn.optString("text");
-            if (NavigationSpeech.get(context).speak(text, language, true)) {
+            String prefix = phase == 1 ? GuidanceUnits.spokenDistance(distance, unitSystem, language) + (ko ? " 앞에서 " : " ahead, ") : (phase == 3 ? (ko ? "곧 " : "Now, ") : (ko ? "잠시 후 " : "Shortly, "));
+            String text = prefix + turn.optString("text");
+            JSONArray segments = null;
+            try {
+                segments = SpeechPlan.prepend(prefix, language, turn);
+                JSONObject next = turn.optJSONObject("following");
+                if (phase >= 2 && next != null && next.optDouble("distanceAfter", 181) <= 180 && next.optDouble("distanceAfter", -1) >= 0) {
+                    String distanceText = GuidanceUnits.spokenDistance(next.optDouble("distanceAfter"), unitSystem, language);
+                    String following = ko ? " 이어서 " + distanceText + " 후 " + next.optString("text") + "입니다." : " Then in " + distanceText + ", " + next.optString("text") + ".";
+                    text += following;
+                    segments.put(new JSONObject().put("text", following).put("lang", language));
+                }
+            } catch (JSONException ignored) { }
+            if (NavigationSpeech.get(context).speak(text, language, true, segments)) {
                 phases[i] = phase; lastVoice = now;
                 try { DriveJournal.get(context).append("voice", new JSONObject().put("text", text).put("source", "native-background").put("timestamp", now)); } catch (JSONException ignored) { }
             }

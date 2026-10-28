@@ -33,6 +33,11 @@
         try {
             const tx = db.transaction('events', 'readwrite'); tx.objectStore('events').put(event);
             root.localStorage.setItem('solarless_recording_sequence', String(sequence));
+            // Callers that immediately reload/export may await durable commit.
+            return new Promise(resolve => {
+                tx.oncomplete = () => resolve(true);
+                tx.onerror = tx.onabort = () => resolve(false);
+            });
         } catch (e) { active = false; }
     }
     async function exportRecording(fallback) {

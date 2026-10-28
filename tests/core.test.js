@@ -2383,6 +2383,30 @@ test('short unnamed POI access tail ends car guidance at the last named road', (
     assert.equal(route.legs[0].steps[0].name, 'Washington Street');
 });
 
+test('explicitly adjusted arrival pin preserves the router access tail', () => {
+    const a=[-71.14,42.33],b=[-71.136896,42.340438],c=[-71.136486,42.340755];
+    const route={geometry:{coordinates:[a,b,c]},legs:[{steps:[
+        {name:'Washington Street',maneuver:{type:'turn'},geometry:{coordinates:[a,b]}},
+        {name:'',maneuver:{type:'turn'},geometry:{coordinates:[b,c]}},
+        {name:'',maneuver:{type:'arrive'},geometry:{coordinates:[c]}}]}]};
+    ShadowRouter.assignRoadDestination(route,[{location:a},{location:c}],true);
+    assert.deepEqual(JSON.parse(JSON.stringify(ShadowRouter.getRouteEndpoint(route))),{lat:c[1],lng:c[0]});
+    assert.equal(route.legs[0].steps.length,3);
+});
+
+test('unknown heading is unconstrained and changing heading cannot reuse a cached northbound route', async () => {
+    const originalFetch=sandbox.fetch, urls=[];
+    sandbox.fetch=async url=>{urls.push(String(url));return {ok:true,json:async()=>({routes:[{distance:1000,duration:100,geometry:{coordinates:[[0,0.123],[0.01,0.123]]},legs:[{steps:[]}]}]})};};
+    const options={viaRequestBudget:0,disableWeatherRefinement:true,reuseOsrmCache:true};
+    try {
+        for (const heading of [null,0,180,180]) await ShadowRouter.fetchAndAnalyzeRoutes({lat:0.123,lng:0},{lat:0.123,lng:0.01},new Date('2026-06-21T00:00:00Z'),false,{...options,startHeading:heading});
+        assert.equal(urls.length,3);
+        assert.ok(!urls[0].includes('bearings='));
+        assert.ok(urls[1].includes('bearings=0,60;'));
+        assert.ok(urls[2].includes('bearings=180,60;'));
+    } finally {sandbox.fetch=originalFetch;}
+});
+
 test('named road destination retains the OSRM snapped waypoint', () => {
     const route = {
         geometry: { coordinates: [[-71.14, 42.33], [-71.1365, 42.3407]] },
@@ -3011,7 +3035,7 @@ test('navigation start-stop is serialized and destination changes use a safe liv
     assert.ok(appSource.includes('verifiedRouteRequestKey = backup.verifiedRouteRequestKey'));
     assert.ok(appSource.includes('function captureLiveDestinationBackup()'));
     assert.ok(appSource.includes('function applyDestinationSelection(coords, name, options = {})'));
-    assert.ok(appSource.includes('applyDestinationSelection(fav.coords, targetName)'));
+    assert.ok(appSource.includes('applyDestinationSelection(fav.coords, fav.address || targetName)'));
     assert.ok(appSource.includes('applyDestinationSelection(item.coords, item.name)'));
     assert.ok(appSource.includes('showLiveDestinationReroutePending()'));
     assert.ok(appSource.includes('if (liveDestinationBackup) {'));

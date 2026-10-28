@@ -174,8 +174,13 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
 }
 
 async function selectDestination(page, name) {
+    const navigating = await page.locator('#live-gps-nav-btn').evaluate(button => button.classList.contains('active'));
     await page.locator('#destination-input').fill(name);
     await page.locator('#destination-results [role="option"]').first().click();
+    if (!navigating) {
+        await expect(page.locator('#destination-review-modal')).toBeVisible();
+        await page.locator('#btn-review-confirm').click();
+    }
     await expect(page.locator('#bar-dest-text')).toContainText(name);
 }
 
@@ -186,6 +191,73 @@ async function changeDestination(page, name) {
     await page.locator('#btn-open-search-modal').click();
     await selectDestination(page, name);
 }
+
+test('destination review can cancel and adjust the pin before requesting any route', async ({page}) => {
+    const state=await fixtures(page,{brokenMap:true});
+    await page.goto('./');
+    await page.locator('#destination-input').fill('Alpha');
+    await page.locator('#destination-results [role="option"]').first().click();
+    await expect(page.locator('#destination-review-modal')).toBeVisible();
+    await expect(page.locator('#start-search-modal')).toBeHidden();
+    await expect(page.locator('#destination-review-position')).toContainText('entrance unverified');
+    expect(state.routes).toEqual([]);
+    await page.locator('#btn-review-cancel').click();
+    await expect(page.locator('#start-search-modal')).toBeVisible();
+    expect(state.routes).toEqual([]);
+    await page.locator('#destination-input').fill('Alpha');
+    await page.locator('#destination-input-search').click();
+    await page.locator('#destination-results [role="option"]').first().click();
+    await page.locator('#btn-review-adjust').click();
+    await page.locator('#destination-review-map').click({position:{x:200,y:65}});
+    await expect(page.locator('#destination-review-position')).toContainText('Adjusted pin');
+    const selected=await page.locator('#destination-review-position').textContent();
+    const [lat,lng]=selected.split(' · ')[0].split(', ').map(Number);
+    await expect(page.locator('#destination-review-modal')).toHaveCSS('opacity','1');
+    await page.screenshot({path:test.info().outputPath('destination-review.png')});
+    await page.locator('#btn-review-confirm').click();
+    await expect.poll(()=>state.routes.length).toBeGreaterThan(0);
+    expect(state.routes[0][0]).toBeCloseTo(lng,4);expect(state.routes[0][1]).toBeCloseTo(lat,4);
+    expect(state.errors).toEqual([]);
+});
+
+test('voice preview sends Korean and English segments to native speech and respects mute', async ({page}) => {
+    const state=await fixtures(page,{brokenMap:true});
+    await page.addInitScript(()=>{
+        window.voiceRequests=[];
+        window.Capacitor={Plugins:{Pip:{stopFocusedSpeech:async()=>{},speakFocused:async args=>{window.voiceRequests.push(args);return {accepted:true};}}}};
+    });
+    await page.goto('./');
+    await page.evaluate(()=>window.TTSVoice.setLanguage('ko-KR'));
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-preview-voice').click();
+    await expect.poll(()=>page.evaluate(()=>window.voiceRequests.length)).toBe(1);
+    const plan=await page.evaluate(()=>window.voiceRequests[0].segments);
+    expect(plan.map(p=>p.lang)).toEqual(['ko-KR','en-US','ko-KR','en-US','ko-KR']);
+    expect(plan.filter(p=>p.lang==='en-US').map(p=>p.text)).toEqual(['Lee Street','Harvard Avenue']);
+    await page.evaluate(()=>window.TTSVoice.toggleMute());
+    await page.locator('#btn-preview-voice').click();
+    expect(await page.evaluate(()=>window.voiceRequests.length)).toBe(1);
+    expect(state.errors).toEqual([]);
+});
+
+test('registering Home requires choosing and confirming an address instead of saving the first hit', async ({page}) => {
+    const state=await fixtures(page,{brokenMap:true});
+    page.removeAllListeners('dialog'); page.on('dialog',dialog=>dialog.accept('Alpha'));
+    await page.route('https://photon.komoot.io/**',route=>route.fulfill({json:{features:Object.entries(places).slice(0,2).map(([name,coordinates])=>({geometry:{coordinates},properties:{name,city:'Boston',country:'United States'}}))}}));
+    await page.goto('./');
+    await page.locator('.fav-chip-btn').first().click();
+    await expect(page.locator('#destination-results [role="option"]')).toHaveCount(2);
+    expect(await page.evaluate(()=>localStorage.getItem('solaris_favorites'))).toBeNull();
+    expect(state.routes).toEqual([]);
+    await page.locator('#destination-results [role="option"]').nth(1).click();
+    await expect(page.locator('#destination-review-address')).toContainText('Bravo');
+    expect(await page.evaluate(()=>localStorage.getItem('solaris_favorites'))).toBeNull();
+    await page.locator('#btn-review-confirm').click();
+    const home=await page.evaluate(()=>JSON.parse(localStorage.getItem('solaris_favorites'))[0]);
+    expect(home.address).toContain('Bravo'); expect(home.coords.lng).toBe(places.Bravo[0]);
+    await expect.poll(()=>state.routes.length).toBeGreaterThan(0);
+    expect(state.routes[0]).toEqual(places.Bravo); expect(state.errors).toEqual([]);
+});
 
 for (const country of ['us', 'gb', 'kr']) test(`navigation units stay consistent across speed, routes, turns and preferences in ${country}`, async ({page}) => {
     const state = await fixtures(page, {brokenMap:true});
@@ -255,7 +327,7 @@ test('delayed country correction updates speed number and all units without anot
 async function observePreviewMap(page) {
     await page.route('**/js/leaflet.js', async route => {
         const response = await route.fetch();
-        await route.fulfill({response,body:(await response.text()) + '\nL.Map.addInitHook(function(){window.previewTestMap=this;});'});
+        await route.fulfill({response,body:(await response.text()) + '\nL.Map.addInitHook(function(){if(this.getContainer().id!=="destination-review-map")window.previewTestMap=this;});'});
     });
 }
 
@@ -762,6 +834,9 @@ test('numbered address search hides fuzzy suggestions and requires choosing the 
     await expect(page.locator('#destination-results')).toContainText('Lynnfield');
     await page.screenshot({path: test.info().outputPath('address-candidates.png')});
     await page.locator('#destination-results [role="option"]').first().click();
+    await expect(page.locator('#destination-review-address')).toContainText('Brookline');
+    expect(state.routes).toEqual([]);
+    await page.locator('#btn-review-confirm').click();
     await expect(page.locator('#bar-dest-text')).toContainText('Brookline');
     await expect.poll(() => state.routes.length).toBeGreaterThan(0);
     expect(state.routes[0]).toEqual([-71.1570098,42.3006881]);

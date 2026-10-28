@@ -5,6 +5,8 @@ import android.media.*;
 import android.os.*;
 import android.speech.tts.*;
 import java.util.Locale;
+import java.util.List;
+import org.json.JSONArray;
 
 /** Single TTS owner for foreground and background. Never forces Bluetooth routing. */
 final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener {
@@ -19,6 +21,9 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
     private long deniedUntil;
     private String currentId = "";
     private long sequence;
+    private String currentGroup = "";
+    private boolean languageFallback;
+    boolean usedLanguageFallback() { return languageFallback; }
     static synchronized NavigationSpeech get(Context context) {
         if (instance == null) instance = new NavigationSpeech(context.getApplicationContext());
         return instance;
@@ -32,11 +37,15 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
             @Override public void onStart(String id) { }
             @Override public void onDone(String id) { main.post(() -> { if (id.equals(currentId)) release(); }); }
-            @Override public void onError(String id) { onDone(id); }
+            @Override public void onError(String id) { main.post(() -> { if (!currentGroup.isEmpty() && id.startsWith(currentGroup)) stop(); }); }
         });
     }
     boolean speak(String text, String language) { return speak(text, language, false); }
     boolean speak(String text, String language, boolean fromBackground) {
+        return speak(text, language, fromBackground, null);
+    }
+    boolean speak(String text, String language, boolean fromBackground, JSONArray segments) {
+        languageFallback = false;
         if (System.currentTimeMillis() < deniedUntil) return false;
         if (!ready || audio == null || text == null || text.isEmpty() || audio.getMode() == AudioManager.MODE_IN_CALL || audio.getMode() == AudioManager.MODE_IN_COMMUNICATION) return false;
         int result;
@@ -48,13 +57,26 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { deniedUntil = System.currentTimeMillis() + 2000; return false; }
         int available = tts.setLanguage(Locale.forLanguageTag(language));
         if (available == TextToSpeech.LANG_MISSING_DATA || available == TextToSpeech.LANG_NOT_SUPPORTED) { release(); return false; }
+        List<SpeechPlan.Part> parts = SpeechPlan.parts(text, language, segments);
+        if (parts.isEmpty()) { release(); return false; }
         backgroundOwner = fromBackground;
-        currentId = "nav-" + (++sequence);
-        if (tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, currentId) != TextToSpeech.SUCCESS) { release(); return false; }
+        currentGroup = "nav-" + (++sequence) + "-";
+        currentId = currentGroup + (parts.size() - 1);
+        // Each speak() captures the current language/voice in its request. Keep
+        // audio focus until the final segment, including across language changes.
+        for (int i = 0; i < parts.size(); i++) {
+            SpeechPlan.Part part = parts.get(i);
+            int supported = tts.setLanguage(Locale.forLanguageTag(part.language));
+            if (supported < 0) {
+                languageFallback = true;
+                if (tts.setLanguage(Locale.forLanguageTag(language)) < 0) { stop(); return false; }
+            }
+            if (tts.speak(part.text, i == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD, null, currentGroup + i) != TextToSpeech.SUCCESS) { stop(); return false; }
+        }
         return true;
     }
     void stopForeground() { if (!backgroundOwner) stop(); }
-    void stop() { currentId = ""; if (tts != null) tts.stop(); release(); }
+    void stop() { currentId = ""; currentGroup = ""; if (tts != null) tts.stop(); release(); }
     private void release() {
         if (audio == null) return;
         if (Build.VERSION.SDK_INT >= 26 && focus != null) audio.abandonAudioFocusRequest(focus);
@@ -62,7 +84,7 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
     }
     @Override public void onAudioFocusChange(int change) {
         if (change < 0) {
-            currentId = ""; tts.stop();
+            currentId = ""; currentGroup = ""; tts.stop();
             NativeGuidance.repeatAfterInterruption();
         }
         if (change == AudioManager.AUDIOFOCUS_GAIN) {

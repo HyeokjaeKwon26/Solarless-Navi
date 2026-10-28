@@ -110,6 +110,24 @@ function voice(native = null) {
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const turn = { sequence: 1, type: 'turn', modifier: 'right', location: [1, 2], name: 'Main', exits: '7' };
 
+test('cancel during a bilingual native segment prevents the remaining Korean instruction', async () => {
+    const calls=[];let completeEnglish;
+    const v=voice({stop:async()=>{},speak:args=>{
+        calls.push(args);
+        return args.lang==='en-US' ? new Promise(resolve=>{completeEnglish=resolve;}) : Promise.resolve();
+    }});
+    v.api.setLanguage('ko-KR');
+    const task=v.api.preview();await flush();
+    assert.deepEqual(calls.map(call=>call.lang),['ko-KR','en-US']);
+    v.api.handleInterruptionStart();completeEnglish();await task;
+    assert.equal(calls.length,2);
+});
+test('partly spoken native instruction is not duplicated through browser fallback', async () => {
+    const v=voice({stop:async()=>{},speak:args=>args.lang==='en-US'?Promise.reject(new Error('missing voice')):Promise.resolve()});
+    v.api.setLanguage('ko-KR');await v.api.preview();
+    assert.deepEqual(v.spoken,[]);
+});
+
 test('turn and hazard speech use the selected units independently of voice language', async () => {
     const v = voice();
     v.units.setCountry('US');
@@ -117,7 +135,7 @@ test('turn and hazard speech use the selected units independently of voice langu
     assert.match(v.spoken.at(-1), /0.2 miles/);
     v.api.setLanguage('ko-KR'); v.advance(7000);
     v.api.announceTurnManeuver({...turn,sequence:2},295,60); await flush();
-    assert.match(v.spoken.at(-1), /0.2마일/);
+    assert.match(v.spoken.join(''), /0.2마일/);
     v.api.setLanguage('en-US'); v.advance(7000);
     v.api.announceTurnManeuver({...turn,sequence:3,following:{type:'turn',modifier:'left',distanceAfter:90}},40,40); await flush();
     assert.match(v.spoken.at(-1), /Then in 300 feet/);

@@ -145,6 +145,20 @@
                 </div>
             </div>
 
+            <div class="start-search-overlay hidden" id="destination-review-modal" role="dialog" aria-modal="true" aria-labelledby="destination-review-title">
+                <div class="start-search-card destination-review-card">
+                    <h2 id="destination-review-title">목적지 위치 확인</h2>
+                    <p id="destination-review-address"></p>
+                    <p id="destination-review-distance"></p>
+                    <div id="destination-review-map" aria-label="목적지 지도 / Destination map"></div>
+                    <p id="destination-review-position"></p>
+                    <p id="destination-review-note"></p>
+                    <button type="button" class="nav-btn secondary" id="btn-review-adjust" aria-pressed="false">도착점 조정</button>
+                    <button type="button" class="nav-btn primary" id="btn-review-confirm">이 위치로 경로 찾기</button>
+                    <button type="button" class="nav-btn secondary" id="btn-review-cancel">검색으로 돌아가기</button>
+                </div>
+            </div>
+
             <!-- About App Modal Overlay (Z-Index 9000 Front-Most Layer) -->
             <div class="start-search-overlay hidden" id="about-app-modal">
                 <div class="start-search-card about-card">
@@ -315,6 +329,7 @@
                                 <option value="imperial">mi / ft · mph</option>
                             </select>
                         </div>
+                        <button type="button" class="nav-btn secondary" id="btn-preview-voice">안내 음성 미리 듣기 (도로명은 영어)</button>
                         <div class="option-row">
                             <div class="option-label-group">
                                 <span class="option-title" id="auto-dark-title">🕶️ 야간/터널 자동 다크모드</span>
@@ -729,6 +744,7 @@
     <script src="js/drive-archive.js"></script>
     <script src="js/navigation-units.js"></script>
     <script src="js/tts-voice.js"></script>
+    <script src="js/destination-review.js"></script>
     <script src="js/offline-map.js"></script>
     <script src="js/pip-controller.js"></script>
     <script src="js/route-presentation.js"></script>

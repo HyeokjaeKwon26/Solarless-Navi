@@ -13,6 +13,18 @@ const reply = data => ({ ok: true, json: async () => data });
 const feature = (house, street, name = '', locality = '') => ({ geometry: { coordinates: [-71.157, 42.3007] }, properties: {
     housenumber: house, street, name, locality, city: 'Brookline', state: 'Massachusetts', country: 'United States'
 } });
+test('nearby businesses at one address remain separate selectable destinations', async () => {
+    const api=geocoder(async()=>reply({features:[feature('94','Gerry Road','North Clinic'),feature('94','Gerry Road','South Pharmacy')]}));
+    const results=await api.searchPlaces('clinic',null,{includeNominatim:false});
+    assert.equal(results.length,2);
+    assert.deepEqual(results.map(result=>result.shortTitle).join('|'),'North Clinic|South Pharmacy');
+});
+test('invalid provider coordinates cannot become destination candidates', async () => {
+    const invalid=feature('94','Gerry Road');invalid.geometry.coordinates=[-71,142];
+    const api=geocoder(async()=>reply({features:[invalid,feature('94','Gerry Road')]}));
+    const results=await api.searchPlaces('94 Gerry Road',null,{includeNominatim:false});
+    assert.equal(results.length,1);assert.equal(results[0].lat,42.3007);
+});
 test('submitted search reports a partial outage and retries instead of caching a false no-match', async () => {
     let offline = true;
     let calls = 0;

@@ -45,7 +45,9 @@ public class PipPlugin extends Plugin {
             // A PiP WebView can still execute JS while the Activity is paused.
             // Only the native route engine owns speech then; otherwise both
             // providers could interrupt each other on the same GPS update.
-            result.put("accepted", MainActivity.foreground && NavigationSpeech.get(getContext()).speak(call.getString("text", ""), call.getString("lang", "en-US")));
+            NavigationSpeech speech = NavigationSpeech.get(getContext());
+            result.put("accepted", MainActivity.foreground && speech.speak(call.getString("text", ""), call.getString("lang", "en-US"), false, call.getArray("segments")));
+            result.put("languageFallback", speech.usedLanguageFallback());
             call.resolve(result);
         });
     }

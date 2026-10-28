@@ -125,5 +125,33 @@
             (Number.isFinite(health.batteryPercent) && health.batteryPercent >= 0 && !health.charging &&
                 health.externalPowerConnected !== true && health.batteryPercent <= (previous ? 20 : 15));
     }
-    return { model, match, next, thresholds, roadLabel, validSession, shouldConserve };
+    // Only road-name fields are expanded: St. Louis and Dr. King must remain names.
+    function spokenRoad(value) {
+        const suffixes = { st: 'Street', rd: 'Road', ave: 'Avenue', blvd: 'Boulevard', dr: 'Drive', ln: 'Lane', ct: 'Court', pkwy: 'Parkway', hwy: 'Highway' };
+        return String(value || '').replace(/\b(st|rd|ave|blvd|dr|ln|ct|pkwy|hwy)\.?\s*(?=$|[,;·])/gi,
+            (_, suffix) => suffixes[suffix.toLowerCase()])
+            .replace(/\bI[- ](\d+)\b/g, 'Interstate $1').replace(/\bUS[- ](\d+)\b/g, 'U S Route $1');
+    }
+    function speechSegments(text, language, names = []) {
+        const segments = [];
+        const roads = [...new Set(names.filter(name => typeof name === 'string' && /[A-Za-z]/.test(name)))].sort((a, b) => b.length - a.length);
+        let rest = String(text || '');
+        while (rest) {
+            let found = null;
+            for (const name of roads) {
+                const at = rest.indexOf(name);
+                if (at >= 0 && (!found || at < found.at)) found = { name, at };
+            }
+            if (!found) { segments.push({ text: rest, lang: language }); break; }
+            if (found.at) segments.push({ text: rest.slice(0, found.at), lang: language });
+            segments.push({ text: spokenRoad(found.name), lang: 'en-US' });
+            rest = rest.slice(found.at + found.name.length);
+        }
+        return segments.filter(part => part.text.trim()).reduce((out, part) => {
+            if (out.length && out[out.length - 1].lang === part.lang) out[out.length - 1].text += part.text;
+            else out.push({ ...part });
+            return out;
+        }, []);
+    }
+    return { model, match, next, thresholds, roadLabel, validSession, shouldConserve, spokenRoad, speechSegments };
 });

@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let liveDestinationBackup = null;
     let currentEnd = null;
     let destinationName = "";
+    let pendingFavoriteRequest = null;
     const SAVED_ROUTE_MODE_KEY = 'solarless_last_route_mode';
     const ACTIVE_NAVIGATION_SESSION_KEY = 'solarless_active_navigation_session';
     const AUTO_FREE_DRIVE_ENABLED_KEY = 'solarless_auto_free_drive_enabled';
@@ -1136,6 +1137,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const selector = document.getElementById('navigation-units');
         selector.value = NavigationUnits.getPreference();
         document.getElementById('navigation-units-label').textContent = ko ? '거리·속도 단위' : 'Distance and speed units';
+        document.getElementById('btn-preview-voice').textContent = ko ? '안내 음성 미리 듣기 (도로명은 영어)' : 'Preview guidance voice';
         selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
         renderSpeedDisplay();
         document.querySelectorAll('[data-distance-meters]').forEach(element => setDistanceLabel(element, Number(element.dataset.distanceMeters), element.dataset.distanceLong === 'true', element.dataset.distancePrefix));
@@ -1157,6 +1159,13 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshUnitPresentation();
         });
         document.getElementById('navigation-units').addEventListener('change', event => NavigationUnits.setPreference(event.target.value));
+        document.getElementById('btn-preview-voice').addEventListener('click', () => {
+            if (isLiveNavActive) {
+                alert(I18n.getLanguage().startsWith('ko') ? '주행 안내를 종료한 뒤 음성을 미리 들어보세요.' : 'End navigation before testing the voice.');
+            } else if (TTSVoice.isMuted()) {
+                alert(I18n.getLanguage().startsWith('ko') ? '상단 스피커 버튼으로 음성을 켜 주세요.' : 'Enable voice using the speaker button first.');
+            } else TTSVoice.preview();
+        });
         // Top Left Logo & Top Right Settings Button Listeners
         const btnHeaderHome = document.getElementById('btn-header-home');
         const btnMobileToggle = document.getElementById('mobile-toggle-panel');
@@ -1824,6 +1833,14 @@ document.addEventListener('DOMContentLoaded', () => {
         return rawName;
     }
 
+    function beginFavoriteSearch(query, request) {
+        openSearchModal();
+        pendingFavoriteRequest = request;
+        document.getElementById('destination-input').value = query.trim();
+        document.getElementById('btn-confirm-destination').disabled = false;
+        destinationSearch.submit();
+    }
+
     function renderFavorites() {
         const container = document.getElementById('favorite-chips-group');
         if (!container) return;
@@ -1844,38 +1861,16 @@ document.addEventListener('DOMContentLoaded', () => {
             label.textContent = displayName;
             chip.append(icon, document.createTextNode(' '), label);
 
-            chip.addEventListener('click', async () => {
+            chip.addEventListener('click', async (event) => {
+                event.stopPropagation();
                 const targetName = getLocalizedFavName(fav);
                 if (fav.coords) {
-                    applyDestinationSelection(fav.coords, targetName);
+                    applyDestinationSelection(fav.coords, fav.address || targetName);
                 } else {
                     const promptName = getLocalizedFavName(fav);
                     const place = prompt(isKo ? `'${promptName}'의 주소나 장소명을 입력하고 즐겨찾기로 등록하세요:` : `Enter address or place name to register '${promptName}':`);
                     if (place && place.trim()) {
-                        const btn = document.getElementById('btn-confirm-destination');
-                        if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${isKo ? '장소 확인 중...' : 'Verifying place...'}`;
-
-                        let results = [];
-                        try {
-                            results = await Geocoder.searchPlaces(place.trim(), currentStart, { includeNominatim: true });
-                        } catch (e) {
-                            if (btn) btn.innerHTML = `<i class="fa-solid fa-route"></i> ${I18n.getText('confirmStartBtn')}`;
-                            alert(I18n.getText(e && e.messageKey ? e.messageKey : 'searchNetworkError'));
-                            return;
-                        }
-                        if (results && results.length > 0) {
-                            fav.coords = { lat: results[0].lat, lng: results[0].lng };
-                            fav.name = `${promptName.split('(')[0].trim()} (${(results[0].shortTitle || results[0].displayName).split(',')[0]})`;
-                            saveFavoritesList(favs);
-
-                            applyDestinationSelection(
-                                fav.coords,
-                                results[0].shortTitle || results[0].displayName
-                            );
-                        } else {
-                            if (btn) btn.innerHTML = `<i class="fa-solid fa-route"></i> ${I18n.getText('confirmStartBtn')}`;
-                            alert(isKo ? `'${place}' 장소를 찾을 수 없습니다. 정확한 주소를 입력해 주세요.` : `Cannot find place '${place}'. Please enter a valid address.`);
-                        }
+                        beginFavoriteSearch(place, { index: favs.indexOf(fav), name: fav.name, navigate: true });
                     }
                 }
             });
@@ -1888,31 +1883,14 @@ document.addEventListener('DOMContentLoaded', () => {
         addBtn.type = 'button';
         addBtn.className = 'fav-chip-btn add-btn';
         addBtn.innerHTML = `<i class="fa-solid fa-plus"></i> <span>${I18n.getText('addFavBtn')}</span>`;
-        addBtn.addEventListener('click', async () => {
+        addBtn.addEventListener('click', async (event) => {
+            event.stopPropagation();
             const name = prompt(isKo ? "즐겨찾기 장소 별칭을 입력하세요 (예: 할머니댁, 자주가는 카페):" : "Enter a nickname for this favorite place (e.g. Grandma's, Favorite Cafe):");
             if (!name) return;
             const addr = prompt(isKo ? `'${name}'의 주소 또는 건물명을 입력하세요:` : `Enter address or building name for '${name}':`);
             if (!addr) return;
 
-            let results = [];
-            try {
-                results = await Geocoder.searchPlaces(addr.trim(), currentStart, { includeNominatim: true });
-            } catch (e) {
-                alert(I18n.getText(e && e.messageKey ? e.messageKey : 'searchNetworkError'));
-                return;
-            }
-            if (results && results.length > 0) {
-                const list = getFavorites();
-                list.push({
-                    name: `⭐ ${name.trim()}`,
-                    coords: { lat: results[0].lat, lng: results[0].lng },
-                    icon: 'fa-location-dot'
-                });
-                saveFavoritesList(list);
-                alert(isKo ? `'${name}' 즐겨찾기가 추가되었습니다!` : `Favorite '${name}' added successfully!`);
-            } else {
-                alert(isKo ? `'${addr}' 장소를 찾을 수 없습니다. 주소를 다시 확인해 주세요.` : `Cannot find place '${addr}'. Please verify the address.`);
-            }
+            beginFavoriteSearch(addr, { name: `⭐ ${name.trim()}`, navigate: false });
         });
         container.appendChild(addBtn);
     }
@@ -2113,7 +2091,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const userIsEditing = Date.now() - lastDestinationEditingAt < AUTO_FREE_DRIVE_EDITING_GRACE_MS;
             const sidebar = document.getElementById('sidebar-panel');
             const blockingModal = document.querySelector(
-                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden)'
+                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden), #destination-review-modal:not(.hidden)'
             );
             if (userIsEditing || (sidebar && sidebar.classList.contains('active')) || blockingModal) {
                 autoFreeDriveMotionState = {};
@@ -2537,6 +2515,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleHardwareBackButton() {
         const isKo = I18n.getLanguage().startsWith('ko');
+        if (DestinationReview.isOpen()) { DestinationReview.cancel(); return; }
         if (!document.getElementById('update-modal').classList.contains('hidden')) {
             document.getElementById('btn-close-update-modal').click();
             return;
@@ -2595,6 +2574,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const fullDisableUis = [
+            'destination-review-modal',
             'start-search-modal',
             'about-app-modal',
             'route-legend-modal'
@@ -3223,13 +3203,19 @@ document.addEventListener('DOMContentLoaded', () => {
         await toggleLiveGpsNavigation({ freeDrive: true, automatic: options.automatic === true });
     }
 
-    function applyDestinationSelection(coords, name, options = {}) {
+    async function applyDestinationSelection(coords, name, options = {}) {
         const lat = Number(coords && coords.lat);
         const lng = Number(coords && coords.lng);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
+
+        if (!isLiveNavActive && !options.reviewed) {
+            const reviewed = await DestinationReview.show({ lat, lng }, name, currentStart);
+            if (!reviewed) return false;
+            return applyDestinationSelection(reviewed, name, { ...options, reviewed: true });
+        }
 
         const previousLiveDestination = captureLiveDestinationBackup();
-        const nextEnd = { lat, lng };
+        const nextEnd = { lat, lng, source: coords.source || 'search' };
         const nextName = String(name || '').trim() || (I18n.getLanguage().startsWith('ko') ? '선택한 목적지' : 'Selected destination');
         if (isLiveNavActive && previousLiveDestination) {
             const changed = destinationChangedFromBackup(previousLiveDestination, nextEnd);
@@ -3363,6 +3349,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function openSearchModal() {
+        pendingFavoriteRequest = null;
         renderFavorites();
         renderRecentDestinationHistory();
         document.getElementById('start-search-modal').classList.remove('hidden');
@@ -3635,7 +3622,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const requestGeneration = ++routeAnalysisGeneration;
         const candidateCacheKey = getRouteCandidateCacheKey(requestStart, requestEnd, requestTollFree);
-        const reusableCandidates = routeOptions.reuseCachedCandidates && routeData &&
+        const reusableCandidates = !isMidDrive && routeOptions.reuseCachedCandidates && routeData &&
             routeData.routeCandidateKey === candidateCacheKey && Array.isArray(routeData.routeCandidates)
             ? routeData.routeCandidates : null;
 
@@ -3998,13 +3985,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const fstTraffic = document.getElementById('traffic-fastest');
         if (fstTraffic) {
             fstTraffic.classList.remove('hidden');
-            if (routeData.timeOfDayAdjustment > 1.3) {
-                fstTraffic.innerText = isKo ? "OSRM 기본 예상" : "OSRM profile ETA";
-                fstTraffic.className = "traffic-chip mod";
-            } else {
-                fstTraffic.innerText = isKo ? "기본 보정 🟢" : "Baseline 🟢";
-                fstTraffic.className = "traffic-chip smooth";
-            }
+            fstTraffic.innerText = PublicTraffic.label(fst.traffic, isKo);
+            fstTraffic.className = 'traffic-chip mod';
         }
 
         // 2. Glare-Free Route (estimated glare possibility and solar exposure)
@@ -4123,6 +4105,15 @@ document.addEventListener('DOMContentLoaded', () => {
             if (element && route && route.arrivalAccess && route.arrivalAccess.kind === "inferred-road-access") {
                 element.innerText += isKo ? " · 주변 도로까지 안내 (출입구 미확인)" : " · Guidance to nearby road (entrance unverified)";
             }
+            if (!element || !route) return;
+            const quality = ShadowRouter.routeDrivingQuality(route.raw || route);
+            if (quality.uturns) element.innerText += isKo ? ` · 유턴 ${quality.uturns}회` : ` · ${quality.uturns} U-turn(s)`;
+            const endpoint = ShadowRouter.getRouteEndpoint(route);
+            if (endpoint && currentEnd) {
+                const gap = ShadowRouter.calculateDistanceMeters(currentEnd.lat, currentEnd.lng, endpoint.lat, endpoint.lng);
+                if (gap > 25) element.innerText += isKo ? ` · 경로 도착점과 선택한 핀 ${NavigationUnits.distance(gap)} 차이 (출입구 확인 필요)` : ` · Route ends ${NavigationUnits.distance(gap)} from your pin (check entrance)`;
+            }
+            if (route !== fst) element.innerText += ` · ${PublicTraffic.label(route.traffic, isKo)}`;
         });
     }
 
@@ -4175,6 +4166,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const routedEnd = ShadowRouter.getRouteEndpoint(selectedRouteObj) || currentEnd;
         if (endMarker) map.removeLayer(endMarker);
         endMarker = L.marker([routedEnd.lat, routedEnd.lng], { icon: endIcon }).addTo(map);
+        if (!isLiveDrive && currentEnd && ShadowRouter.calculateDistanceMeters(currentEnd.lat, currentEnd.lng, routedEnd.lat, routedEnd.lng) > 25) {
+            const label = document.createElement('span');
+            label.textContent = I18n.getLanguage().startsWith('ko') ? '선택한 목적지 핀 · 경로 도착점과 다름' : 'Selected destination pin · differs from route end';
+            L.circleMarker([currentEnd.lat, currentEnd.lng], { radius: 8, color: '#a78bfa', fillOpacity: 0.7 }).bindTooltip(label).addTo(activeRoutePolylineGroup);
+        }
 
         updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading, 0, {
             snapToRoute: !verifiedRouteOriginProvisional
@@ -4220,6 +4216,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!isLiveDrive && !isLiveNavActive) {
             if (compassMode !== 'north-up' || Math.abs(manualMapRotation) >= 0.1) setCompassMode('north-up');
             const allCoords = selectedRouteObj.analyzed.coordinates.map(c => [c[1], c[0]]);
+            if (currentEnd) allCoords.push([currentEnd.lat, currentEnd.lng]);
             if (allCoords.length >= 2) {
                 // Reserve space occupied by the destination/header and the
                 // bottom route summary so both endpoints remain visible.
@@ -4468,7 +4465,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     input.value = res.displayName;
                     input.setAttribute('aria-expanded', 'false');
                     dropdown.classList.remove('active');
-                    onSelect({ lat: res.lat, lng: res.lng }, res.displayName);
+                    onSelect({ lat: res.lat, lng: res.lng, source: res.source }, res.displayName);
                 });
                 dropdown.appendChild(item);
             });
@@ -4479,6 +4476,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         document.getElementById(`${inputId}-search`).addEventListener('click', () => runSearch(true));
         input.addEventListener('input', () => {
+            if (inputId === 'destination-input') pendingFavoriteRequest = null;
             markRecentRouteEditing();
             cancel();
             dropdown.replaceChildren();
@@ -4538,27 +4536,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentEnd) updateRoute();
     });
 
-    const destinationSearch = setupAutocomplete('destination-input', 'destination-results', (coords, name) => {
-        const previousLiveDestination = captureLiveDestinationBackup();
-        currentEnd = coords;
-        destinationName = name;
-        document.getElementById('btn-confirm-destination').disabled = false;
-        if (!isLiveNavActive) {
-            startNavigationFlow();
+    const destinationSearch = setupAutocomplete('destination-input', 'destination-results', async (coords, name) => {
+        if (pendingFavoriteRequest) {
+            const request = pendingFavoriteRequest; pendingFavoriteRequest = null;
+            const reviewed = await DestinationReview.show(coords, name, currentStart, { favorite: !request.navigate });
+            if (!reviewed) return;
+            const list = getFavorites();
+            const favorite = { ...(Number.isInteger(request.index) ? list[request.index] : { icon: 'fa-location-dot' }), name: request.name, coords: reviewed, address: name };
+            if (Number.isInteger(request.index)) list[request.index] = favorite; else list.push(favorite);
+            saveFavoritesList(list);
+            if (request.navigate) applyDestinationSelection(reviewed, name, { reviewed: true });
             return;
         }
-        const confirmed = confirm(I18n.getLanguage().startsWith('ko')
-            ? '주행 중 목적지를 변경하고 현재 위치에서 새 경로를 계산하시겠습니까?'
-            : 'Change the destination and calculate a new route from the current position?');
-        if (!confirmed) {
-            restoreLiveDestinationBackup(previousLiveDestination);
-            return;
-        }
-        liveDestinationBackup = previousLiveDestination;
-        showLiveDestinationReroutePending();
-        document.getElementById('start-search-modal').classList.add('hidden');
-        document.getElementById('bar-dest-text').innerText = destinationName;
-        updateRoute(true, { reason: 'destination-change' });
+        applyDestinationSelection(coords, name);
     });
 
     document.getElementById('btn-confirm-destination').addEventListener('click', resolveAndStartNavigation);

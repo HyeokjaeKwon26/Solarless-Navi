@@ -74,7 +74,7 @@ window.Geocoder = (function () {
 
     function cacheSearchResults(key, results) {
         searchCache.delete(key);
-        searchCache.set(key, results);
+        searchCache.set(key, { results, expiresAt: Date.now() + 5 * 60 * 1000 });
         while (searchCache.size > SEARCH_CACHE_MAX) {
             searchCache.delete(searchCache.keys().next().value);
         }
@@ -504,7 +504,8 @@ window.Geocoder = (function () {
         const hasCoords = !!(userCoords && Number.isFinite(userCoords.lat) && Number.isFinite(userCoords.lng));
         const cacheKey = `${cleanQ.toLowerCase()}|${hasCoords ? `${userCoords.lat.toFixed(3)},${userCoords.lng.toFixed(3)}` : 'none'}|${includeNominatim ? 'all' : (options.fallbackNominatim ? 'photon-address' : 'photon')}`;
         const cached = searchCache.get(cacheKey);
-        if (cached) return cached.map(item => ({ ...item }));
+        if (cached && cached.expiresAt > Date.now()) return cached.results.map(item => ({ ...item }));
+        if (cached) searchCache.delete(cacheKey);
 
         const results = [];
         let attemptedServices = 0;
@@ -525,7 +526,7 @@ window.Geocoder = (function () {
             return score + Math.max(0, Number(result.importance) || 0);
         };
         const addResult = (result) => {
-            if (!Number.isFinite(result.lat) || !Number.isFinite(result.lng)) return;
+            if (!Number.isFinite(result.lat) || !Number.isFinite(result.lng) || Math.abs(result.lat) > 90 || Math.abs(result.lng) > 180) return;
             if (looksLikeStreetAddress) {
                 // Never present a bus stop, another house number, or a road
                 // containing the query only in its locality as this address.
@@ -543,7 +544,10 @@ window.Geocoder = (function () {
                 if (!requestedRoad.slice(prefixLength).every(word => fullWords.includes(word))) return;
             }
             const duplicateIndex = results.findIndex(existing =>
-                Math.abs(existing.lat - result.lat) < 0.0005 && Math.abs(existing.lng - result.lng) < 0.0005);
+                Math.abs(existing.lat - result.lat) < 0.0005 && Math.abs(existing.lng - result.lng) < 0.0005 &&
+                normalizeAddress(existing.houseNumber) === normalizeAddress(result.houseNumber) &&
+                normalizeAddress(existing.road) === normalizeAddress(result.road) &&
+                (looksLikeStreetAddress || normalizeAddress(existing.shortTitle) === normalizeAddress(result.shortTitle)));
             if (duplicateIndex < 0) results.push(result);
             else if (looksLikeStreetAddress && addressMatchScore(result) > addressMatchScore(results[duplicateIndex])) {
                 results[duplicateIndex] = result;

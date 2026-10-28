@@ -824,7 +824,7 @@ window.ShadowRouter = (function () {
         }
     }
 
-    function assignRoadDestination(route, waypoints) {
+    function assignRoadDestination(route, waypoints, preservePin = false) {
         if (!route) return route;
         const waypoint = Array.isArray(waypoints) && waypoints.length
             ? waypoints[waypoints.length - 1] : null;
@@ -851,7 +851,7 @@ window.ShadowRouter = (function () {
         // campus service road. For car guidance, stop at the last named road
         // entrance when that access tail is short; otherwise retain OSRM's
         // own snapped waypoint rather than the original POI coordinate.
-        const useRoadEntrance = hasTrailingUnnamedAccess && namedEndpoint && distanceToSnapped <= 300;
+        const useRoadEntrance = !preservePin && hasTrailingUnnamedAccess && namedEndpoint && distanceToSnapped <= 300;
         route.roadDestination = useRoadEntrance ? namedEndpoint : (snapped || namedEndpoint || getRouteEndpoint(route));
         route.arrivalAccess = { kind: useRoadEntrance ? 'inferred-road-access' : 'router-waypoint',
             accessTailMeters: useRoadEntrance ? Math.round(distanceToSnapped) : 0 };
@@ -1300,8 +1300,37 @@ window.ShadowRouter = (function () {
     const OSRM_ROUTE_CACHE_MAX = 12;
     const osrmRouteCache = new Map();
 
-    function osrmRouteCacheKey(start, end, tollFree) {
-        return [Number(start.lat).toFixed(5), Number(start.lng).toFixed(5), Number(end.lat).toFixed(5), Number(end.lng).toFixed(5), tollFree ? 'toll-free' : 'standard'].join('|');
+    function osrmRouteCacheKey(start, end, tollFree, heading) {
+        return [Number(start.lat).toFixed(5), Number(start.lng).toFixed(5), Number(end.lat).toFixed(5), Number(end.lng).toFixed(5), end.source === 'user-pin' ? 'pin' : 'place', Number.isFinite(heading) && heading >= 0 ? Math.round(heading % 360) : 'none', tollFree ? 'toll-free' : 'standard'].join('|');
+    }
+
+    function routeDrivingQuality(route) {
+        const steps = (route.legs || []).flatMap(leg => leg.steps || []);
+        let uturns = 0, shortAccess = 0;
+        steps.forEach((step, index) => {
+            if (step.maneuver?.modifier === 'uturn') uturns++;
+            // Interior unnamed access segments are a complexity signal, not
+            // proof of illegal/private access. Never remove the only route.
+            if (index > 0 && index < steps.length - 2 && !String(step.name || '').trim() && step.distance > 0 && step.distance < 60) shortAccess++;
+        });
+        return { uturns, shortAccess };
+    }
+
+    function filterDrivingCandidates(routes) {
+        const duration = route => route.traffic?.duration || route.duration;
+        return routes.filter(candidate => {
+            const quality = routeDrivingQuality(candidate);
+            return !routes.some(other => {
+                if (other === candidate || !Number.isFinite(duration(other)) || !Number.isFinite(other.distance)) return false;
+                const better = routeDrivingQuality(other);
+                // Remove a dominated, more awkward route only when another
+                // returned route is both no longer and no slower. Necessary
+                // U-turns and genuinely different time/distance tradeoffs stay.
+                return duration(other) <= duration(candidate) && other.distance <= candidate.distance &&
+                    better.uturns <= quality.uturns && better.shortAccess <= quality.shortAccess &&
+                    (better.uturns < quality.uturns || better.shortAccess < quality.shortAccess);
+            });
+        });
     }
 
     function getCachedOsrmRoutes(key) {
@@ -1646,7 +1675,7 @@ window.ShadowRouter = (function () {
 
         const timeOfDayAdjustment = getTimeOfDayAdjustment(dateObj);
         
-        const routeCacheKey = osrmRouteCacheKey(start, end, isTollFreeOnly);
+        const routeCacheKey = osrmRouteCacheKey(start, end, isTollFreeOnly, options.startHeading);
         let progressEmitted = false;
         let rawCandidates = Array.isArray(options.candidates) && options.candidates.length
             ? options.candidates.filter(route => route && route.geometry && Array.isArray(route.geometry.coordinates))
@@ -1660,7 +1689,7 @@ window.ShadowRouter = (function () {
             // the vehicle is currently facing. This keeps a forward route as
             // the default and leaves a U-turn to OSRM only when no forward
             // connection exists.
-            const startHeading = Number(options.startHeading);
+            const startHeading = typeof options.startHeading === 'number' ? options.startHeading : NaN;
             if (Number.isFinite(startHeading) && startHeading >= 0) {
                 const bearing = Math.round(((startHeading % 360) + 360) % 360);
                 directUrl += `&bearings=${bearing},60;`;
@@ -1679,12 +1708,12 @@ window.ShadowRouter = (function () {
                 directResponse = { routes: [offline], waypoints: [{ location: offline.geometry.coordinates[0] }, { location: offline.geometry.coordinates.at(-1) }] };
             }
             rawCandidates = directResponse && Array.isArray(directResponse.routes) ? directResponse.routes.slice() : [];
-            rawCandidates.forEach(route => assignRoadDestination(route, directResponse && directResponse.waypoints));
+            rawCandidates.forEach(route => assignRoadDestination(route, directResponse && directResponse.waypoints, end.source === 'user-pin'));
             if (window.DebugLogger && typeof window.DebugLogger.log === 'function') {
                 window.DebugLogger.log('osrm-direct-success', { elapsedMs: Date.now() - directStartedAt, routeCount: rawCandidates.length, http: 'ok' });
             }
             if (rawCandidates.length && typeof options.onProgress === 'function') {
-                const directAnalyzed = await Promise.all(rawCandidates.map((route, index) =>
+                const directAnalyzed = await Promise.all(filterDrivingCandidates(rawCandidates).map((route, index) =>
                     analyzeRawRoute(route, index, dateObj, timeOfDayAdjustment, options.signal)));
                 const progress = buildHeuristicProgressResult(directAnalyzed, timeOfDayAdjustment, dateObj, start);
                 if (progress) { await options.onProgress(progress); progressEmitted = true; }
@@ -1719,14 +1748,14 @@ window.ShadowRouter = (function () {
             if (window.DebugLogger) window.DebugLogger.log('osrm-via-end', { requested: viaUrls.slice(0, viaBudget).length, fulfilled: responses.filter(result => result.status === 'fulfilled').length });
             responses.forEach(res => {
                 if (res.status === 'fulfilled' && res.value && res.value.routes) {
-                    res.value.routes.forEach(route => assignRoadDestination(route, res.value.waypoints));
+                    res.value.routes.forEach(route => assignRoadDestination(route, res.value.waypoints, end.source === 'user-pin'));
                     rawCandidates.push(...res.value.routes);
                 }
             });
         }
 
         if (!progressEmitted && rawCandidates && rawCandidates.length && typeof options.onProgress === 'function') {
-            const cachedAnalyzed = await Promise.all(rawCandidates.map((route, index) =>
+            const cachedAnalyzed = await Promise.all(filterDrivingCandidates(rawCandidates).map((route, index) =>
                 analyzeRawRoute(route, index, dateObj, timeOfDayAdjustment, options.signal)));
             const progress = buildHeuristicProgressResult(cachedAnalyzed, timeOfDayAdjustment, dateObj, start);
             if (progress) await options.onProgress(progress);
@@ -1739,6 +1768,7 @@ window.ShadowRouter = (function () {
         }
         cacheOsrmRoutes(routeCacheKey, rawCandidates);
 
+        rawCandidates = filterDrivingCandidates(rawCandidates);
         const filteredCandidates = isTollFreeOnly
             ? rawCandidates.filter(route => !routeContainsToll(route))
             : rawCandidates;
@@ -2369,7 +2399,7 @@ window.ShadowRouter = (function () {
         compareShadeRoutes: compareShadeRoutes,
         routeShadeMetric: routeShadeMetric,
         applyExposureReductions: applyExposureReductions,
-        routeContainsToll: routeContainsToll,
+        routeContainsToll: routeContainsToll, routeDrivingQuality, filterDrivingCandidates,
         getRouteEndpoint: getRouteEndpoint,
         assignRoadDestination: assignRoadDestination,
         areValidRouteCoordinates: areValidRouteCoordinates,

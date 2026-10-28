@@ -14,8 +14,16 @@
         const token = ++generation;
         pending = route; pendingPresentation = presentation;
         const model = root.NavigationGuidance.model(route);
-        const turns = model.maneuvers.map(m => ({ type: m.type, progressMeters: m.progressMeters,
-            text: `${root.TTSVoice.getManeuverText(m.type, m.modifier)} ${root.NavigationGuidance.roadLabel(m, language.startsWith('ko'))}`.trim() }));
+        const turns = model.maneuvers.map((m, index) => {
+            const road = root.NavigationGuidance.roadLabel(m, language.startsWith('ko'));
+            let action = root.TTSVoice.getManeuverText(m.type, m.modifier);
+            if (m.exit && /roundabout|rotary/.test(m.type)) action += language.startsWith('ko') ? `, ${m.exit}번째 출구` : `, take exit ${m.exit}`;
+            const text = road ? (language.startsWith('ko') ? `${road} 방면 ${action}입니다.` : `${action} toward ${road}.`) : action;
+            const next = model.maneuvers[index + 1];
+            return { type: m.type, progressMeters: m.progressMeters, text,
+                following: next && next.type !== 'arrive' ? { distanceAfter: Math.max(0, next.progressMeters - m.progressMeters), text: root.TTSVoice.getManeuverText(next.type, next.modifier) } : null,
+                segments: root.NavigationGuidance.speechSegments(text, language, [m.name, m.ref, m.destinations]) };
+        });
         plugin().setGuidanceRoute({ route: { revision: nextRevision(), coordinates: model.coordinates, turns, language, unitSystem, muted } })
             .then(() => { if (generation === token) { identity = route; identityPresentation = presentation; } }).catch(() => {}).finally(() => { if (generation === token && pending === route) pending = null; });
     }

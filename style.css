@@ -1306,3 +1306,15 @@ body.battery-saver-active .route-summary-floating {
     .app-header .header-voice-controls { gap: 4px; }
     .app-header #mobile-toggle-panel { margin-left: 0; }
 }
+/* Destination confirmation stays usable on small screens and large text. */
+#destination-review-modal { z-index: 11010; }
+.destination-review-card { max-height: 88dvh; overflow-y: auto; }
+.destination-review-card p { overflow-wrap: anywhere; margin: 10px 0; line-height: 1.4; }
+.destination-review-card .nav-btn { width: 100%; margin-top: 8px; }
+#destination-review-map { height: clamp(170px, 28dvh, 270px); border-radius: 12px; }
+#destination-review-position, #destination-review-note, #destination-review-distance { font-size: 13px; color: #cbd5e1; }
+#btn-review-adjust[aria-pressed="true"] { outline: 2px solid #38bdf8; }
+.destination-review-pin { font-size: 32px; text-align: center; }
+#traffic-fastest { display: block; max-width: 100%; white-space: normal; color: #fbbf24; background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.4); }
+.mode-sub-row:has(#traffic-fastest) { flex-wrap: wrap; }
+.mode-sub-row:has(#traffic-fastest) .mode-desc { flex-basis: 100%; }

@@ -175,7 +175,7 @@ window.TTSVoice = (function () {
         }
     }
 
-    async function speak(text, force = false, playChimeType = null, priority = 0) {
+    async function speak(text, force = false, playChimeType = null, priority = 0, roadNames = []) {
         if (!text || isMuted || interruptionActive) return false;
         const now = Date.now();
         if (priority < 2 && now < turnProtectedUntil) return false;
@@ -185,6 +185,7 @@ window.TTSVoice = (function () {
         if (priority === 2) turnProtectedUntil = now + 6000;
         const stopped = stopSpeech();
         const generation = speechGeneration;
+        const segments = window.NavigationGuidance.speechSegments(text, currentLang, roadNames);
         await stopped;
         if (generation !== speechGeneration || isMuted || interruptionActive) return false;
         if (playChimeType && !window.Capacitor?.Plugins?.Pip?.speakFocused) playWarningChime(playChimeType);
@@ -193,9 +194,10 @@ window.TTSVoice = (function () {
         const focused = window.Capacitor?.Plugins?.Pip;
         if (focused?.speakFocused) {
             try {
-                const result = await focused.speakFocused({ text, lang: currentLang });
+                const result = await focused.speakFocused({ text, lang: currentLang, segments });
                 if (generation !== speechGeneration) return false;
                 if (!result.accepted) { spokenStages.clear(); lastTurnAnnounceTime = 0; }
+                if (result.languageFallback) showVoiceToast(currentLang.startsWith('ko') ? '영어 음성이 없어 한국어 음성으로 안내합니다. Android 음성 출력 설정에서 영어 음성을 설치해 주세요.' : 'English voice unavailable. Check Android text-to-speech settings.');
                 if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, timestamp: Date.now(), status: result.accepted ? 'accepted' : 'denied', source: 'native-foreground' } }));
             } catch (e) { spokenStages.clear(); }
             return;
@@ -203,18 +205,24 @@ window.TTSVoice = (function () {
 
         // 1. Native Android Capacitor TextToSpeech Plugin
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech) {
+            let completed = 0;
             try {
-                await window.Capacitor.Plugins.TextToSpeech.speak({
-                    text: text,
-                    lang: currentLang,
+                for (const segment of segments) {
+                    if (generation !== speechGeneration || isMuted || interruptionActive) return false;
+                    await window.Capacitor.Plugins.TextToSpeech.speak({
+                    text: segment.text,
+                    lang: segment.lang,
                     rate: 1.0,
                     pitch: 1.0,
                     volume: 1.0,
                     category: 'ambient'
                 });
+                    completed++;
+                }
                 return;
             } catch (err) {
                 if (generation !== speechGeneration || isMuted || interruptionActive) return false;
+                if (completed) { spokenStages.clear(); return false; }
                 console.warn("Capacitor Native TTS fallback to Web Speech:", err);
             }
         }
@@ -224,18 +232,20 @@ window.TTSVoice = (function () {
             try {
                 window.speechSynthesis.resume();
 
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = currentLang;
+                for (const segment of segments) {
+                const utterance = new SpeechSynthesisUtterance(segment.text);
+                utterance.lang = segment.lang;
                 utterance.rate = 1.0;
                 utterance.pitch = 1.0;
 
                 const voices = window.speechSynthesis.getVoices();
                 if (voices && voices.length > 0) {
-                    const match = voices.find(v => v.lang.includes(currentLang) || v.lang.startsWith(currentLang.split('-')[0]));
+                    const match = voices.find(v => v.lang.includes(segment.lang) || v.lang.startsWith(segment.lang.split('-')[0]));
                     if (match) utterance.voice = match;
                 }
 
                 window.speechSynthesis.speak(utterance);
+                }
             } catch (err) {
                 console.warn("Web Speech API Error:", err);
             }
@@ -436,11 +446,17 @@ window.TTSVoice = (function () {
             message += isKo ? ` 이어서 ${spokenDistance(following.distanceAfter)} 후 ${nextTurn}입니다.`
                 : ` Then in ${spokenDistance(following.distanceAfter)}, ${nextTurn}.`;
         }
-        speak(message, true, null, 2);
+        speak(message, true, null, 2, [maneuver.name, maneuver.ref, maneuver.destinations]);
+    }
+
+    function preview() {
+        const message = currentLang.startsWith('ko') ? '잠시 후 Lee St.에서 우회전하세요. 이어서 Harvard Ave. 방면으로 좌회전하세요.'
+            : 'Shortly, turn right onto Lee St. Then turn left toward Harvard Ave.';
+        return speak(message, true, null, 0, ['Lee St.', 'Harvard Ave.']);
     }
 
     return {
-        resetGuidance, pauseGuidance, refreshUnits: stopSpeech,
+        resetGuidance, pauseGuidance, refreshUnits: stopSpeech, preview,
         setLanguage: setLanguage,
         toggleMute: toggleMute,
         speak: speak,
