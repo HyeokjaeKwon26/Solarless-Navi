@@ -3108,7 +3108,7 @@ test('provisional route geometry is hidden until a reliable live GPS origin is r
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('let verifiedRouteOriginProvisional = false'));
     assert.ok(appSource.includes('snapToRoute: !verifiedRouteOriginProvisional'));
-    assert.ok(appSource.includes('if ((isLiveDrive || isLiveNavActive) && verifiedRouteOriginProvisional) return;'));
+    assert.ok(appSource.includes('if ((isLiveDrive || isLiveNavActive) && (verifiedRouteOriginProvisional || navigationRouteNeedsReliableOrigin)) return;'));
     assert.ok(appSource.includes('navigationRouteNeedsReliableOrigin = !isFreeDriveMode && (verifiedRouteOriginProvisional'));
     assert.ok(appSource.includes("updateRoute(true, { reason: 'gps-origin-refinement' })"));
     assert.ok(appSource.includes("? 'GPS 보정 중' : 'Refining GPS'"));
