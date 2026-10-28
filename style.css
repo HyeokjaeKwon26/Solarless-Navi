@@ -1246,7 +1246,7 @@ body.battery-saver-active .route-summary-floating {
 .search-results-dropdown .result-item:hover, .search-results-dropdown .result-item:focus-visible { background: rgba(56, 189, 248, 0.2); }
 .search-result-status { padding: 12px; font-size: 12px; color: var(--text-secondary); white-space: normal; }
 .search-results-dropdown .search-address-action { min-height: 48px; color: var(--accent-cyan); font-weight: 700; overflow-wrap: anywhere; background: rgba(56, 189, 248, 0.12); }
-.address-search-btn { flex: 0 0 40px; min-width: 40px; min-height: 40px; padding: 8px; }
+.address-search-btn { flex: 0 0 40px; min-width: 40px; min-height: 40px; padding: 8px; justify-content: center; gap: 0; }
 .input-wrapper input { padding-right: 50px; }
 .input-wrapper.origin-wrapper input { padding-right: 122px; }
 .origin-wrapper .address-search-btn { right: 76px; }
