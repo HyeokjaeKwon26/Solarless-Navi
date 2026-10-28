@@ -15,7 +15,13 @@ for (const pack of Object.values(manifest.packs)) {
  if (crypto.createHash('sha256').update(buf).digest('hex')!==pack.sha256) throw Error('hash mismatch '+pack.path);
  for(const [name,bytes] of Object.entries(unzipSync(buf))) {
   if(!name.endsWith('.json')) continue;
-  const tile=JSON.parse(Buffer.from(bytes).toString()); tileCount++;
+  const raw = Buffer.from(bytes).toString();
+  const terrainStart = raw.indexOf(',"terrain":');
+  if (terrainStart < 0) throw Error('tile has no terrain field: ' + name);
+  // Terrain grids dominate tile size and are outside this OSM comparison.
+  const tile = JSON.parse(raw.slice(0, terrainStart) + '}');
+  if (!Array.isArray(tile.buildings) || !Array.isArray(tile.tunnels)) throw Error('invalid scene tile: ' + name);
+  tileCount++;
   for(const b of tile.buildings||[]) {
    const id=Number(b.id.split('/')[1]);
    if (!buildings.has(id)) buildings.set(id,[b.height,b.heightLower,b.heightUpper,b.heightSource,b.minHeight,b.minHeightLower,b.minHeightUpper,b.minHeightSource]);

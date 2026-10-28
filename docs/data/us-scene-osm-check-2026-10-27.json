@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-10-28T00:48:55.977Z",
+  "checkedAt": "2026-10-28T01:21:31.106Z",
   "method": "All existing released building and tunnel way IDs compared to current PBF for presence, building height model, and tunnel tags. Geometry and additions are not exhaustively compared.",
   "regions": [
     {
@@ -405,6 +405,1383 @@
       "region": "us-northeast",
       "osmExtractTimestamp": "2026-10-27T21:23:59Z",
       "osmSha256": "4b253ef4cc7d85e3dc265146c09c08c0cf829c6ebaa344166e1216e51dc7dd8c"
+    },
+    {
+      "tileCount": 43707,
+      "buildingsBaseline": 15183738,
+      "tunnelsBaseline": 75685,
+      "ways": 36066384,
+      "buildingsFound": 15177481,
+      "buildingsNoLongerTagged": 1716,
+      "buildingModelChanged": 3372,
+      "tunnelsFound": 75510,
+      "tunnelsNoLongerTagged": 117,
+      "latestBuildingWayNotInBaseline": 296154,
+      "latestTunnelWayNotInBaseline": 2415,
+      "existingBuildingWayEditedAfterLocalFileMtime": 113707,
+      "existingTunnelWayEditedAfterLocalFileMtime": 3552,
+      "examples": [
+        {
+          "id": 28490059,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "215",
+            "addr:street": "South 11th Street",
+            "building": "office",
+            "building:levels": "2",
+            "building:material": "stone",
+            "roof:material": "concrete",
+            "roof:shape": "flat"
+          }
+        },
+        {
+          "id": 28490460,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            12.8,
+            12,
+            18,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "215",
+            "addr:street": "South 9th Street",
+            "building": "yes",
+            "building:levels": "4",
+            "name": "Oaklands on 9th",
+            "tourism": "hotel",
+            "website": "https://oaklandson9th.com/"
+          }
+        },
+        {
+          "id": 28719629,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            42.5,
+            42.5,
+            42.5,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "yes",
+            "building:levels": "11",
+            "height": "42.5"
+          }
+        },
+        {
+          "id": 28719780,
+          "old": [
+            64,
+            60,
+            90,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            78,
+            78,
+            78,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "580",
+            "addr:street": "Walnut Street",
+            "building": "yes",
+            "building:levels": "20",
+            "height": "78",
+            "name": "AT580"
+          }
+        },
+        {
+          "id": 28989859,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            9.6,
+            9,
+            13.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "amenity": "library",
+            "building": "yes",
+            "building:levels": "3",
+            "building:material": "brick",
+            "name": "Lindell Library",
+            "operator": "Augsburg College",
+            "ref": "LL",
+            "wikidata": "Q6552213"
+          }
+        },
+        {
+          "id": 29060521,
+          "old": [
+            44,
+            44,
+            44,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            41,
+            41,
+            41,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "100",
+            "addr:street": "North 6th Street",
+            "building": "commercial",
+            "building:levels": "8",
+            "building:material": "brick",
+            "height": "41",
+            "name": "Butler Square",
+            "opening_hours": "Mo-Fr 06:00-18:00",
+            "opening_hours:skyway": "Mo-Fr 06:00-18:00",
+            "website": "https://www.butlersquare.com/",
+            "wikidata": "Q5002579",
+            "wikipedia": "en:Butler Square"
+          }
+        },
+        {
+          "id": 29080597,
+          "old": [
+            108,
+            108,
+            108,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            153,
+            153,
+            153,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Minneapolis",
+            "addr:housenumber": "100-150",
+            "addr:postcode": "55402",
+            "addr:state": "MN",
+            "addr:street": "South 5th Street",
+            "building": "yes",
+            "building:colour": "#927c7e",
+            "building:levels": "36",
+            "height": "153",
+            "name": "Fifth Street Towers",
+            "opening_hours": "Mo-Fr 06:30-20:00",
+            "opening_hours:skyway": "Mo-Fr 06:00-20:00",
+            "wikidata": "Q5447558",
+            "wikipedia": "en:Fifth Street Towers"
+          }
+        },
+        {
+          "id": 29123568,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            12.8,
+            12,
+            18,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "university",
+            "building:levels": "4",
+            "building:material": "brick",
+            "description": "Mathematics and physical sciences.",
+            "name": "Science Hall",
+            "operator": "Augsburg University",
+            "ref": "SC",
+            "roof:material": "gravel",
+            "roof:shape": "flat",
+            "source": "knowledge;image"
+          }
+        },
+        {
+          "id": 30056630,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            25.6,
+            24,
+            36,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Minneapolis",
+            "addr:housenumber": "615",
+            "addr:postcode": "55414",
+            "addr:state": "MN",
+            "addr:street": "Washington Avenue SE",
+            "air_conditioning": "yes",
+            "brand": "Graduate",
+            "brand:wikidata": "Q85846030",
+            "building": "hotel",
+            "building:levels": "8",
+            "email": "MSPGM_GM@hilton.com",
+            "fax": "+1 612 379 8682",
+            "internet_access": "wlan",
+            "internet_access:fee": "no",
+            "name": "Graduate by Hilton Minneapolis",
+            "official_name": "Graduate Hotels",
+            "old_name": "University Hotel Minneapolis",
+            "operator": "Graduate Hotels",
+            "phone": "+1-612-379-8888",
+            "rooms": "304",
+            "smoking": "no",
+            "tourism": "hotel",
+            "website": "https://www.hilton.com/en/hotels/mspgmgu-graduate-minneapolis/",
+            "wheelchair": "yes"
+          }
+        },
+        {
+          "id": 30838959,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            16,
+            15,
+            22.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "access": "yes",
+            "addr:city": "Ann Arbor",
+            "addr:housenumber": "220",
+            "addr:postcode": "48104",
+            "addr:state": "MI",
+            "addr:street": "North Ashley Street",
+            "alt_name": "Ann & Ashley",
+            "amenity": "parking",
+            "building": "parking",
+            "building:levels": "5",
+            "capacity": "827",
+            "capacity:disabled": "18",
+            "charge": "1.80 USD/hour",
+            "fee": "yes",
+            "fee:conditional": "no @ Su 04:00-04:00",
+            "layer": "1",
+            "maxstay": "72 hours",
+            "name": "Ann Ashley Parking Structure",
+            "opening_hours": "24/7",
+            "operator": "PCI Municipal Services",
+            "operator:type": "business",
+            "parking": "multi-storey",
+            "phone": "+1-734-761-7235",
+            "website": "https://pcia2.com/ann-ashley/",
+            "wheelchair": "yes"
+          }
+        },
+        {
+          "id": 32947516,
+          "old": [
+            16,
+            15,
+            22.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            24,
+            24,
+            24,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "amenity": "parking",
+            "building": "yes",
+            "building:levels": "5",
+            "height": "24",
+            "name": "Seven at Broadway",
+            "parking": "multi-storey"
+          }
+        },
+        {
+          "id": 36179147,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "yes",
+            "building:levels": "1",
+            "name": "Spaulding Tower"
+          }
+        }
+      ],
+      "buildingsNotFound": 6257,
+      "tunnelsNotFound": 175,
+      "region": "us-midwest",
+      "osmExtractTimestamp": "2026-10-27T21:23:59Z",
+      "osmSha256": "a2de95c1612d5c06bb3a911af336a930e483a1122eea5390414fc3c2eb64b7ec"
+    },
+    {
+      "tileCount": 47566,
+      "buildingsBaseline": 28094296,
+      "tunnelsBaseline": 138567,
+      "ways": 57722494,
+      "buildingsFound": 28083806,
+      "buildingsNoLongerTagged": 1867,
+      "buildingModelChanged": 16355,
+      "tunnelsFound": 138357,
+      "tunnelsNoLongerTagged": 78,
+      "latestBuildingWayNotInBaseline": 275109,
+      "latestTunnelWayNotInBaseline": 4523,
+      "existingBuildingWayEditedAfterLocalFileMtime": 337081,
+      "existingTunnelWayEditedAfterLocalFileMtime": 2224,
+      "examples": [
+        {
+          "id": 13990575,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "North Richland Hills",
+            "addr:housenumber": "9015",
+            "addr:postcode": "76180",
+            "addr:state": "TX",
+            "addr:street": "Grand Avenue",
+            "amenity": "library",
+            "building": "yes",
+            "building:levels": "2",
+            "drinking_water": "yes",
+            "drinking_water:refill": "yes",
+            "internet_access": "wlan",
+            "internet_access:fee": "no",
+            "internet_access:ssid": "NRH-Guest",
+            "name": "North Richland Hills Library",
+            "opening_hours": "Mo-Th 09:00-21:00; Fr 09:00-18:00; Sa 09:00-17:00",
+            "operator": "City of North Richland Hills",
+            "operator:type": "public",
+            "phone": "+1-817-427-6800",
+            "toilets": "yes",
+            "toilets:access": "public",
+            "website": "https://library.nrhtx.com/"
+          }
+        },
+        {
+          "id": 25795473,
+          "old": [
+            16,
+            15,
+            22.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            19.2,
+            18,
+            27,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Austin",
+            "addr:housenumber": "101",
+            "addr:postcode": "78705",
+            "addr:state": "TX",
+            "addr:street": "East 21st Street",
+            "air_conditioning": "yes",
+            "alt_name": "PCL",
+            "amenity": "library",
+            "building": "university",
+            "building:levels": "6",
+            "check_date": "2026-09-18",
+            "internet_access": "wlan",
+            "layer": "1",
+            "name": "Perry-Castañeda Library",
+            "opening_hours": "Mo-Su 07:00-20:00",
+            "phone": "+1 512-495-4250",
+            "ref": "PCL",
+            "toilets": "yes",
+            "website": "https://www.lib.utexas.edu/visit-us/locations/pcl",
+            "wheelchair": "yes",
+            "wikidata": "Q1647700",
+            "wikipedia": "en:Perry–Castañeda Library"
+          }
+        },
+        {
+          "id": 27954093,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "1152",
+            "addr:postcode": "75218",
+            "addr:street": "North Buckner Boulevard",
+            "building": "commercial",
+            "building:levels": "1"
+          }
+        },
+        {
+          "id": 28095222,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Fort Worth",
+            "addr:housenumber": "1515",
+            "addr:postcode": "76102",
+            "addr:state": "TX",
+            "addr:street": "Commerce Street",
+            "building": "university",
+            "building:levels": "2",
+            "name": "Texas A&M University School of Law",
+            "wikidata": "Q7708206"
+          }
+        },
+        {
+          "id": 28507314,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            16,
+            15,
+            22.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "access": "yes",
+            "addr:city": "Decatur",
+            "addr:county": "Dekalb",
+            "addr:housenumber": "215",
+            "addr:postcode": "30030-3413",
+            "addr:state": "GA",
+            "addr:street": "Sycamore Street",
+            "air_conditioning": "yes",
+            "amenity": "library",
+            "building": "library",
+            "building:levels": "5",
+            "contact:facebook": "dekalblibrary",
+            "contact:instagram": "dekalblibrary",
+            "contact:youtube": "DeKalbCountyPublicLibrary",
+            "internet_access": "wlan",
+            "internet_access:fee": "no",
+            "internet_access:ssid": "DeKalb Coun­ty Pub­lic Library",
+            "name": "Decatur Library",
+            "opening_hours": "Su off; Mo-We 09:00-20:00; Th-Sa 09:00-18:00; Jan 01, Jun 19, Jul 03, Jul 04, Sep 07, Nov 11, Nov 26, Dec 24, Dec 25 off; Jan Mo[3] off; Feb Mo[3] off; May Mo[-1] off; Dec 31 09:00-17:00; Nov 25 09:00-17:00",
+            "operator": "DeKalb County Public Library",
+            "operator:type": "public",
+            "operator:wikidata": "Q5243945",
+            "phone": "+1-404-370-3070",
+            "ref:isil": "US-gd",
+            "website": "https://dekalblibrary.org",
+            "wikidata": "Q30289363"
+          }
+        },
+        {
+          "id": 28544618,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            32,
+            32,
+            32,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Dallas",
+            "addr:country": "US",
+            "addr:housenumber": "1950",
+            "addr:postcode": "75207",
+            "addr:state": "TX",
+            "addr:street": "North Stemmons Freeway",
+            "building": "yes",
+            "building:levels": "6",
+            "height": "32",
+            "name": "Equinix Infomart",
+            "operator": "Equinix",
+            "operator:wikidata": "Q851641",
+            "telecom": "data_center"
+          }
+        },
+        {
+          "id": 30288133,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "780",
+            "addr:street": "South MacArthur Boulevard",
+            "building": "retail",
+            "building:levels": "1"
+          }
+        },
+        {
+          "id": 32073884,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Cary",
+            "addr:housenumber": "1805",
+            "addr:postcode": "27518",
+            "addr:state": "NC",
+            "addr:street": "Walnut Street",
+            "amenity": "restaurant",
+            "building": "yes",
+            "building:levels": "1",
+            "cuisine": "asian;seafood;sushi",
+            "name": "Umi Hotpot Sushi & Seafood Buffet",
+            "opening_hours": "Su-Th 11:00-22:00; Fr-Sa 11:00-23:00",
+            "phone": "9198918888",
+            "self_service": "partially",
+            "website": "https://www.umibuffet.com/locations/cary"
+          }
+        },
+        {
+          "id": 32709473,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Blacksburg",
+            "addr:country": "US",
+            "addr:housenumber": "115",
+            "addr:postcode": "24061",
+            "addr:state": "VA",
+            "addr:street": "Kent Street",
+            "building": "retail",
+            "building:levels": "2",
+            "building:material": "concrete",
+            "fax": "+1-540-231-5416",
+            "name": "Virginia Tech University Bookstore",
+            "opening_hours": "Mo-We,Fr 09:00-18:00; Sa 09:00-17:00; Th,Su off",
+            "operator": "Virginia Tech",
+            "operator:short": "VT",
+            "operator:type": "public",
+            "operator:website": "https://www.vt.edu/",
+            "operator:wikidata": "Q65379",
+            "operator:wikipedia": "en:Virginia Tech",
+            "owner": "Virginia Tech",
+            "owner:wikidata": "Q65379",
+            "ownership": "public",
+            "phone": "+1-540-231-5991",
+            "ref": "178",
+            "roof:levels": "0",
+            "shop": "books",
+            "short_name": "BOOK",
+            "start_date": "1975",
+            "toilets:wheelchair": "no",
+            "website": "https://www.bkstr.com/virginiatechstore/",
+            "wheelchair": "yes"
+          }
+        },
+        {
+          "id": 38607779,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            23,
+            23,
+            23,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Austin",
+            "addr:housenumber": "205",
+            "addr:postcode": "78705",
+            "addr:state": "TX",
+            "addr:street": "West 24th Street",
+            "alt_name": "BIO",
+            "building": "university",
+            "building:facade:colour": "beige",
+            "building:levels": "5",
+            "height": "23",
+            "name": "Biological Laboratories",
+            "ref": "BIO",
+            "roof:colour": "#784949",
+            "roof:height": "6",
+            "roof:shape": "hipped"
+          }
+        },
+        {
+          "id": 38607780,
+          "old": [
+            16,
+            15,
+            22.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            20,
+            20,
+            20,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "306",
+            "addr:postcode": "78712",
+            "addr:state": "TX",
+            "addr:street": "Inner Campus Drive",
+            "alt_name": "WMB",
+            "building": "office",
+            "building:levels": "5",
+            "ele": "179",
+            "height": "20",
+            "name": "West Mall Office Building",
+            "ref": "WMB",
+            "roof:colour": "#784949",
+            "roof:height": "5",
+            "roof:shape": "hipped"
+          }
+        },
+        {
+          "id": 38607784,
+          "old": [
+            12.8,
+            12,
+            18,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            16,
+            15,
+            22.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Austin",
+            "addr:housenumber": "2304",
+            "addr:postcode": "78712",
+            "addr:state": "TX",
+            "addr:street": "Whitis Avenue",
+            "alt_name": "FAC",
+            "building": "university",
+            "building:levels": "5",
+            "name": "Peter T. Flawn Academic Center",
+            "ref": "FAC",
+            "wikidata": "Q5458235"
+          }
+        }
+      ],
+      "buildingsNotFound": 10490,
+      "tunnelsNotFound": 210,
+      "region": "us-south",
+      "osmExtractTimestamp": "2026-10-27T21:23:59Z",
+      "osmSha256": "0e0d889f8cdf8da510280382b45c16865d2979e68114255772a39c42037744e1"
+    },
+    {
+      "tileCount": 41802,
+      "buildingsBaseline": 21600101,
+      "tunnelsBaseline": 77793,
+      "ways": 43342082,
+      "buildingsFound": 21594888,
+      "buildingsNoLongerTagged": 1219,
+      "buildingModelChanged": 124895,
+      "tunnelsFound": 77649,
+      "tunnelsNoLongerTagged": 40,
+      "latestBuildingWayNotInBaseline": 167384,
+      "latestTunnelWayNotInBaseline": 1267,
+      "existingBuildingWayEditedAfterLocalFileMtime": 273625,
+      "existingTunnelWayEditedAfterLocalFileMtime": 2011,
+      "examples": [
+        {
+          "id": 24024349,
+          "old": [
+            9.6,
+            9,
+            13.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            12.8,
+            12,
+            18,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "access:disabled": "yes",
+            "air_conditioning": "yes",
+            "amenity": "library",
+            "building": "yes",
+            "building:levels": "4",
+            "internet_access": "wlan",
+            "internet_access:fee": "customers",
+            "name": "C V Starr East Asian Library",
+            "name:etymology:wikidata": "Q183340",
+            "name:etymology:wikipedia": "en:Cornelius Vander Starr",
+            "operator": "University of California, Berkeley",
+            "operator:type": "university",
+            "operator:wikidata": "Q168756",
+            "website": "https://www.lib.berkeley.edu/visit/east-asian",
+            "wheelchair": "yes",
+            "wikidata": "Q118903541"
+          }
+        },
+        {
+          "id": 24025027,
+          "old": [
+            12.8,
+            12,
+            18,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            16,
+            15,
+            22.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "access": "permissive",
+            "addr:state": "CA",
+            "amenity": "library",
+            "building": "university",
+            "building:levels": "5",
+            "ele": "80",
+            "gnis:feature_id": "1656739",
+            "internet_access": "wlan",
+            "internet_access:fee": "no",
+            "layer": "1",
+            "level": "5",
+            "name": "Moffitt Undergraduate Library",
+            "note": "Moffitt Library reopened in Auust 2026",
+            "opening_hours": "\"see website\"",
+            "operator": "UC Library",
+            "operator:type": "university",
+            "source": "USGS Geonames",
+            "website": "https://www.lib.berkeley.edu/libraries/moffitt-library"
+          }
+        },
+        {
+          "id": 24433395,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            9,
+            9,
+            9,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "industrial",
+            "building:colour": "#c69e7b",
+            "building:levels": "2",
+            "disused": "yes",
+            "height": "9",
+            "name": "New Industries Building",
+            "name:pt": "Construção de novas indústrias",
+            "roof:colour": "#8a796e",
+            "roof:shape": "flat",
+            "wikidata": "Q1142660",
+            "wikipedia": "en:New Industries Building"
+          }
+        },
+        {
+          "id": 26982845,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "yes",
+            "building:levels": "2",
+            "name": "Tye Creek Lodge"
+          }
+        },
+        {
+          "id": 27589935,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Hollister",
+            "addr:housenumber": "1790",
+            "addr:postcode": "95023-5621",
+            "addr:state": "CA",
+            "addr:street": "Airline Highway",
+            "brand": "Target",
+            "brand:wikidata": "Q1046951",
+            "building": "yes",
+            "building:levels": "1",
+            "name": "Target",
+            "opening_hours": "08:00-23:00",
+            "phone": "+1 831-636-3722",
+            "shop": "department_store",
+            "website": "https://www.target.com/sl/hollister/941"
+          }
+        },
+        {
+          "id": 27645914,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Woodinville",
+            "addr:housenumber": "14479",
+            "addr:postcode": "98072",
+            "addr:state": "WA",
+            "addr:street": "Woodinville Redmond Road Northeast",
+            "building": "retail",
+            "building:levels": "1",
+            "name": "Hollywood Vineyards",
+            "operator": "Hollywood Vineyards LLC",
+            "start_date": "1986",
+            "website": "https://hollywoodvineyards.com/"
+          }
+        },
+        {
+          "id": 27712722,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "retail",
+            "building:levels": "1",
+            "name": "Building B",
+            "ref": "B"
+          }
+        },
+        {
+          "id": 27712769,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "retail",
+            "building:levels": "1",
+            "name": "Building C",
+            "ref": "C"
+          }
+        },
+        {
+          "id": 27712772,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:street": "San Ysidro Avenue",
+            "building": "retail",
+            "building:levels": "1",
+            "name": "Building D",
+            "ref": "D"
+          }
+        },
+        {
+          "id": 27805123,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Woodinville",
+            "addr:housenumber": "14450",
+            "addr:postcode": "98072",
+            "addr:state": "WA",
+            "addr:street": "Woodinville Redmond Road Northeast",
+            "building": "retail",
+            "building:levels": "1",
+            "name": "Redwood Place",
+            "start_date": "1986"
+          }
+        },
+        {
+          "id": 27928150,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "church",
+            "building:levels": "1"
+          }
+        },
+        {
+          "id": 28128500,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "amenity": "fast_food",
+            "building": "college",
+            "building:levels": "2",
+            "fast_food": "cafeteria",
+            "name": "Student Center/"
+          }
+        }
+      ],
+      "buildingsNotFound": 5213,
+      "tunnelsNotFound": 144,
+      "region": "us-west",
+      "osmExtractTimestamp": "2026-10-27T21:23:59Z",
+      "osmSha256": "615a978b7145bc7c2920d35eaddc04d352c73151417df67871b425725b1846e0"
     }
   ]
 }
