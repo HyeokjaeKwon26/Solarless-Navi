@@ -48,7 +48,17 @@ public class PipPlugin extends Plugin {
             NavigationSpeech speech = NavigationSpeech.get(getContext());
             result.put("accepted", MainActivity.foreground && speech.speak(call.getString("text", ""), call.getString("lang", "en-US"), false, call.getArray("segments")));
             result.put("languageFallback", speech.usedLanguageFallback());
+            result.put("voiceFallback", speech.usedVoiceFallback());
             call.resolve(result);
+        });
+    }
+    @PluginMethod public void getSpeechSettings(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> call.resolve(NavigationSpeech.get(getContext()).speechSettings()));
+    }
+    @PluginMethod public void setSpeechSettings(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            try { call.resolve(NavigationSpeech.get(getContext()).saveSpeechSettings(call.getObject("settings", new JSObject()))); }
+            catch (Exception error) { call.reject(error.getMessage()); }
         });
     }
     @PluginMethod public void stopFocusedSpeech(PluginCall call) {

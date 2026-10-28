@@ -341,6 +341,25 @@
                             </select>
                         </div>
                         <button type="button" class="nav-btn secondary" id="btn-preview-voice">안내 음성 미리 듣기 (도로명은 영어)</button>
+                        <section class="settings-section speech-settings" aria-labelledby="speech-settings-title">
+                            <h4 id="speech-settings-title">안내 목소리</h4>
+                            <fieldset id="speech-settings-controls" disabled>
+                                <label for="speech-voice-ko" id="speech-ko-label">한국어 목소리</label>
+                                <select id="speech-voice-ko"></select>
+                                <button type="button" class="nav-btn secondary" id="btn-preview-ko">한국어 미리 듣기</button>
+                                <label for="speech-voice-en" id="speech-en-label">영어 목소리</label>
+                                <select id="speech-voice-en"></select>
+                                <button type="button" class="nav-btn secondary" id="btn-preview-en">영어 미리 듣기</button>
+                                <label for="speech-rate" id="speech-rate-label">말하기 속도</label><output id="speech-rate-value" for="speech-rate">1.00×</output>
+                                <input type="range" id="speech-rate" min="0.5" max="1.5" step="0.05" value="1">
+                                <label for="speech-pitch" id="speech-pitch-label">음높이</label><output id="speech-pitch-value" for="speech-pitch">1.00×</output>
+                                <input type="range" id="speech-pitch" min="0.75" max="1.5" step="0.05" value="1">
+                                <button type="button" class="nav-btn secondary" id="btn-reset-voices">음성 설정 초기화</button>
+                            </fieldset>
+                            <button type="button" class="nav-btn secondary" id="btn-refresh-voices">목소리 목록 새로고침</button>
+                            <small id="speech-settings-status" role="status"></small>
+                            <small id="speech-settings-help"></small>
+                        </section>
                         <div class="option-row"><label for="toggle-driving-focus" id="driving-focus-label">주행 집중 화면</label>
                             <label class="toggle-switch"><input type="checkbox" id="toggle-driving-focus" checked><span class="slider"></span></label>
                         </div>
@@ -780,6 +799,7 @@
     <script src="js/drive-archive.js"></script>
     <script src="js/navigation-units.js"></script>
     <script src="js/tts-voice.js"></script>
+    <script src="js/voice-settings.js"></script>
     <script src="js/destination-review.js"></script>
     <script src="js/offline-map.js"></script>
     <script src="js/pip-controller.js"></script>

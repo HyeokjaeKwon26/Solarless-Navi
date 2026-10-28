@@ -20,6 +20,7 @@ window.TTSVoice = (function () {
     let turnProtectedUntil = 0;
     const spokenStages = new Map();
     let guidancePaused = false;
+    let voiceFallbackNotified = false;
     const spokenDistance = meters => window.NavigationUnits.distance(meters, { speech: true, language: currentLang });
 
     function resetGuidance() {
@@ -175,7 +176,7 @@ window.TTSVoice = (function () {
         }
     }
 
-    async function speak(text, force = false, playChimeType = null, priority = 0, roadNames = []) {
+    async function speak(text, force = false, playChimeType = null, priority = 0, roadNames = [], options = {}) {
         if (!text || isMuted || interruptionActive) return false;
         const now = Date.now();
         if (priority < 2 && now < turnProtectedUntil) return false;
@@ -185,7 +186,9 @@ window.TTSVoice = (function () {
         if (priority === 2) turnProtectedUntil = now + 6000;
         const stopped = stopSpeech();
         const generation = speechGeneration;
-        const segments = window.NavigationGuidance.speechSegments(text, currentLang, roadNames);
+        const language = options.language || currentLang;
+        const segments = window.NavigationGuidance.speechSegments(text, language, roadNames);
+        const preferences = window.VoiceSettings?.get() || {rate:1,pitch:1,koVoice:'',enVoice:''};
         await stopped;
         if (generation !== speechGeneration || isMuted || interruptionActive) return false;
         if (playChimeType && !window.Capacitor?.Plugins?.Pip?.speakFocused) playWarningChime(playChimeType);
@@ -194,13 +197,14 @@ window.TTSVoice = (function () {
         const focused = window.Capacitor?.Plugins?.Pip;
         if (focused?.speakFocused) {
             try {
-                const result = await focused.speakFocused({ text, lang: currentLang, segments });
+                const result = await focused.speakFocused({ text, lang: language, segments });
                 if (generation !== speechGeneration) return false;
                 if (!result.accepted) { spokenStages.clear(); lastTurnAnnounceTime = 0; }
                 if (result.languageFallback) showVoiceToast(currentLang.startsWith('ko') ? '영어 음성이 없어 한국어 음성으로 안내합니다. Android 음성 출력 설정에서 영어 음성을 설치해 주세요.' : 'English voice unavailable. Check Android text-to-speech settings.');
+                else if(result.voiceFallback&&!voiceFallbackNotified){voiceFallbackNotified=true;showVoiceToast(currentLang.startsWith('ko')?'선택한 목소리가 없어 같은 언어의 기본 음성으로 안내합니다.':'Selected voice unavailable. Using the language default.');}
                 if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, timestamp: Date.now(), status: result.accepted ? 'accepted' : 'denied', source: 'native-foreground' } }));
-            } catch (e) { spokenStages.clear(); }
-            return;
+                return result.accepted === true;
+            } catch (e) { spokenStages.clear(); return false; }
         }
 
         // 1. Native Android Capacitor TextToSpeech Plugin
@@ -212,14 +216,14 @@ window.TTSVoice = (function () {
                     await window.Capacitor.Plugins.TextToSpeech.speak({
                     text: segment.text,
                     lang: segment.lang,
-                    rate: 1.0,
-                    pitch: 1.0,
+                    rate: preferences.rate,
+                    pitch: preferences.pitch,
                     volume: 1.0,
                     category: 'ambient'
                 });
                     completed++;
                 }
-                return;
+                return true;
             } catch (err) {
                 if (generation !== speechGeneration || isMuted || interruptionActive) return false;
                 if (completed) { spokenStages.clear(); return false; }
@@ -235,17 +239,20 @@ window.TTSVoice = (function () {
                 for (const segment of segments) {
                 const utterance = new SpeechSynthesisUtterance(segment.text);
                 utterance.lang = segment.lang;
-                utterance.rate = 1.0;
-                utterance.pitch = 1.0;
+                utterance.rate = preferences.rate;
+                utterance.pitch = preferences.pitch;
 
                 const voices = window.speechSynthesis.getVoices();
                 if (voices && voices.length > 0) {
-                    const match = voices.find(v => v.lang.includes(segment.lang) || v.lang.startsWith(segment.lang.split('-')[0]));
+                    const id=segment.lang.startsWith('ko')?preferences.koVoice:preferences.enVoice;
+                    const compatible=v=>v.lang.replace('_','-').split('-')[0]===segment.lang.split('-')[0];
+                    const match = voices.find(v=>'web:'+v.voiceURI===id&&compatible(v)) || voices.find(v=>compatible(v)&&v.lang===segment.lang) || voices.find(compatible);
                     if (match) utterance.voice = match;
                 }
 
                 window.speechSynthesis.speak(utterance);
                 }
+                return true;
             } catch (err) {
                 console.warn("Web Speech API Error:", err);
             }
@@ -455,9 +462,14 @@ window.TTSVoice = (function () {
             : 'Shortly, turn right onto Lee St. Then turn left toward Harvard Ave.';
         return speak(message, true, null, 0, ['Lee St.', 'Harvard Ave.']);
     }
+    function previewLanguage(language) {
+        const lang=language==='ko-KR'?'ko-KR':'en-US';
+        const text=lang==='ko-KR'?'잠시 후 우회전하세요. 목적지까지 안전하게 안내하겠습니다.':'Shortly, turn right onto Lee Street. Then continue toward Harvard Avenue.';
+        return speak(text,true,null,0,[],{language:lang});
+    }
 
     return {
-        resetGuidance, pauseGuidance, refreshUnits: stopSpeech, preview,
+        resetGuidance, pauseGuidance, refreshUnits: stopSpeech, preview, previewLanguage,
         setLanguage: setLanguage,
         toggleMute: toggleMute,
         speak: speak,

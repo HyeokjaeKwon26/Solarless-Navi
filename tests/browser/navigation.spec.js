@@ -430,6 +430,83 @@ test('voice preview sends Korean and English segments to native speech and respe
     expect(state.errors).toEqual([]);
 });
 
+async function speechSettingsFixture(page,{missing=false,delayed=false}={}) {
+    const state=await fixtures(page,{brokenMap:true});
+    await page.addInitScript(({missing,delayed})=>{
+        window.speechRequests=[];window.speechReads=0;window.speechSaveFailure=false;
+        window.speechCatalogue=[{id:'engine:ko1',name:'Korean installed voice',lang:'ko-KR',networkRequired:false},
+            {id:'engine:en1',name:'English installed voice',lang:'en-US',networkRequired:false},
+            {id:'engine:en2',name:'English online voice with a very long provider label',lang:'en-GB',networkRequired:true}];
+        if(missing&&!localStorage.getItem('native-speech-fixture'))localStorage.setItem('native-speech-fixture',JSON.stringify({koVoice:'removed:ko',enVoice:'',rate:1,pitch:1}));
+        const get=()=>({ready:!delayed||window.speechReads>1,voices:window.speechCatalogue,settings:JSON.parse(localStorage.getItem('native-speech-fixture')||'{"koVoice":"","enVoice":"","rate":1,"pitch":1}')});
+        window.Capacitor={Plugins:{Pip:{
+            getSpeechSettings:async()=>{window.speechReads++;return get();},
+            setSpeechSettings:async({settings})=>{if(window.speechSaveFailure)throw Error('SAVE_FAILED');localStorage.setItem('native-speech-fixture',JSON.stringify(settings));return get();},
+            stopFocusedSpeech:async()=>{},speakFocused:async request=>{window.speechRequests.push({...request,saved:get().settings});return {accepted:true};}
+        }}};
+    },{missing,delayed});
+    return state;
+}
+
+test('voice settings persist separately by language and previews use the saved native settings',async({page})=>{
+    const state=await speechSettingsFixture(page,{delayed:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await page.locator('#speech-voice-ko').selectOption('engine:ko1');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await page.locator('#speech-voice-en').selectOption('engine:en2');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    for(const [id,value] of [['speech-rate','0.8'],['speech-pitch','1.2']]){
+        await page.locator('#'+id).fill(value);await page.locator('#'+id).dispatchEvent('change');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    }
+    await page.locator('#btn-preview-ko').click();await expect.poll(()=>page.evaluate(()=>window.speechRequests.length)).toBe(1);
+    await page.locator('#btn-preview-en').click();await expect.poll(()=>page.evaluate(()=>window.speechRequests.length)).toBe(2);
+    const requests=await page.evaluate(()=>window.speechRequests);
+    expect(requests.map(r=>r.lang)).toEqual(['ko-KR','en-US']);
+    for(const r of requests)expect(r.saved).toEqual({koVoice:'engine:ko1',enVoice:'engine:en2',rate:.8,pitch:1.2});
+    expect(requests[0].segments.every(s=>s.lang==='ko-KR')).toBe(true);
+    await page.locator('#btn-toggle-lang').click();await expect(page.locator('#speech-settings-title')).toHaveText('안내 목소리');
+    await expect(page.locator('#speech-voice-en')).toHaveValue('engine:en2');
+    await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await expect(page.locator('#speech-voice-ko')).toHaveValue('engine:ko1');await expect(page.locator('#speech-voice-en')).toHaveValue('engine:en2');
+    await expect(page.locator('#speech-rate-value')).toHaveText('0.80×');await expect(page.locator('#speech-pitch-value')).toHaveText('1.20×');
+    await page.locator('#btn-reset-voices').click();await expect(page.locator('#speech-rate-value')).toHaveText('1.00×');
+    await expect(page.locator('#speech-voice-ko')).toHaveValue('');await expect(page.locator('#speech-voice-en')).toHaveValue('');expect(state.errors).toEqual([]);
+});
+
+test('missing voices and failed saves are explicit and refresh restores native truth',async({page})=>{
+    const state=await speechSettingsFixture(page,{missing:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#speech-settings-status')).toContainText('Unavailable');
+    await expect(page.locator('#speech-voice-ko')).toHaveValue('removed:ko');
+    await page.evaluate(()=>window.speechSaveFailure=true);await page.locator('#speech-voice-ko').selectOption('engine:ko1');
+    await expect(page.locator('#speech-settings-status')).toContainText('Could not save');await expect(page.locator('#speech-voice-ko')).toBeDisabled();
+    await page.evaluate(()=>window.speechSaveFailure=false);await page.locator('#btn-refresh-voices').click();await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await expect(page.locator('#speech-voice-ko')).toHaveValue('removed:ko');
+    await page.locator('#speech-voice-ko').selectOption('');await expect(page.locator('#speech-settings-status')).toContainText('save automatically');
+    expect(state.errors).toEqual([]);
+});
+
+test('voice settings fit narrow and landscape screens and mute prevents previews',async({page})=>{
+    const state=await speechSettingsFixture(page);await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    for(const size of [{width:320,height:740},{width:640,height:320}]){
+        await page.setViewportSize(size);
+        for(const id of ['speech-voice-ko','speech-voice-en','speech-rate','speech-pitch','btn-preview-ko','btn-preview-en','btn-reset-voices','btn-refresh-voices']){
+            const control=page.locator('#'+id);await control.scrollIntoViewIfNeeded();const box=await control.boundingBox();
+            expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(size.width+1);expect(box.height).toBeGreaterThanOrEqual(44);
+        }
+        await page.locator('#speech-voice-en').scrollIntoViewIfNeeded();await page.screenshot({path:test.info().outputPath(`speech-settings-${size.width}.png`)});
+    }
+    await page.evaluate(()=>TTSVoice.toggleMute());await page.locator('#btn-preview-en').click();
+    await expect(page.locator('#speech-settings-status')).toContainText('Enable voice');expect(await page.evaluate(()=>window.speechRequests.length)).toBe(0);
+    expect(state.errors).toEqual([]);
+});
+
+test('voice preview cannot interrupt active guidance',async({page})=>{
+    const state=await speechSettingsFixture(page);await page.goto('./');await selectDestination(page,'Alpha');await page.locator('#btn-map-start-nav').click();
+    await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    const count=await page.evaluate(()=>window.speechRequests.length);
+    await page.locator('#btn-preview-ko').click();await expect(page.locator('#speech-settings-status')).toContainText('End guidance');
+    expect(await page.evaluate(()=>window.speechRequests.length)).toBe(count);expect(state.errors).toEqual([]);
+});
+
 test('registering Home requires choosing and confirming an address instead of saving the first hit', async ({page}) => {
     const state=await fixtures(page,{brokenMap:true});
     page.removeAllListeners('dialog'); page.on('dialog',dialog=>dialog.accept('Alpha'));

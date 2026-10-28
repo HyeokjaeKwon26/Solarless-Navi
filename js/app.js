@@ -1271,6 +1271,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('offline-simpler-label').textContent=ko?'오프라인에서 회전·연결도로가 적은 경로 선호':'Prefer fewer turns and service roads offline';
         document.getElementById('btn-close-journey-detail').textContent = ko ? '닫기' : 'Close';
         document.getElementById('btn-preview-voice').textContent = ko ? '안내 음성 미리 듣기 (도로명은 영어)' : 'Preview guidance voice';
+        VoiceSettings.render();
         selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
         renderSpeedDisplay();
         document.querySelectorAll('[data-distance-meters]').forEach(element => setDistanceLabel(element, Number(element.dataset.distanceMeters), element.dataset.distanceLong === 'true', element.dataset.distancePrefix));
@@ -1298,6 +1299,7 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshUnitPresentation();
         });
         document.getElementById('navigation-units').addEventListener('change', event => NavigationUnits.setPreference(event.target.value));
+        VoiceSettings.init({canPreview:()=>!isLiveNavActive});
         document.getElementById('btn-preview-voice').addEventListener('click', () => {
             if (isLiveNavActive) {
                 alert(I18n.getLanguage().startsWith('ko') ? '주행 안내를 종료한 뒤 음성을 미리 들어보세요.' : 'End navigation before testing the voice.');
