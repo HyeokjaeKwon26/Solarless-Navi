@@ -153,6 +153,10 @@
                     <div id="destination-review-map" aria-label="목적지 지도 / Destination map"></div>
                     <p id="destination-review-position"></p>
                     <p id="destination-review-note"></p>
+                    <div id="destination-access-options">
+                        <label class="arrival-check"><input type="checkbox" id="destination-entrance-confirmed"><span id="destination-entrance-label">차량 진입점 또는 주차장 입구를 직접 확인했습니다</span></label>
+                        <label class="arrival-check"><input type="checkbox" id="destination-save-favorite"><span id="destination-save-label">이 도착점을 즐겨찾기에 저장</span></label>
+                    </div>
                     <button type="button" class="nav-btn secondary" id="btn-review-adjust" aria-pressed="false">도착점 조정</button>
                     <button type="button" class="nav-btn primary" id="btn-review-confirm">이 위치로 경로 찾기</button>
                     <button type="button" class="nav-btn secondary" id="btn-review-cancel">검색으로 돌아가기</button>
@@ -526,6 +530,7 @@
                         <!-- Real Driving Control & App Info Link at Bottom of Drawer -->
                         <div class="action-buttons-group">
                             <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> GPS 내비 시작</button>
+                            <button type="button" id="btn-arrival-preview" class="nav-btn secondary" disabled>도착 구간 미리보기 / Arrival preview</button>
                             <div class="option-row settings-option">
                                 <div class="option-label-group"><span class="option-title" id="junction-auto-label">교차로 자동 확대</span></div>
                                 <label class="toggle-switch"><input type="checkbox" id="junction-auto-zoom" aria-labelledby="junction-auto-label" checked><span class="slider"></span></label>

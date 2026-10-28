@@ -419,7 +419,7 @@ window.TTSVoice = (function () {
         if (isMuted || interruptionActive || !maneuver || maneuver.type === 'arrive' || !Number.isFinite(distanceMeters)) return;
         const now = Date.now();
         guidancePaused = false;
-        const limits = window.NavigationGuidance.thresholds(speedKmh);
+        const limits = window.NavigationGuidance.thresholds(speedKmh, maneuver);
         const stage = distanceMeters <= limits.execute ? 3 : distanceMeters <= limits.prepare ? 2 : distanceMeters <= limits.preview ? 1 : 0;
         if (!stage) return;
         const key = `${maneuver.sequence ?? ''}|${maneuver.location}|${maneuver.type}|${maneuver.modifier}`;
@@ -434,7 +434,7 @@ window.TTSVoice = (function () {
         if (maneuver.exit && /roundabout|rotary/.test(maneuver.type)) {
             turn += isKo ? `, ${maneuver.exit}번째 출구` : `, take exit ${maneuver.exit}`;
         }
-        const road = window.NavigationGuidance.roadLabel(maneuver, isKo);
+        const road = stage === 3 ? window.NavigationGuidance.shortRoad(maneuver, isKo) : window.NavigationGuidance.roadLabel(maneuver, isKo);
         const dist = spokenDistance(distanceMeters);
         const action = road ? (isKo ? `${road} 방면 ${turn}` : `${turn} toward ${road}`) : turn;
         let message = isKo
@@ -442,11 +442,12 @@ window.TTSVoice = (function () {
             : (stage === 3 ? `${action} ahead.` : stage === 2 ? `Shortly, ${action}.` : `In ${dist}, ${action}.`);
         const following = maneuver.following;
         if (stage >= 2 && following && following.distanceAfter <= 180) {
-            const nextTurn = getManeuverText(following.type, following.modifier);
+            const nextRoad = window.NavigationGuidance.shortRoad(following, isKo);
+            const nextTurn = getManeuverText(following.type, following.modifier) + (nextRoad ? (isKo ? `, ${nextRoad} 방면` : ` toward ${nextRoad}`) : '');
             message += isKo ? ` 이어서 ${spokenDistance(following.distanceAfter)} 후 ${nextTurn}입니다.`
                 : ` Then in ${spokenDistance(following.distanceAfter)}, ${nextTurn}.`;
         }
-        speak(message, true, null, 2, [maneuver.name, maneuver.ref, maneuver.destinations]);
+        speak(message, true, null, 2, [maneuver.name, maneuver.ref, maneuver.destinations, following?.name, following?.ref]);
     }
 
     function preview() {

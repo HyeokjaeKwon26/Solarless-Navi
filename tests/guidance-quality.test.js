@@ -27,6 +27,8 @@ test('native background snapshots carry mixed languages and a following turn', a
         {type:'turn',name:'Harvard Ave.',location:[0.002,0],cumulativeDistance:220}]});
     assert.ok(payload.route.turns[0].following.distanceAfter < 180);
     assert.ok(payload.route.turns[0].segments.some(part => part.lang==='en-US' && part.text==='Lee Street'));
+    assert.ok(payload.route.turns[0].following.segments.some(part => part.lang==='en-US' && part.text==='Harvard Avenue'));
+    assert.equal(payload.route.turns[0].complex,true);
     assert.equal(payload.route.unitSystem,'imperial');
 });
 function router() {

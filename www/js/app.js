@@ -355,7 +355,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentEnd) return;
         try {
             localStorage.setItem(ACTIVE_NAVIGATION_SESSION_KEY, JSON.stringify({
-                end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng), source: currentEnd.source },
+                end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng), source: currentEnd.source, entranceConfirmed: currentEnd.entranceConfirmed === true },
                 preview: JourneyPolicy.previewSnapshot(selectedRouteObj, currentEnd, Date.now()),
                 name: destinationName,
                 mode: currentMode,
@@ -394,7 +394,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentEnd) return null;
         return {
             freeDrive: false,
-            end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
+            end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng), source: currentEnd.source, entranceConfirmed: currentEnd.entranceConfirmed === true },
             name: destinationName,
             verifiedRouteRequestKey,
             verifiedRouteOriginProvisional
@@ -458,6 +458,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         currentEnd = { lat: Number(saved.end.lat), lng: Number(saved.end.lng) };
         if (saved.end.source === 'user-pin') currentEnd.source = 'user-pin';
+        currentEnd.entranceConfirmed = saved.end.entranceConfirmed === true;
         cachedPreview = saved.preview;
         destinationName = String(saved.name || (isKo ? '이전 목적지' : 'Previous destination'));
         if (['glareFree', 'fastest', 'shade'].includes(saved.mode)) currentMode = saved.mode;
@@ -1214,6 +1215,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('driving-focus-label').textContent = ko ? '주행 집중 화면' : 'Focused driving display';
         document.getElementById('btn-route-analysis').textContent = ko ? '경로 분석 보기' : 'View route analysis';
         document.getElementById('btn-drive-report').textContent = ko ? '주행 품질 요약' : 'Drive quality summary';
+        document.getElementById('btn-arrival-preview').textContent = ko ? '도착 구간 미리보기' : 'Preview arrival approach';
         document.getElementById('btn-close-journey-detail').textContent = ko ? '닫기' : 'Close';
         document.getElementById('btn-preview-voice').textContent = ko ? '안내 음성 미리 듣기 (도로명은 영어)' : 'Preview guidance voice';
         selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
@@ -1528,18 +1530,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const following = nextManeuver && nextManeuver.distanceFromCar <= 400 && nextManeuver.following;
         followingElement.hidden = !following || following.distanceAfter > 180;
         followingElement.textContent = followingElement.hidden ? '' : (isKo
-            ? `이어서 ${NavigationUnits.distance(following.distanceAfter)} 후 ${TTSVoice.getManeuverText(following.type, following.modifier)}`
-            : `Then in ${NavigationUnits.distance(following.distanceAfter)}, ${TTSVoice.getManeuverText(following.type, following.modifier)}`);
+            ? `이어서 ${NavigationUnits.distance(following.distanceAfter)} 후 ${TTSVoice.getManeuverText(following.type, following.modifier)} · ${NavigationGuidance.shortRoad(following, true)}`
+            : `Then in ${NavigationUnits.distance(following.distanceAfter)}, ${TTSVoice.getManeuverText(following.type, following.modifier)} · ${NavigationGuidance.shortRoad(following, false)}`);
         laneElement.hidden = !lanes;
         laneElement.textContent = lanes ? (isKo
-            ? `왼쪽부터 ${lanes.valid.join(', ')}번 차로 이용 · 총 ${lanes.total}차로`
-            : `Use lane ${lanes.valid.join(', ')} from left · ${lanes.total} lanes`) : '';
+            ? `왼쪽부터 ${lanes.valid.join(', ')}번 차로 이용 · 총 ${lanes.total}차로 · 지도 정보, 현재 차로 미감지`
+            : `Use lane ${lanes.valid.join(', ')} from left · ${lanes.total} lanes · Map guidance, current lane not detected`) : '';
 
         if (lanes && lanes.total <= 12) {
             const chips = document.createElement('div'); chips.className = 'lane-chips'; chips.setAttribute('aria-hidden', 'true');
             for (let i = 1; i <= lanes.total; i++) {
                 const chip = document.createElement('span'); chip.className = lanes.valid.includes(i) ? 'lane-valid' : 'lane-other';
-                chip.textContent = String(i); chips.appendChild(chip);
+                const arrow = NavigationGuidance.laneArrows(lanes.indications?.[i-1]);
+                chip.textContent = arrow || String(i); chips.appendChild(chip);
             }
             laneElement.appendChild(chips);
         }
@@ -3298,13 +3301,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
 
         if (!isLiveNavActive && !options.reviewed) {
-            const reviewed = await DestinationReview.show({ lat, lng }, name, currentStart);
+            const reviewed = await DestinationReview.show({ ...coords, lat, lng }, name, currentStart);
             if (!reviewed) return false;
             return applyDestinationSelection(reviewed, name, { ...options, reviewed: true });
         }
 
         const previousLiveDestination = captureLiveDestinationBackup();
-        const nextEnd = { lat, lng, source: coords.source || 'search' };
+        const nextEnd = { lat, lng, source: coords.source || 'search', entranceConfirmed: coords.entranceConfirmed === true };
+        if (coords.saveFavorite) {
+            const list = getFavorites().slice();
+            const existing = list.findIndex(f => f.address === name && f.coords);
+            const favorite = { icon: 'fa-car', name, address: name, coords: nextEnd };
+            if (existing >= 0) list[existing] = { ...list[existing], coords: nextEnd }; else list.push(favorite);
+            saveFavoritesList(list);
+        }
         const nextName = String(name || '').trim() || (I18n.getLanguage().startsWith('ko') ? '선택한 목적지' : 'Selected destination');
         if (isLiveNavActive && previousLiveDestination) {
             const changed = destinationChangedFromBackup(previousLiveDestination, nextEnd);
@@ -4422,6 +4432,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateHUDWithRoute(selectedRouteObj, sunPos) {
         const isKo = I18n.getLanguage().startsWith('ko');
+        document.getElementById('btn-arrival-preview').disabled = !selectedRouteObj.analyzed?.coordinates?.length;
+        document.getElementById('btn-arrival-preview').textContent = isKo ? '도착 구간 미리보기' : 'Preview arrival approach';
         document.getElementById('traffic-status').textContent = selectedRouteObj.offline
             ? (isKo ? '저장 도로 경로 · 정체/통제 미반영 · 기본 ETA' : 'Saved-road route · no live traffic/closures · base ETA')
             : PublicTraffic.label(selectedRouteObj.traffic, isKo);
@@ -4657,6 +4669,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('btn-confirm-destination').addEventListener('click', resolveAndStartNavigation);
+    document.getElementById('btn-arrival-preview').addEventListener('click', () => {
+        const ready = isCurrentRouteReady() || (isLiveNavActive && !isFreeDriveMode && !liveDestinationBackup && !pendingRouteRequestKey);
+        if (ready && selectedRouteObj?.analyzed?.coordinates?.length && currentEnd) DestinationReview.show(currentEnd, destinationName, currentStart, { route: selectedRouteObj });
+        else showApiNotice(I18n.getLanguage().startsWith('ko') ? '현재 목적지의 경로를 먼저 계산해 주세요.' : 'Calculate a route to the current destination first.');
+    });
     ['btn-start-free-drive'].forEach(id => {
         const button = document.getElementById(id);
         if (button) button.addEventListener('click', startFreeDriveMode);

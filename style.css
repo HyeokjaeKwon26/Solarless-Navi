@@ -1249,7 +1249,7 @@ body.battery-saver-active .route-summary-floating {
 
 /* Junction detail uses provider-confirmed lane numbers only. */
 .junction-close .turn-dist { font-size: 1.8rem; font-weight: 900; }
-.lane-chips { display: flex; gap: 4px; margin-top: 4px; }
+.lane-chips { display: flex; flex-wrap:wrap; gap: 4px; margin-top: 4px; }
 .lane-chips span { border-radius: 5px; padding: 3px 8px; border: 1px solid currentColor; }
 .lane-valid { background: #1d5937; color: #fff; font-weight: 800; }
 .lane-other { opacity: .45; }
@@ -1330,3 +1330,7 @@ body.battery-saver-active .route-summary-floating {
 #journey-detail-modal { z-index: 11500; }
 #journey-detail-body { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.6; margin: 14px 0; }
 #cached-preview-status { border-color: #fbbf24; }
+.arrival-check { display:flex; align-items:flex-start; gap:10px; text-align:left; padding:8px 0; font-size:14px; line-height:1.4; }
+.arrival-check input { flex:0 0 auto; width:20px; height:20px; margin:0; accent-color:#38bdf8; }
+.arrival-check[hidden] { display:none; }
+.lane-chips span { white-space:nowrap; min-width:28px; }

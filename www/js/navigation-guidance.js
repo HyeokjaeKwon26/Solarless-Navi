@@ -124,9 +124,18 @@
         return { ...m, distanceFromCar, following: following && following.type !== 'arrive'
             ? { ...following, distanceAfter: Math.max(0, following.progressMeters - m.progressMeters) } : null };
     }
-    function thresholds(speedKmh) {
+    function thresholds(speedKmh, maneuver = {}) {
         const speed = clamp(Number(speedKmh) || 0, 0, 180) / 3.6;
-        return { preview: clamp(speed * 25, 250, 1000), prepare: clamp(speed * 10, 90, 400), execute: clamp(speed * 2, 20, 60) };
+        const complex = complexTurn(maneuver);
+        return { preview: clamp(speed * (complex ? 30 : 25), 250, complex ? 1200 : 1000), prepare: clamp(speed * (complex ? 14 : 10), 90, complex ? 450 : 400), execute: clamp(speed * 2, 20, 60) };
+    }
+    function complexTurn(m) { return !!(m.lanes || /ramp|fork|roundabout|rotary/.test(m.type || '') || m.following?.distanceAfter <= 180); }
+    function laneArrows(indications) {
+        const arrows = {straight:'↑','slight left':'↖',left:'←','sharp left':'↙','slight right':'↗',right:'→','sharp right':'↘',uturn:'↶'};
+        return [...new Set((indications || []).map(v => arrows[v]).filter(Boolean))].join('');
+    }
+    function shortRoad(m, ko) {
+        return [m.exits ? (ko ? `${m.exits}번 출구` : `Exit ${m.exits}`) : '', m.ref || m.name || ''].filter(Boolean).join(' · ');
     }
     function roadLabel(m, ko) {
         const parts = [m.name, m.ref].filter(Boolean);
@@ -173,5 +182,5 @@
             return out;
         }, []);
     }
-    return { model, match, confirmMatch, next, thresholds, roadLabel, validSession, shouldConserve, spokenRoad, speechSegments };
+    return { model, match, confirmMatch, next, thresholds, complexTurn, laneArrows, shortRoad, roadLabel, validSession, shouldConserve, spokenRoad, speechSegments };
 });

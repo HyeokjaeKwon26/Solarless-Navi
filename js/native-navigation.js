@@ -20,8 +20,15 @@
             if (m.exit && /roundabout|rotary/.test(m.type)) action += language.startsWith('ko') ? `, ${m.exit}번째 출구` : `, take exit ${m.exit}`;
             const text = road ? (language.startsWith('ko') ? `${road} 방면 ${action}입니다.` : `${action} toward ${road}.`) : action;
             const next = model.maneuvers[index + 1];
-            return { type: m.type, progressMeters: m.progressMeters, text,
-                following: next && next.type !== 'arrive' ? { distanceAfter: Math.max(0, next.progressMeters - m.progressMeters), text: root.TTSVoice.getManeuverText(next.type, next.modifier) } : null,
+            const compact = turn => {
+                const label = root.NavigationGuidance.shortRoad(turn, language.startsWith('ko'));
+                const action = root.TTSVoice.getManeuverText(turn.type, turn.modifier);
+                const text = label ? (language.startsWith('ko') ? `${label} 방면 ${action}입니다.` : `${action} toward ${label}.`) : action;
+                return { text, segments: root.NavigationGuidance.speechSegments(text, language, [turn.name, turn.ref]) };
+            };
+            const following = next && next.type !== 'arrive' ? { distanceAfter: Math.max(0, next.progressMeters - m.progressMeters), ...compact(next) } : null;
+            return { type: m.type, progressMeters: m.progressMeters, text, execute: /roundabout|rotary/.test(m.type) ? {text,segments:root.NavigationGuidance.speechSegments(text,language,[m.name,m.ref,m.destinations])} : compact(m),
+                complex: root.NavigationGuidance.complexTurn({...m,following}), following,
                 segments: root.NavigationGuidance.speechSegments(text, language, [m.name, m.ref, m.destinations]) };
         });
         plugin().setGuidanceRoute({ route: { revision: nextRevision(), coordinates: model.coordinates, turns, language, unitSystem, muted } })

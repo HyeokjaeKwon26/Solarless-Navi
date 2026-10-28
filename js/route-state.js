@@ -517,7 +517,12 @@
         const lanes = first.lanes;
         if (lanes.length < 2 || lanes.length > 12 || lanes.some(lane => typeof lane.valid !== 'boolean')) return null;
         const valid = lanes.flatMap((lane, index) => lane.valid ? [index + 1] : []);
-        return valid.length && valid.length < lanes.length ? { total: lanes.length, valid } : null;
+        if (!valid.length || valid.length === lanes.length) return null;
+        const result = { total: lanes.length, valid };
+        const known = new Set(['straight','slight left','left','sharp left','slight right','right','sharp right','uturn']);
+        if (lanes.some(lane => Array.isArray(lane.indications))) result.indications = lanes.map(lane =>
+            (Array.isArray(lane.indications) ? lane.indications : []).filter(value => known.has(value)));
+        return result;
     }
 
     return {

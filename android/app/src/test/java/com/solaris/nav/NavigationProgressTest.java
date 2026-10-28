@@ -3,6 +3,13 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NavigationProgressTest {
+    @Test public void complexJunctionPreparesEarlierWithoutEarlyExecution() {
+        assertEquals(1,NavigationProgress.phase(350,28,false));
+        assertEquals(2,NavigationProgress.phase(350,28,true));
+        assertEquals(0,NavigationProgress.phase(800,28,false));
+        assertEquals(1,NavigationProgress.phase(800,28,true));
+        assertEquals(3,NavigationProgress.phase(55,28,true));
+    }
     private NavigationProgress line() { return new NavigationProgress(new double[][]{{-71,40},{-70.99,40}}); }
     @Test public void rejectsStaleInaccurateAndOppositeFixes() {
         assertTrue(Double.isNaN(line().match(-70.999,40,50,90,10,100000,100000)));

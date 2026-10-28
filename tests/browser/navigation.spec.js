@@ -17,7 +17,7 @@ test('fresh start opens settings without free drive on narrow phones and actions
         await expect(page.locator('#start-search-modal')).toHaveClass(/hidden/);
         await expect(page.locator('#sidebar-panel')).toHaveClass(/active/);
         await expect(page.locator('#live-gps-nav-btn')).not.toHaveClass(/active/);
-        for (const id of ['btn-check-update','btn-road-pack','btn-road-pack-clear','btn-drive-record','btn-drive-clear','btn-drive-export']) {
+        for (const id of ['btn-check-update','btn-road-pack','btn-road-pack-clear','btn-drive-record','btn-drive-clear','btn-drive-export','btn-arrival-preview']) {
             const button=page.locator('#'+id);
             await button.scrollIntoViewIfNeeded();
             const style=await button.evaluate(el=>({height:el.getBoundingClientRect().height,radius:getComputedStyle(el).borderRadius,bg:getComputedStyle(el).backgroundColor,text:el.textContent}));
@@ -75,6 +75,69 @@ const places = {
     Bravo: [-71.06, 42.375],
     Charlie: [-71.055, 42.38]
 };
+
+test('confirmed vehicle entrance survives favorite reuse and arrival preview fits narrow screens', async ({page}) => {
+    const state=await fixtures(page,{brokenMap:true});
+    await page.goto('./');
+    await page.locator('#destination-input').fill('Alpha');
+    await page.locator('#destination-results [role="option"]').first().click();
+    await page.locator('#destination-entrance-confirmed').check();
+    await page.locator('#destination-save-favorite').check();
+    await expect(page.locator('#destination-review-position')).toContainText('User-confirmed');
+    await page.locator('#btn-review-confirm').click();
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    const favorite=await page.evaluate(()=>JSON.parse(localStorage.getItem('solaris_favorites')).at(-1));
+    expect(favorite.coords.source).toBe('user-pin');expect(favorite.coords.entranceConfirmed).toBe(true);
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-arrival-preview').click();
+    await expect(page.locator('#destination-review-title')).toHaveText('Arrival approach preview');
+    await expect(page.locator('#destination-review-modal')).toHaveCSS('opacity','1');
+    await expect(page.locator('#destination-review-note')).toContainText('yellow: route endpoint');
+    await expect(page.locator('#destination-access-options')).toBeHidden();
+    for(const size of [{width:320,height:740},{width:640,height:320}]) {
+        await page.setViewportSize(size);
+        await page.locator('#btn-review-confirm').scrollIntoViewIfNeeded();
+        const box=await page.locator('.destination-review-card').boundingBox();
+        expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(size.width+1);
+        await expect.poll(()=>page.evaluate(()=>{
+            const map=document.getElementById('destination-review-map').getBoundingClientRect();
+            const pin=document.querySelector('#destination-review-map .destination-review-pin').getBoundingClientRect();
+            return pin.top>=map.top && pin.bottom<=map.bottom && pin.left>=map.left && pin.right<=map.right;
+        })).toBe(true);
+        await page.screenshot({path:test.info().outputPath(`arrival-${size.width}.png`)});
+    }
+    await page.locator('#btn-review-confirm').click();
+    await page.setViewportSize({width:412,height:915});
+    await page.locator('#btn-header-home').click();
+    await page.locator('.fav-chip-btn').filter({hasText:'Alpha'}).click();
+    await expect(page.locator('#destination-entrance-confirmed')).toBeChecked();
+    await expect(page.locator('#destination-review-position')).toContainText('User-confirmed');
+    await page.locator('#btn-review-adjust').click();
+    await page.locator('#destination-review-map').click({position:{x:200,y:65}});
+    await expect(page.locator('#destination-entrance-confirmed')).not.toBeChecked();
+    expect(state.errors).toEqual([]);
+});
+
+test('confirmed full closures prevent early route preview and final guidance candidates', async ({page}) => {
+    const state=await fixtures(page,{brokenMap:true});
+    await page.goto('./');
+    const result=await page.evaluate(async()=>{
+        const now=Date.now(),points=[[-71.07,42.36],[-71.065,42.37]];
+        const feed=PublicTraffic.parseMA({feed_info:{update_date:new Date(now).toISOString()},features:[{
+            id:'closed',geometry:{type:'LineString',coordinates:points},properties:{
+                start_date:new Date(now-60000).toISOString(),end_date:new Date(now+60000).toISOString(),
+                vehicle_impact:'all-lanes-closed',is_start_date_verified:true,is_end_date_verified:true,
+                is_start_position_verified:true,is_end_position_verified:true,
+                core_details:{road_names:['Fixture Road'],direction:'northbound'}}}]},now);
+        PublicTraffic.load=async()=>[feed];
+        let previews=0;
+        try { await ShadowRouter.fetchAndAnalyzeRoutes({lat:42.36,lng:-71.07},{lat:42.37,lng:-71.065},new Date(),false,
+            {onProgress:()=>previews++,viaRequestBudget:0,disableWeatherRefinement:true});return {previews,code:'unexpected-success'}; }
+        catch(error){return {previews,code:error.code,key:error.messageKey};}
+    });
+    expect(result).toEqual({previews:0,code:'CONFIRMED_CLOSURE',key:'routeClosureError'});
+    expect(state.errors).toEqual([]);
+});
 const style = {
     version: 8,
     sources: { fixture: { type: 'geojson', data: {
@@ -156,7 +219,7 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
                     { name: 'Fixture Road', exits: '7', destinations: 'Downtown', distance: chained ? 240 : 1800, duration: chained ? 30 : 225, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: coordinates.slice(10) },
                         maneuver: { type: 'turn', modifier: 'slight right', location: coordinates[10], bearing_after: 45 },
-                        intersections: [{ location: coordinates[10], lanes: [{ valid: false }, { valid: true }, { valid: true }] }] },
+                        intersections: [{ location: coordinates[10], lanes: [{ valid: false, indications:['left'] }, { valid: true, indications:['straight','slight right'] }, { valid: true, indications:['slight right'] }] }] },
                     ...(chained ? [{ name: 'Second Street', distance: 1560, duration: 195, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: coordinates.slice(14) },
                         maneuver: { type: 'turn', modifier: 'left', location: coordinates[14], bearing_after: 315 }, intersections: [] }] : []),
@@ -775,6 +838,9 @@ test('chained turns and exit details clear when heading contradicts the selected
     await expect(page.locator('#banner-desc')).toContainText('Exit 7');
     await expect(page.locator('#banner-following')).toContainText('Then in');
     await expect(page.locator('#banner-following')).toBeVisible();
+    await expect(page.locator('#banner-following')).toContainText('Second Street');
+    await expect(page.locator('#banner-lanes')).toContainText('current lane not detected');
+    await expect(page.locator('.lane-chips .lane-valid').first()).toHaveText('↑↗');
     await page.waitForTimeout(1600);
     await page.evaluate(() => window.testGps.emit({ latitude: 42.36015, heading: 225 }));
     await expect(page.locator('#banner-desc')).toContainText('Checking road position');

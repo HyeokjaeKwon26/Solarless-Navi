@@ -64,11 +64,17 @@
     }
     function parseMA(data,now=Date.now()) {
         const at=Date.parse(data?.feed_info?.update_date),events=[];
-        if(fresh(at,now))for(const item of (data.features||[])) {
+        if(fresh(at,now))for(const item of (Array.isArray(data?.features)?data.features:[])) {
+            if(!item)continue;
             const p=item.properties||{},start=Date.parse(p.start_date),end=Date.parse(p.end_date);
             if(!Number.isFinite(start)||!Number.isFinite(end)||start>now||end<now||item.geometry?.type!=='LineString')continue;
-            events.push({id:item.id,points:item.geometry.coordinates,impact:p.vehicle_impact,
-                name:(p.core_details?.road_names||[]).join(', '),verified:p.is_start_date_verified===true&&p.is_start_position_verified===true});
+            const points=item.geometry.coordinates;
+            if(!Array.isArray(points)||points.length<2||points.length>20000||points.some(p=>!Array.isArray(p)||!Number.isFinite(p[0])||!Number.isFinite(p[1])||Math.abs(p[0])>180||Math.abs(p[1])>90))continue;
+            const names=Array.isArray(p.core_details?.road_names)?p.core_details.road_names.filter(n=>typeof n==='string'):[];
+            events.push({id:item.id,points,impact:p.vehicle_impact,start,end,
+                direction:p.core_details?.direction, names,
+                name:names.join(', '),verified:p.is_start_date_verified===true&&p.is_start_position_verified===true,
+                closureVerified:p.is_start_date_verified===true&&p.is_end_date_verified===true&&p.is_start_position_verified===true&&p.is_end_position_verified===true});
         }
         return {source:'MassDOT',newest:at,events,status:fresh(at,now)?'fresh':Number.isFinite(at)?'stale':'unavailable'};
     }
@@ -129,25 +135,68 @@
             covered+=matched;observed+=link.seconds;baseCovered+=baseline;segments.forEach(i=>occupied.add(i));
             for(const span of spans){const overlap=Math.max(0,Math.min(span.end,lastMeters)-Math.max(span.start,firstMeters));span.delta+=(link.seconds-baseline)*overlap/(matched||1);}
         }
-        const warnings=[];
+        const warnings=[],closures=[];
         for(const feed of feeds.filter(f=>fresh(f.newest,now)))for(const event of feed.events||[]) {
             if(event.points?.some(p=>nearby(p).some(i=>project(p,coords[i],coords[i+1]).distance<25)))warnings.push({source:feed.source,name:event.name,impact:event.impact,verified:event.verified});
+            if(matchesClosure(raw,event,now))closures.push({id:event.id,source:feed.source,name:event.name});
         }
         const duration=covered>0?Math.max(1,raw.duration-baseCovered+observed):raw.duration;
-        return {duration,coverage:Math.min(1,covered/(total||1)),observedSeconds:observed,warnings,
+        return {duration,coverage:Math.min(1,covered/(total||1)),observedSeconds:observed,warnings,closures,blocked:closures.length>0,
             steps:originalSteps.map((step,i)=>({...step,duration:Math.max(0,spans[i].seconds+spans[i].delta)})),
             sources:feeds.map(f=>({source:f.source,status:fresh(f.newest,now)?f.status:f.newest?'stale':'unavailable',updatedAt:f.newest})),checkedAt:now};
+    }
+    // Fail conservatively: a nearby construction line is not proof this road is closed.
+    function matchesClosure(raw,event,now) {
+        if(event.impact!=='all-lanes-closed'||!event.closureVerified||!(event.start<=now&&now<event.end)||
+            !['northbound','southbound','eastbound','westbound'].includes(event.direction))return false;
+        const normalize=value=>String(value||'').toLowerCase().replace(/\b(street|road|avenue|boulevard)\b/g,m=>({street:'st',road:'rd',avenue:'ave',boulevard:'blvd'}[m]))
+            .replace(/\s*-?\s*\b(nb|sb|eb|wb|northbound|southbound|eastbound|westbound)\b/g,'').replace(/[^a-z0-9]/g,'');
+        const names=(event.names||[]).flatMap(n=>String(n).split(',')).map(normalize).filter(Boolean);
+        if(!names.length)return false;
+        let overlap=0,comparisons=0;
+        const segments=event.points.slice(1).map((b,i)=>({a:event.points[i],b}));
+        const bounds=event.points.reduce((b,p)=>[Math.min(b[0],p[0]),Math.min(b[1],p[1]),Math.max(b[2],p[0]),Math.max(b[3],p[1])],[Infinity,Infinity,-Infinity,-Infinity]);
+        for(const step of (raw.legs||[]).flatMap(l=>l.steps||[])) {
+            if(![step.name,...String(step.ref||'').split(';')].map(normalize).some(n=>n&&names.includes(n)))continue;
+            const points=step.geometry?.coordinates||[];
+            for(let i=1;i<points.length;i++) {
+                const a=points[i-1],b=points[i],length=distance(a,b);
+                if(length<1)continue;
+                if(Math.max(a[0],b[0])<bounds[0]-.0002||Math.min(a[0],b[0])>bounds[2]+.0002||Math.max(a[1],b[1])<bounds[1]-.0002||Math.min(a[1],b[1])>bounds[3]+.0002)continue;
+                const dx=(b[0]-a[0])*Math.cos(a[1]*Math.PI/180),dy=b[1]-a[1];
+                const forward=event.direction==='northbound'?dy>0:event.direction==='southbound'?dy<0:event.direction==='eastbound'?dx>0:dx<0;
+                if(!forward)continue;
+                // Sample the route, so crossing a closure at one point cannot exclude it.
+                const count=Math.ceil(length/10);
+                if(count>2000)continue;
+                for(let k=0;k<count;k++) {
+                    const t=(k+.5)/count,p=[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];
+                    if(comparisons+segments.length>200000)return false;
+                    const matched=segments.some(({a:c,b:d})=>{
+                        comparisons++;
+                        const ex=(d[0]-c[0])*Math.cos(a[1]*Math.PI/180),ey=d[1]-c[1];
+                        const cosine=(dx*ex+dy*ey)/(Math.hypot(dx,dy)*Math.hypot(ex,ey)||1);
+                        return cosine>.82&&project(p,c,d).distance<=8;
+                    });
+                    if(matched)overlap+=length/count;
+                    if(overlap>=40)return true;
+                }
+            }
+        }
+        return false;
     }
     function label(result,ko=true) {
         if(!result)return ko?'교통 미반영':'Traffic not applied';
         const coverage=Math.round(result.coverage*100);
         let text=coverage>0?(ko?`센서 교통 ${coverage}% 구간 반영`:`Sensor traffic covers ${coverage}%`):(ko?'실시간 속도 미반영 · 기본 ETA':'No live speeds · base ETA');
         if(result.warnings.length)text+=ko?` · 주변 공사/통제 ${result.warnings.length}건`:` · ${result.warnings.length} nearby works/restrictions`;
+        if(result.blocked)text+=ko?' · 경로에 확인된 전면 통제 — 새 경로 필요':' · Confirmed full closure on route — new route needed';
         if(result.sources.some(s=>s.status==='stale'))text+=ko?' · 오래된 피드 제외':' · stale feed excluded';
+        if(result.sources.some(s=>s.status==='unavailable'))text+=ko?' · 공개 교통 자료 수신 불가':' · public feed unavailable';
         if(!result.sources.length)text+=ko?' · 지원 지역 밖':' · outside supported regions';
         const updated=Math.max(0,...result.sources.map(s=>s.updatedAt||0));
         if(updated)text+=(ko?' · 자료 ':' · data ')+new Date(updated).toLocaleTimeString();
         return text;
     }
-    return {parseNYC,parseMA,nyTime,decode,load,evaluate,label,project,distance,fresh};
+    return {parseNYC,parseMA,nyTime,decode,load,evaluate,label,project,distance,fresh,matchesClosure};
 });

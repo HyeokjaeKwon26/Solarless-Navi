@@ -1677,6 +1677,13 @@ window.ShadowRouter = (function () {
         
         const routeCacheKey = osrmRouteCacheKey(start, end, isTollFreeOnly, options.startHeading);
         let progressEmitted = false;
+        const checkTraffic = async candidates => {
+            if (!window.PublicTraffic) return candidates;
+            if ((typeof navigator !== 'undefined' && navigator.onLine === false) || candidates.some(r => r.offline)) return candidates.map(raw => raw.traffic ? ({...raw,traffic:null}) : raw);
+            const feeds = await PublicTraffic.load(candidates.flatMap(r => r.geometry.coordinates));
+            if (options.signal?.aborted) throw createAbortError();
+            return candidates.map(raw => ({ ...raw, traffic: PublicTraffic.evaluate(raw, feeds) }));
+        };
         let rawCandidates = Array.isArray(options.candidates) && options.candidates.length
             ? options.candidates.filter(route => route && route.geometry && Array.isArray(route.geometry.coordinates))
             : (options.reuseOsrmCache === true ? getCachedOsrmRoutes(routeCacheKey) : null);
@@ -1713,7 +1720,8 @@ window.ShadowRouter = (function () {
                 window.DebugLogger.log('osrm-direct-success', { elapsedMs: Date.now() - directStartedAt, routeCount: rawCandidates.length, http: 'ok' });
             }
             if (rawCandidates.length && typeof options.onProgress === 'function') {
-                const directAnalyzed = await Promise.all(filterDrivingCandidates(rawCandidates).map((route, index) =>
+                rawCandidates = await checkTraffic(rawCandidates);
+                const directAnalyzed = await Promise.all(filterDrivingCandidates(rawCandidates.filter(r => !r.traffic?.blocked)).map((route, index) =>
                     analyzeRawRoute(route, index, dateObj, timeOfDayAdjustment, options.signal)));
                 const progress = buildHeuristicProgressResult(directAnalyzed, timeOfDayAdjustment, dateObj, start);
                 if (progress) { await options.onProgress(progress); progressEmitted = true; }
@@ -1754,20 +1762,18 @@ window.ShadowRouter = (function () {
             });
         }
 
+        rawCandidates = await checkTraffic(rawCandidates);
         if (!progressEmitted && rawCandidates && rawCandidates.length && typeof options.onProgress === 'function') {
-            const cachedAnalyzed = await Promise.all(filterDrivingCandidates(rawCandidates).map((route, index) =>
+            const cachedAnalyzed = await Promise.all(filterDrivingCandidates(rawCandidates.filter(r => !r.traffic?.blocked)).map((route, index) =>
                 analyzeRawRoute(route, index, dateObj, timeOfDayAdjustment, options.signal)));
             const progress = buildHeuristicProgressResult(cachedAnalyzed, timeOfDayAdjustment, dateObj, start);
             if (progress) await options.onProgress(progress);
         }
 
-        if (window.PublicTraffic && (typeof navigator === 'undefined' || navigator.onLine !== false) && !rawCandidates.some(r => r.offline)) {
-            const feeds = await PublicTraffic.load(rawCandidates.flatMap(r => r.geometry.coordinates));
-            if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-            rawCandidates = rawCandidates.map(raw => ({ ...raw, traffic: PublicTraffic.evaluate(raw, feeds) }));
-        }
         cacheOsrmRoutes(routeCacheKey, rawCandidates);
-
+        const closedCount = rawCandidates.filter(r => r.traffic?.blocked).length;
+        rawCandidates = rawCandidates.filter(r => !r.traffic?.blocked);
+        if (closedCount && !rawCandidates.length) throw createApiError('CONFIRMED_CLOSURE', 'routeClosureError', 'All candidates cross verified full closures');
         rawCandidates = filterDrivingCandidates(rawCandidates);
         const filteredCandidates = isTollFreeOnly
             ? rawCandidates.filter(route => !routeContainsToll(route))

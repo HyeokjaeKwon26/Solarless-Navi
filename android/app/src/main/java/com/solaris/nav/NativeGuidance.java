@@ -111,20 +111,22 @@ final class NativeGuidance {
             if (turn == null || "arrive".equals(turn.optString("type"))) continue;
             double distance = turn.optDouble("progressMeters", -1000) - at;
             if (distance < -8) continue;
-            int phase = NavigationProgress.phase(distance, speed);
+            int phase = NavigationProgress.phase(distance, speed, turn.optBoolean("complex", false));
             if (phase <= phases[i] || (phase != 3 && now - lastVoice < 2500)) return;
             boolean ko = language.startsWith("ko");
             String prefix = phase == 1 ? GuidanceUnits.spokenDistance(distance, unitSystem, language) + (ko ? " 앞에서 " : " ahead, ") : (phase == 3 ? (ko ? "곧 " : "Now, ") : (ko ? "잠시 후 " : "Shortly, "));
-            String text = prefix + turn.optString("text");
+            JSONObject spokenTurn = phase == 3 && turn.optJSONObject("execute") != null ? turn.optJSONObject("execute") : turn;
+            String text = prefix + spokenTurn.optString("text");
             JSONArray segments = null;
             try {
-                segments = SpeechPlan.prepend(prefix, language, turn);
+                segments = SpeechPlan.prepend(prefix, language, spokenTurn);
                 JSONObject next = turn.optJSONObject("following");
                 if (phase >= 2 && next != null && next.optDouble("distanceAfter", 181) <= 180 && next.optDouble("distanceAfter", -1) >= 0) {
                     String distanceText = GuidanceUnits.spokenDistance(next.optDouble("distanceAfter"), unitSystem, language);
-                    String following = ko ? " 이어서 " + distanceText + " 후 " + next.optString("text") + "입니다." : " Then in " + distanceText + ", " + next.optString("text") + ".";
-                    text += following;
-                    segments.put(new JSONObject().put("text", following).put("lang", language));
+                    String followingPrefix = ko ? " 이어서 " + distanceText + " 후 " : " Then in " + distanceText + ", ";
+                    text += followingPrefix + next.optString("text");
+                    JSONArray followingParts = SpeechPlan.prepend(followingPrefix, language, next);
+                    for (int part = 0; part < followingParts.length(); part++) segments.put(followingParts.get(part));
                 }
             } catch (JSONException ignored) { }
             if (NavigationSpeech.get(context).speak(text, language, true, segments)) {

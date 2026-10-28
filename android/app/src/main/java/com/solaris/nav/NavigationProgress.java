@@ -55,10 +55,13 @@ final class NavigationProgress {
         return progress;
     }
     static int phase(double distance, double speed) {
+        return phase(distance, speed, false);
+    }
+    static int phase(double distance, double speed, boolean complex) {
         if (distance < -8) return 0;
         if (distance <= Math.max(20, Math.min(60, speed * 2))) return 3;
-        if (distance <= Math.max(90, Math.min(400, speed * 10))) return 2;
-        if (distance <= Math.max(250, Math.min(1000, speed * 25))) return 1;
+        if (distance <= Math.max(90, Math.min(complex ? 450 : 400, speed * (complex ? 14 : 10)))) return 2;
+        if (distance <= Math.max(250, Math.min(complex ? 1200 : 1000, speed * (complex ? 30 : 25)))) return 1;
         return 0;
     }
 }
