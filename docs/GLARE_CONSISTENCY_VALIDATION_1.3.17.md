@@ -45,3 +45,18 @@
 - root/www 자산 61개 SHA-256 일치. 기존 버전 대비 versionName/versionCode 증가 및 패키지·인증서 유지 검사 통과.
 - 합성 구간 1,000개의 주행 추정 갱신은 이 데스크톱에서 54ms였다. 폰 성능·발열·배터리 측정은 아니다.
 - ADB 연결 기기 없음. 실제 설치·시야·블루투스·주행 검증은 미실시다.
+- 최종 로컬 전체 브라우저 회귀: 원본/root와 APK/www 합계 **148건, 8.3분, 전부 통과**. 새 표시·음성 통합 검사와 기존 업데이트·주소 검색·경로 미리보기·단위·GPS 회복·배터리 검사를 포함한다.
+- 320px 범례 및 주행 중 노랑 점선/미확인 배너 캡처를 직접 확인했다. 테스트의 지도·기상·GPS 자료는 합성 자료이며 실제 도로 장면 검증은 아니다.
+
+## 공개 배포 검증 — 2026-10-28
+
+- 배포 소스 커밋: `1bc194903c7614ef72d68ec324728fddf26f32a9`.
+- [배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40776677784)의 validate/publish 모두 성공. Node 311건, 브라우저 148건(15.3분), 자산 일치·취약점 검사 및 Android 테스트·debug 빌드·lint·서명 release 빌드 통과.
+- [릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.17), [APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.17/SolarLessNavi-1.3.17.apk), update.json, SHA256SUMS.txt를 공개 다운로드로 확인했다.
+- APK 4,440,833바이트. 기존 1.3.16보다 2,465바이트 증가. 지도 DB 번들은 없다.
+- APK SHA-256: `a0ab809272b0213c44b9c98a96444bc232651c78b1eb0619ef102f660030f1fc`. 공개 매니페스트·체크섬과 일치한다.
+- 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`. 기존 정식 키와 동일하다. apksigner 서명 검증, 패키지 com.solaris.nav, 버전 1.3.17 / 21, debuggable=false를 확인했다.
+- 공개 APK 내부 웹 자산 61개가 배포 커밋 www와 바이트 단위로 일치한다. 기존 NavigationProgress 및 음성 설정 브리지 포함을 확인했다.
+- 공개 GitHub HTTP 응답을 사용하는 배송 업데이터의 Chromium 검사: 설치 정보를 모의한 1.3.16/1.3.15/1.3.14/1.3.13/1.3.5에서 업데이트 가능, 1.3.17에서 최신 판정. Android HTTP 브리지·설치 화면·폰 데이터 보존 검사를 대신하지 않는다.
+- 별도 [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40776675579)는 이 기록 시점에 브라우저 회귀 검사 중이다. 위 성공한 배포 CI가 동일 소스의 전체 검증을 이미 완료했다. main CI 성공으로 기록하지 않았다.
+- 실제 폰 설치와 주행은 미실시이며 위 확인 목록을 따른다. 현장 눈부심 회피 효과·오경보율 개선을 측정했다고 주장하지 않는다.
