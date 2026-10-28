@@ -60,4 +60,12 @@ ADB에 연결된 실제 기기가 없습니다. 다음은 자동 테스트만으
 
 ## 배포 확인
 
-배포 완료 후 CI 실행과 공개 APK의 해시·서명·업데이트 확인 결과를 추가합니다.
+- 최종 소스: `00ca5b6a516aca2eedd04ed4582316e9cda399b5`.
+- [main 브랜치 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40628263378): 성공. 최종 소스 Node 261개·브라우저 102개 통과, JS 문법·53개 자산 일치 확인, Android 테스트·빌드·린트 성공.
+- [APK 배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40628265637): 성공. 최종 소스 Node 261개·브라우저 102개 및 Android 테스트·빌드·린트 성공 후 서명 APK 게시까지 완료했습니다.
+- [릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.11) / [APK 다운로드](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.11/SolarLessNavi-1.3.11.apk).
+- 공개 APK 4,399,261바이트. SHA-256: `9e0bf603d8cb7efda534bade6bc1781d8d295cfdd4bc7e3e690a68015b6a8f30`.
+- APK 암호학적 서명 검증 통과. 기존 인증서 SHA-256 `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`과 일치합니다. 패키지 `com.solaris.nav`, 버전 1.3.11 / 코드 15, debuggable 아님을 확인했습니다.
+- 공개 APK 내부 웹 자산 53개 전체가 최종 커밋의 `www` 파일과 바이트 단위로 일치합니다. 공개 업데이트 매니페스트의 크기·해시·서명 정보도 다운로드한 APK와 일치합니다.
+- 배포된 업데이터 코드와 실제 공개 GitHub 응답을 이용한 브라우저 검사: 설치 정보만 1.3.5/1.3.6/1.3.7/1.3.8/1.3.9로 모의 설정했을 때 모두 1.3.11 업데이트 제공, 1.3.11은 최신 버전 표시. Android 설치기 동작이나 폰 데이터 유지까지 검증한 것은 아닙니다.
+- 실제 폰 연결·설치·주행은 수행하지 않았습니다. 위의 실제 폰/주행 체크리스트를 따로 확인해야 합니다.
