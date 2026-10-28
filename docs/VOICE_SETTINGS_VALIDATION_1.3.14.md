@@ -20,7 +20,17 @@
 - 핵심 브라우저 8건 통과(root/www): 네이티브 준비 지연, 언어별 선택/미리 듣기/초기화, 저장·재실행 복원, 누락 음성, 저장 실패 후 네이티브 상태 재조회, 320px/가로 화면, 음소거·주행 중 미리 듣기 제한.
 - 첫 Android lint에서 API 24 이상 정렬 호출을 발견해 API 22 호환 호출로 수정했습니다. 작은 화면 시각 점검에서는 슬라이더 트랙과 터치 영역을 분리했습니다.
 - 브라우저 검사는 네이티브 음성 엔진을 모의합니다. JVM 검사는 설정 정책을 확인하며 실제 스피커 출력, 음색, Android 서비스의 화면 꺼짐 동작을 실측한 검사는 아닙니다.
-- 최종 전체 브라우저, 서명 APK, 공개 업데이트 확인 결과는 배포 후 아래에 기록합니다.
+- 로컬 전체 브라우저 128건 통과(7.0분). 마지막 표시 정리 후 언어별 저장/복원 검사 2건을 추가로 통과했습니다. root/www 자산 57개가 SHA-256으로 일치하며 npm audit 취약점은 0건입니다.
+- 최종 소스의 GitHub 검사, 서명 APK, 공개 업데이트 확인 결과는 아래 배포 검증에 기록했습니다.
+
+## 배포 검증 (2026-10-28)
+
+- 배포 소스: `da2ae58739b92d6f3fe559ea40155d0d22814c0a`. [APK 워크플로](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40639625987)의 validate와 publish 모두 성공했습니다. GitHub에서도 Node 288건, 브라우저 128건(11.6분), Android 테스트·빌드·lint, 자산 57개 일치 검사를 통과했습니다.
+- [1.3.14 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.14)와 [APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.14/SolarLessNavi-1.3.14.apk)를 공개 주소로 내려받아 검증했습니다. APK 크기는 4,420,841바이트(약 4.42 MB)로 1.3.13보다 6,403바이트 증가했습니다. 오프라인 지도 데이터나 음성 모델을 번들하지 않았습니다.
+- APK SHA-256: `31681d84b8d805f3cd594716e0d4c5b00ed14f97f8ee652214fe9c331a47e90f`. 공개 update.json의 크기·해시와 SHA256SUMS.txt가 일치합니다.
+- apksigner로 서명을 검증했습니다. 기존 인증서 SHA-256 `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`, 패키지 `com.solaris.nav`, 버전 1.3.14 / 18을 확인했고 debuggable이 아닙니다.
+- 배포 APK 안 웹 자산 57개가 위 소스 커밋과 바이트 단위로 일치합니다. DEX에 SpeechPreferences와 getSpeechSettings/setSpeechSettings가 포함된 것도 확인했습니다.
+- 공개 GitHub 응답을 사용해 앱 업데이터를 실행했습니다. 설치 정보를 1.3.13 / 17 및 1.3.5 / 9로 모의하면 새 버전 안내, 1.3.14 / 18이면 최신 버전으로 표시됩니다. Android HTTP 브리지, 실제 설치 승인, 사용자 데이터 유지까지 실기기에서 검증한 것은 아닙니다.
 
 ## 실제 폰 확인 목록
 
