@@ -19,9 +19,68 @@ prep_spec.loader.exec_module(prep)
 recover_spec = importlib.util.spec_from_file_location('recover_scene_multipolygons', FILE.parent / 'recover-excluded-multipolygons.py')
 recover = importlib.util.module_from_spec(recover_spec)
 recover_spec.loader.exec_module(recover)
+select_spec = importlib.util.spec_from_file_location('select_multipolygon_components', FILE.parent / 'select-separable-multipolygon-components.py')
+select = importlib.util.module_from_spec(select_spec)
+select_spec.loader.exec_module(select)
+dedup_spec = importlib.util.spec_from_file_location('deduplicate_followup', FILE.parent / 'deduplicate-followup-relations.py')
+dedup = importlib.util.module_from_spec(dedup_spec)
+dedup_spec.loader.exec_module(dedup)
 
 
 class MultipolygonAssemblyTest(unittest.TestCase):
+    def test_equal_geometry_with_equal_height_is_added_only_once(self):
+        from shapely.geometry import MultiPolygon, mapping
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / 'multipolygon-followup-us-northeast'; directory.mkdir()
+            node_dir = root / 'multipolygon-outer-node-us-northeast'; node_dir.mkdir()
+            geom = mapping(MultiPolygon([Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])]))
+            records = [{'id': 10, 'tags': {'building': 'house'}, 'geometry': geom},
+                       {'id': 11, 'tags': {'building': 'yes'}, 'geometry': geom}]
+            (directory / 'assembled-buildings.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in records))
+            (node_dir / 'assembled-buildings.jsonl').write_text('')
+            (directory / 'scene-relations.jsonl').write_text(''.join(json.dumps({'id': r['id'], 'pieces': [1]}) + '\n' for r in records))
+            (directory / 'scene-preparation-audit.json').write_text(json.dumps({'relations': 2, 'pieces': 2, 'relations_with_holes': 0}))
+            dedup.main(str(root), 'us-northeast')
+            scene = [json.loads(line) for line in (directory / 'scene-relations.jsonl').read_text().splitlines()]
+            self.assertEqual([r['id'] for r in scene], [10])
+            decision = json.loads((directory / 'dedup-decisions.jsonl').read_text())
+            self.assertEqual(decision['representedByRelationId'], 10)
+
+    def test_selection_retains_tagged_component_and_adds_only_disjoint_component(self):
+        from shapely.geometry import MultiPolygon, mapping
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dtype = np.dtype([('id', '<u8'), ('lat', '<i4'), ('lng', '<i4')])
+            points = [(1, 0, 0), (2, 0, 2), (3, 2, 2), (4, 2, 0), (5, 0, 3), (6, 0, 5), (7, 2, 5), (8, 2, 3)]
+            np.array([(i, y * 10**7, x * 10**7) for i, y, x in points], dtype=dtype).tofile(root / 'nodes.bin')
+            tagged = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])
+            separate = Polygon([(3, 0), (5, 0), (5, 2), (3, 2)])
+            rows = {'building-relations.jsonl': [{'id': 1, 'preserveWayIds': [9], 'members': [{'type': 'way', 'id': 10}]},
+                                                {'id': 2, 'preserveWayIds': [9], 'members': []}],
+                    'member-ways.jsonl': [{'id': 9, 'refs': [1, 2, 3, 4, 1]}, {'id': 10, 'refs': [5, 6, 7, 8, 5]}],
+                    'assembled-buildings.jsonl': [{'id': 1, 'replaceWayIds': [], 'geometry': mapping(MultiPolygon([tagged, separate]))},
+                                                  {'id': 2, 'replaceWayIds': [], 'geometry': mapping(MultiPolygon([tagged]))}]}
+            for name, values in rows.items():
+                (root / name).write_text(''.join(json.dumps(v) + '\n' for v in values), encoding='utf8')
+            select.main(str(root), str(root / 'nodes.bin'))
+            result = json.loads((root / 'assembled-buildings.jsonl').read_text())
+            self.assertTrue(shape(result['geometry']).equals(separate))
+            self.assertEqual(result['replaceWayIds'], [])
+            decisions = [json.loads(line) for line in (root / 'component-decisions.jsonl').read_text().splitlines()]
+            self.assertEqual(decisions[1]['reason'], 'no_disjoint_component')
+            previous = root / 'multipolygon-us-northeast'; previous.mkdir()
+            recheck = root / 'multipolygon-recheck-us-northeast'; recheck.mkdir()
+            (previous / 'building-relations.jsonl').write_text(json.dumps({'id': 99, 'members': [{'type': 'way', 'id': 10}]}) + '\n')
+            (previous / 'scene-relations.jsonl').write_text('{"id":99}\n')
+            (recheck / 'scene-relations.jsonl').write_text('')
+            for directory in (previous, recheck): (directory / 'overlay-blocked.jsonl').write_text('')
+            (root / 'assembled-buildings.jsonl').write_text((root / 'assembled-buildings-full.jsonl').read_text())
+            select.main(str(root), str(root / 'nodes.bin'), str(root), 'us-northeast')
+            decisions = [json.loads(line) for line in (root / 'component-decisions.jsonl').read_text().splitlines()]
+            self.assertEqual(decisions[0]['reason'], 'shared_prior_way_or_no_disjoint_component')
+            self.assertEqual(decisions[0]['excludedSharedWayIds'], [10])
+
     def test_split_outer_hole_and_conflicting_member(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

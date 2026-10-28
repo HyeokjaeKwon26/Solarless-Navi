@@ -1,5 +1,7 @@
 # 미국 multipolygon 미적용 항목 재검토 — 2026-10-28
 
+이후 미해결 548개에 대한 추가 검토는 [후속 기록](US_MULTIPOLYGON_FOLLOWUP_2026-10-28.md)에 있다.
+
 이전 비교에서 미적용된 1,934개 건물 관계를 원본 OSM 관계·way 태그와 기존 지도에 대조했다. 원본은 기존과 같은 2026-10-27T21:23:59Z 추출본이다. 각 관계의 처리 결과는 [ID별 목록](data/us-multipolygon-recheck-decisions-2026-10-28.jsonl), 집계와 경로별 수치는 [JSON](data/us-multipolygon-recheck-comparison-2026-10-28.json)에 기록했다.
 
 2026-10-28 미국 동부시간에 네 릴리스의 공개 상태와 자산 수를 확인했다. 새 자산 전체의 크기와 SHA-256을 로컬 검증본과 대조했고, 각 권역에서 새 릴리스와 이전 두 릴리스의 참조 ZIP을 하나씩 공개 URL로 확인했다.

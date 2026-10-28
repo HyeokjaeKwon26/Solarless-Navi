@@ -1,7 +1,7 @@
 {
   "schema": 3,
   "region": "US West",
-  "releaseTag": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
+  "releaseTag": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
   "baseUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download",
   "tileSizeM": 5000,
   "tilePaddingMeters": 4500,
@@ -115,6 +115,39 @@
           "missingHgtFiles": [],
           "voidHgtFiles": []
         }
+      },
+      "followup": {
+        "baselineReleaseTag": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
+        "method": "add disjoint untagged components while retaining independently tagged outer ways",
+        "assembly": {
+          "candidates": 34,
+          "polygons": 64,
+          "polygons_with_holes": 14,
+          "assembled": 34,
+          "outer_node_additional_candidates": 1,
+          "outer_node_additional_assembled": 1
+        },
+        "prep": {
+          "relations": 21,
+          "pieces": 33,
+          "replaced_way_references": 0,
+          "relations_with_holes": 5,
+          "rejected": 0,
+          "outer_node_additional_relations": 1
+        },
+        "overlay": {
+          "region": "us-west",
+          "candidates": 21,
+          "appliedRelations": 21,
+          "pieces": 33,
+          "removedWays": 0,
+          "changedExistingTiles": 21,
+          "newTiles": 0,
+          "blockedRelations": 0,
+          "holesSupported": true,
+          "missingHgtFiles": [],
+          "voidHgtFiles": []
+        }
       }
     }
   },
@@ -124,7 +157,7 @@
   "osmPbfSha256": "615a978b7145bc7c2920d35eaddc04d352c73151417df67871b425725b1846e0",
   "demDataset": "Original v3 SRTM grids for existing tiles; Mapzen Terrain Tiles Skadi for new tiles and new or changed building ground",
   "demDatasetVersion": "v3 grids preserved; Mapzen Skadi fetched 2026-10-28 UTC",
-  "generatedAt": "2026-10-28T05:26:51.183Z",
+  "generatedAt": "2026-10-28T05:44:46.467Z",
   "schemaVersion": 3,
   "packWidth": null,
   "maxPackBytes": 10485760,
@@ -179,10 +212,11 @@
     "preserveDenseGroups": true,
     "maxAdaptivePackSpanTiles": 8,
     "maxReleaseAssets": 1000,
-    "baselineReleaseTag": "scene-us-west-hybrid-v3-osm-20261027-multipolygon",
-    "reusedBaselinePacks": 868,
-    "newlyPublishedPacks": 62,
+    "baselineReleaseTag": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
+    "reusedBaselinePacks": 909,
+    "newlyPublishedPacks": 21,
     "baselineReleaseTags": [
+      "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
       "scene-us-west-hybrid-v3-osm-20261027-multipolygon",
       "scene-us-west-hybrid-v3-osm-20261027"
     ]
@@ -190,10 +224,10 @@
   "stats": {
     "tileCount": 42227,
     "packCount": 930,
-    "releaseAssetCount": 63,
-    "totalBytes": 1988443036,
+    "releaseAssetCount": 22,
+    "totalBytes": 1988446918,
     "minPackBytes": 9702,
-    "maxPackBytes": 10485725
+    "maxPackBytes": 10485752
   },
   "packs": {
     "-712_207--681_239-e7933caf59": {
@@ -405,9 +439,9 @@
       }
     },
     "-696_128--681_167-3e9b5b3330": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--696_128--681_167-3e9b5b3330.zip",
-      "bytes": 10483453,
-      "sha256": "9228901335b552f4d828c7c72f5124a48101fe3b8c22f42fa369053c32bbbd58",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--696_128--681_167-3e9b5b3330.zip",
+      "bytes": 10483528,
+      "sha256": "99771d4ab73a3c20e6e16898abfc9320e3d64d1c187cbe50484e616461b4dd36",
       "tiles": 260,
       "density": "multipolygon-updated",
       "bounds": {
@@ -1484,9 +1518,9 @@
       }
     },
     "-676_-6--675_-5-fe795102e8": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--676_-6--675_-5-fe795102e8.zip",
-      "bytes": 6061419,
-      "sha256": "68bc47a4d98de043d832c21be88714429438eb872953a5de874f8d9ec98681b4",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--676_-6--675_-5-fe795102e8.zip",
+      "bytes": 6061756,
+      "sha256": "7f0a4b8df1aa5236dc753b778e99e36e763d54831837f7043ad50a0ef874d075",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -1913,9 +1947,9 @@
       }
     },
     "-674_214--673_215-fc9944f617": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-west--674_214--673_215-fc9944f617.zip",
-      "bytes": 5316822,
-      "sha256": "c4692af17895facf8691a3e10b5863cc5f4010f0b740496a568faa585a1286a5",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--674_214--673_215-fc9944f617.zip",
+      "bytes": 5317441,
+      "sha256": "8b781e0da4fa910935b2a7debef8fc2c704a1a466b18db9b1ee0d92541b58dfa",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -2329,9 +2363,9 @@
       }
     },
     "-672_230--671_231-086fa24859": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--672_230--671_231-086fa24859.zip",
-      "bytes": 698164,
-      "sha256": "1f1cfabc22f82310045a5b06062f77c85f6f0bc1131594ca527ba60801a4a4bf",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--672_230--671_231-086fa24859.zip",
+      "bytes": 698306,
+      "sha256": "c6e1f78780b05d1a26b11234709e934a842384c6af06655a550a3d93f9f7acfd",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -2342,9 +2376,9 @@
       }
     },
     "-672_232--671_233-d90e06be6d": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--672_232--671_233-d90e06be6d.zip",
-      "bytes": 947178,
-      "sha256": "82bc1a6748b9a5d23cd97bc8ef92dd54399d8161680e07f3774b4b5f04f026d9",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--672_232--671_233-d90e06be6d.zip",
+      "bytes": 947721,
+      "sha256": "abcaac94910d2212c2f53a6127e15d42161594b7095a52093c207d8403d61e99",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -2537,9 +2571,9 @@
       }
     },
     "-670_212--669_213-7cc5d625a0": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-west--670_212--669_213-7cc5d625a0.zip",
-      "bytes": 2435746,
-      "sha256": "f6734648630852edacd46eb6d7486793fd8238d6a119f223fa10dff7d420693d",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--670_212--669_213-7cc5d625a0.zip",
+      "bytes": 2435805,
+      "sha256": "846ca9778c1e5ea2b216bc0517ca15ae1d80bedcf2b10f5f0abbacc7e99f9720",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -2641,9 +2675,9 @@
       }
     },
     "-668_-16--667_-15-2bdcff6c98": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-west--668_-16--667_-15-2bdcff6c98.zip",
-      "bytes": 7694944,
-      "sha256": "37d36bdd2b8ae88c8108e9098a24ec66a48babdc6f4f48c97e922bf919c0150c",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--668_-16--667_-15-2bdcff6c98.zip",
+      "bytes": 7695003,
+      "sha256": "fb3d476f893270ce12ed6e2079585e497f5e269844542984428c5143dc4ed14d",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -2979,9 +3013,9 @@
       }
     },
     "-664_-40--617_7-0efde0010b": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--664_-40--617_7-0efde0010b.zip",
-      "bytes": 10485714,
-      "sha256": "1bf0e21f12fa45b19a1e300a25cb477e668f929bccbe2af3d9401273a0aa20c5",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--664_-40--617_7-0efde0010b.zip",
+      "bytes": 10485752,
+      "sha256": "d21e1eb0c7a62302770d97427b40e0723bc3f4b82d3b9bb70791eb08e48cbc56",
       "tiles": 408,
       "density": "multipolygon-updated",
       "bounds": {
@@ -5007,9 +5041,9 @@
       }
     },
     "-610_-86--610_-85-fd1a79cd8b": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--610_-86--610_-85-fd1a79cd8b.zip",
-      "bytes": 3926561,
-      "sha256": "73ee5852a07d4f842849bb6c1006a990bfc4edcad9385ba6000658bf18ecf6a6",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--610_-86--610_-85-fd1a79cd8b.zip",
+      "bytes": 3926783,
+      "sha256": "7f8bd9eb749c5fea250637048570bfd8d1ec8088fdbdecc5a4d1149a461cd358",
       "tiles": 2,
       "density": "multipolygon-updated",
       "bounds": {
@@ -5527,9 +5561,9 @@
       }
     },
     "-604_-96--603_-95-61ed96f66a": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-west--604_-96--603_-95-61ed96f66a.zip",
-      "bytes": 2932737,
-      "sha256": "4f44e0d75b1a563024abd855bf5df2d9caa62cb5c9841bbf506820d705a01ea3",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--604_-96--603_-95-61ed96f66a.zip",
+      "bytes": 2932808,
+      "sha256": "a1c6b0755a07a5492c382db2aa1a9635af6579eefe83d34fa076a4fd7a5cd7ef",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -5566,9 +5600,9 @@
       }
     },
     "-604_-90--603_-89-e29a1fcbac": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--604_-90--603_-89-e29a1fcbac.zip",
-      "bytes": 8156861,
-      "sha256": "438a39163ed87a6173d0ad4a1cb95249e12c89e213176bc4509615f68401b494",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--604_-90--603_-89-e29a1fcbac.zip",
+      "bytes": 8156985,
+      "sha256": "e8fd2b8620ba521fc12e14259e4c00147c8bb70f3229798ab21992626caea989",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -5800,9 +5834,9 @@
       }
     },
     "-600_-98--599_-97-f2986433a3": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-west--600_-98--599_-97-f2986433a3.zip",
-      "bytes": 4636610,
-      "sha256": "1583854732eec1c249aea5daf19bc69388247289793ffbad5ce7a9e53577017e",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--600_-98--599_-97-f2986433a3.zip",
+      "bytes": 4636718,
+      "sha256": "bac84a0a88b320b119ee5d2ed286f9c6de2f1963b8656f6097ec4777cc45b3a1",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -6567,9 +6601,9 @@
       }
     },
     "-590_-88--589_-87-ed7cff73ee": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--590_-88--589_-87-ed7cff73ee.zip",
-      "bytes": 1344591,
-      "sha256": "d3ead386e54f7b8258b1346a6e2fe2089b65b9b8a9406bb2d43d8548e57bad45",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--590_-88--589_-87-ed7cff73ee.zip",
+      "bytes": 1344954,
+      "sha256": "edd8de77ba1c4ef9b5dd72ac1dab026e69efb9a34494db5c80395f93fa36df1a",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -6619,9 +6653,9 @@
       }
     },
     "-590_214--589_215-799d721e96": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-west--590_214--589_215-799d721e96.zip",
-      "bytes": 858334,
-      "sha256": "2206684437687df29a5c558bc0d368d4c12440165d256bb18222f18367a5591b",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--590_214--589_215-799d721e96.zip",
+      "bytes": 858408,
+      "sha256": "77eb5699036ed357bd38ea14bcd0ff2e682422a07798d07b1fa23df87cafa24c",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -6801,9 +6835,9 @@
       }
     },
     "-586_-116--585_-115-73d3ca724e": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--586_-116--585_-115-73d3ca724e.zip",
-      "bytes": 702042,
-      "sha256": "c4dc5f5994787984a3be9feb03e0937342e950dd6844748a322b81f3ec7d7441",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--586_-116--585_-115-73d3ca724e.zip",
+      "bytes": 702093,
+      "sha256": "247d1859c146bbc21d6d6d29e08b35296c5670729efc5e830ec926adcb808d5a",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -8556,9 +8590,9 @@
       }
     },
     "-506_-102--505_-101-773f3bee40": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--506_-102--505_-101-773f3bee40.zip",
-      "bytes": 2869384,
-      "sha256": "9ff546f0236ee418acf61b9d5755216a2925948205be100243cc42d292cb7635",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--506_-102--505_-101-773f3bee40.zip",
+      "bytes": 2869437,
+      "sha256": "e2f3f0aa72e7b67be14c2d167d3a35dfc7642fd6d35586f58a9196e26ef703ac",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -9089,9 +9123,9 @@
       }
     },
     "-502_-98--501_-97-d68f88920e": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--502_-98--501_-97-d68f88920e.zip",
-      "bytes": 790712,
-      "sha256": "e93dab1a26261b3a152b69f81a6b2daf8a774e170ea70761453fcef27addf2e6",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--502_-98--501_-97-d68f88920e.zip",
+      "bytes": 791159,
+      "sha256": "20fd7c8c3f7e368223e690ead7edcb60937b612c6cd2f6b50b27099be8709e5d",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -9700,9 +9734,9 @@
       }
     },
     "-472_-88--420_-41-4d73efe9ca": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--472_-88--420_-41-4d73efe9ca.zip",
-      "bytes": 4068216,
-      "sha256": "eba4dfd37d1bab7e4fd9fa3da887cd33cf5e652668f58499cc1e7131ac303637",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--472_-88--420_-41-4d73efe9ca.zip",
+      "bytes": 4068293,
+      "sha256": "d592e52eea6b69e6a7e7e879d191486837fbe923d56a11a035e57d3fd728370f",
       "tiles": 257,
       "density": "multipolygon-updated",
       "bounds": {
@@ -9921,9 +9955,9 @@
       }
     },
     "-448_24--447_25-f274819dc7": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-west--448_24--447_25-f274819dc7.zip",
-      "bytes": 1167043,
-      "sha256": "65f980d5da34087ddc3454d7a2e0274ff9af2a786cc5f14b4c554fff57f248d8",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--448_24--447_25-f274819dc7.zip",
+      "bytes": 1167156,
+      "sha256": "f7d998ed5966863978984595e1e8353ca1dd357240750fbf36b3dafb4990ca65",
       "tiles": 3,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11078,9 +11112,9 @@
       }
     },
     "-392_42--391_43-7aceb34fdb": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--392_42--391_43-7aceb34fdb.zip",
-      "bytes": 2124821,
-      "sha256": "7f8cbfbd7f839c92be4fe2dd1c6c3bbe8fe38b6b541673331e04c0280d78c2c1",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--392_42--391_43-7aceb34fdb.zip",
+      "bytes": 2124884,
+      "sha256": "d9855bf034d171958929f4492e34cd8a711dd2488d1dd15227e3ed481315800d",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11234,9 +11268,9 @@
       }
     },
     "-390_38--389_39-5d09e10754": {
-      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon/scene-us-west--390_38--389_39-5d09e10754.zip",
-      "bytes": 4545327,
-      "sha256": "efb39014f0132abfc64d6483977ef195e9a696869c7fb9db5957c04b079d4266",
+      "path": "scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028/scene-us-west--390_38--389_39-5d09e10754.zip",
+      "bytes": 4545571,
+      "sha256": "2a0ccdbe9f8f20b4a1524dd5627c784621d2e49212ff944866e628fea205fc34",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -181197,5 +181231,5 @@
       "file": "-695_24.json"
     }
   },
-  "manifestHash": "fccc68feddf1507dae27c0baed2d967ffeb72fa29760ba93015d91683d94f74f"
+  "manifestHash": "f9cbeecab8e2fd223aacd50096613651f0e344b59da347a691121da2a2d7c151"
 }

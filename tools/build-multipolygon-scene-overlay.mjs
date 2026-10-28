@@ -13,18 +13,21 @@ const { SceneElevationStore, terrainGridForKey } = require('./scene-elevation.cj
 const [region, workspaceArg] = process.argv.slice(2);
 if (!region || !workspaceArg || !/^us-(northeast|midwest|south|west)$/.test(region)) throw new Error('Expected region and workspace');
 const workspace = path.resolve(workspaceArg);
-const incremental = process.env.SCENE_OVERLAY_INCREMENTAL === 'true';
-const auditDir = path.join(workspace, `${incremental ? 'multipolygon-recheck' : 'multipolygon'}-${region}`);
+const followup = process.env.SCENE_OVERLAY_FOLLOWUP === 'true';
+const incremental = followup || process.env.SCENE_OVERLAY_INCREMENTAL === 'true';
+const auditDir = path.join(workspace, `${followup ? 'multipolygon-followup' : incremental ? 'multipolygon-recheck' : 'multipolygon'}-${region}`);
 const baseDir = path.join(workspace, `build-${region}`, 'generated');
 const priorChangedDir = path.join(workspace, `multipolygon-${region}`, 'changed-tiles');
+const recheckChangedDir = path.join(workspace, `multipolygon-recheck-${region}`, 'changed-tiles');
 const output = path.join(auditDir, 'changed-tiles');
 fs.mkdirSync(output, { recursive: true });
 const manifest = JSON.parse(fs.readFileSync(path.join('data', 'scene', region, 'manifest.json')));
 if (manifest.sourceMetadata?.multipolygon && !incremental) throw new Error('The baseline already contains multipolygon geometry; rebuild against a verified way-only baseline');
 if (incremental && !manifest.sourceMetadata?.multipolygon) throw new Error('Incremental overlay requires an existing multipolygon baseline');
 function baselineTile(file) {
+    const rechecked = path.join(recheckChangedDir, file);
     const prior = path.join(priorChangedDir, file);
-    return JSON.parse(fs.readFileSync(incremental && fs.existsSync(prior) ? prior : path.join(baseDir, file)));
+    return JSON.parse(fs.readFileSync(followup && fs.existsSync(rechecked) ? rechecked : incremental && fs.existsSync(prior) ? prior : path.join(baseDir, file)));
 }
 const elevation = new SceneElevationStore(path.join(workspace, 'us-hgt'));
 const rows = [];

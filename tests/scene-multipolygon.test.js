@@ -82,6 +82,22 @@ test('overlay package reuses immutable packs and publishes changed packs under t
         const finalCheck = spawnSync(process.execPath, [validator, region, root], { cwd: root, encoding: 'utf8', env: incrementalEnv });
         assert.equal(finalCheck.status, 0, finalCheck.stderr);
         assert.equal(JSON.parse(fs.readFileSync(path.join(recheck, 'validation.json'))).relationPieces, 2);
+
+        const recheckManifest = JSON.parse(fs.readFileSync(path.join(recheck, 'release', 'manifest.json')));
+        fs.writeFileSync(path.join(data, 'manifest.json'), JSON.stringify(recheckManifest));
+        const followup = path.join(root, `multipolygon-followup-${region}`), followupTiles = path.join(followup, 'changed-tiles');
+        fs.mkdirSync(followupTiles, { recursive: true });
+        changedTile.buildings.push({ id: 'relation/3/piece/0' });
+        fs.writeFileSync(path.join(followupTiles, '1_0.json'), JSON.stringify(changedTile));
+        fs.writeFileSync(path.join(followup, 'overlay-audit.json'), JSON.stringify({ changedExistingTiles: 1, newTiles: 0 }));
+        for (const name of ['assembly-audit.json', 'scene-preparation-audit.json']) fs.writeFileSync(path.join(followup, name), '{}');
+        const followupEnv = { ...process.env, SCENE_OVERLAY_FOLLOWUP: 'true' };
+        const packagedFollowup = spawnSync(process.execPath, [script, region, root], { cwd: root, encoding: 'utf8', env: followupEnv });
+        assert.equal(packagedFollowup.status, 0, packagedFollowup.stderr);
+        const checkedFollowup = spawnSync(process.execPath, [validator, region, root], { cwd: root, encoding: 'utf8', env: followupEnv });
+        assert.equal(checkedFollowup.status, 0, checkedFollowup.stderr);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(followup, 'validation.json'))).relationPieces, 3);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(followup, 'release', 'manifest.json'))).packaging.baselineReleaseTags.length, 3);
     } finally {
         assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep));
         fs.rmSync(root, { recursive: true, force: true });
