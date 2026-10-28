@@ -48,3 +48,15 @@ ADB에 실제 폰이 연결되어 있지 않아 다음 항목은 자동 테스�
 ## Remaining limits
 
 The public routing/geocoding services and map data still determine available roads, address coordinates and candidate diversity. No paid API, commercial traffic feed, cloud TTS or national closure dataset was added. Filtering is a conservative heuristic over returned candidates, not a new routing engine. English voice quality, engine-specific queue behavior and actual vehicle access require the device/drive checks above.
+
+## Published APK verification
+
+- Source commit: `6bc6b90215c7ae8470046407e989e429bfe636d5`.
+- [APK release CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40624103881): success. Exact-source Node 252/252 and browser 94/94 passed; Android unit tests, debug compile and lint passed before the signed release build.
+- [Independent main-branch CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40624098483): success, including browser regressions, syntax/mirror checks and Android tests/build/lint.
+- [Release](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.9) / [APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.9/SolarLessNavi-1.3.9.apk).
+- Public APK: 4,393,627 bytes; SHA-256 `9f6d9576e611d3406b1612cedcd82fe27268a6c7e837311dd134770e8d9a38a3`.
+- Cryptographic APK signature verifies against the existing certificate `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`; package `com.solaris.nav`, version 1.3.9 / code 13, not debuggable.
+- All ten changed web assets inside the public APK match the release commit byte-for-byte. Public update manifest and checksum asset match the downloaded APK.
+- Shipping updater with real public GitHub responses and simulated installed 1.3.5/1.3.6/1.3.7/1.3.8 offers 1.3.9; simulated 1.3.9 reports up to date. This does not simulate Android's installer or prove data retention on a phone.
+- Additional responsive check at 320×640 and 640×320: review controls remain reachable by scrolling and at least 44 px high, including with tile requests failing. The confirmation screenshot was inspected after the opening animation completed; fixture tiles are deliberately blank.
