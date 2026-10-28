@@ -3101,6 +3101,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderDynamicRemainingPath(carLat, carLng, carHeading, knownSnap = null) {
+        if (isLiveNavActive && navigationRouteNeedsReliableOrigin) {
+            if (dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup.clearLayers();
+            return;
+        }
         if (!selectedRouteObj || !selectedRouteObj.analyzed || !selectedRouteObj.analyzed.segments || !dynamicRemainingPolylineGroup) {
             return;
         }
@@ -3192,9 +3196,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateVehicleMarkerPosition(lat, lng, heading = 0, speedKmh = 0, options = {}) {
-        let snapResult = options.knownSnap || { lat, lng, heading, isSnapped: false, segmentIndex: 0 };
+        const awaitingOrigin = isLiveNavActive && navigationRouteNeedsReliableOrigin;
+        let snapResult = (!awaitingOrigin && options.knownSnap) || { lat, lng, heading, isSnapped: false, segmentIndex: 0 };
 
-        if (!options.knownSnap && options.snapToRoute !== false && selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
+        if (!awaitingOrigin && !options.knownSnap && options.snapToRoute !== false && selectedRouteObj && selectedRouteObj.analyzed && selectedRouteObj.analyzed.coordinates) {
             snapResult = isLiveNavActive
                 ? snapNavigationPosition(lat, lng, heading, selectedRouteObj)
                 : ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, selectedRouteObj.analyzed.coordinates);
@@ -4391,7 +4396,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Show its verified road geometry as a preview, while retaining the
         // strict reliable-origin requirement for actual live guidance.
         updateRoutePreviewStatus();
-        if ((isLiveDrive || isLiveNavActive) && verifiedRouteOriginProvisional) return;
+        if ((isLiveDrive || isLiveNavActive) && (verifiedRouteOriginProvisional || navigationRouteNeedsReliableOrigin)) return;
 
         if (!isLiveDrive && routeData && routeData.routes && routeData.routes.all) {
             routeData.routes.all.forEach(rt => {
