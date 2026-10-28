@@ -1,7 +1,7 @@
 {
   "schema": 3,
   "region": "US Midwest",
-  "releaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon",
+  "releaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
   "baseUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download",
   "tileSizeM": 5000,
   "tilePaddingMeters": 4500,
@@ -82,6 +82,36 @@
         "holesSupported": true,
         "missingHgtFiles": [],
         "voidHgtFiles": []
+      },
+      "recheck": {
+        "baselineReleaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon",
+        "method": "conservative re-evaluation of previously excluded building relations",
+        "assembly": {
+          "candidates": 69,
+          "polygons": 137,
+          "polygons_with_holes": 23,
+          "assembled": 69
+        },
+        "prep": {
+          "relations": 69,
+          "pieces": 192,
+          "replaced_way_references": 162,
+          "relations_with_holes": 23,
+          "rejected": 0
+        },
+        "overlay": {
+          "region": "us-midwest",
+          "candidates": 69,
+          "appliedRelations": 69,
+          "pieces": 192,
+          "removedWays": 161,
+          "changedExistingTiles": 47,
+          "newTiles": 0,
+          "blockedRelations": 0,
+          "holesSupported": true,
+          "missingHgtFiles": [],
+          "voidHgtFiles": []
+        }
       }
     }
   },
@@ -91,7 +121,7 @@
   "osmPbfSha256": "a2de95c1612d5c06bb3a911af336a930e483a1122eea5390414fc3c2eb64b7ec",
   "demDataset": "Original v3 SRTM grids for existing tiles; Mapzen Terrain Tiles Skadi for new tiles and new or changed building ground",
   "demDatasetVersion": "v3 grids preserved; Mapzen Skadi fetched 2026-10-28 UTC",
-  "generatedAt": "2026-10-28T04:39:48.608Z",
+  "generatedAt": "2026-10-28T05:26:27.329Z",
   "schemaVersion": 3,
   "packWidth": null,
   "maxPackBytes": 10485760,
@@ -146,15 +176,19 @@
     "preserveDenseGroups": true,
     "maxAdaptivePackSpanTiles": 8,
     "maxReleaseAssets": 1000,
-    "baselineReleaseTag": "scene-us-midwest-hybrid-v3-osm-20261027",
-    "reusedBaselinePacks": 322,
-    "newlyPublishedPacks": 613
+    "baselineReleaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon",
+    "reusedBaselinePacks": 894,
+    "newlyPublishedPacks": 41,
+    "baselineReleaseTags": [
+      "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon",
+      "scene-us-midwest-hybrid-v3-osm-20261027"
+    ]
   },
   "stats": {
     "tileCount": 44083,
     "packCount": 935,
-    "releaseAssetCount": 614,
-    "totalBytes": 1395727443,
+    "releaseAssetCount": 42,
+    "totalBytes": 1395735181,
     "minPackBytes": 9200,
     "maxPackBytes": 10484563
   },
@@ -3410,9 +3444,9 @@
       }
     },
     "-264_80--209_159-410c336c33": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--264_80--209_159-410c336c33.zip",
-      "bytes": 8565374,
-      "sha256": "a882d991e8c6c5a465c69878146ffa0f7ce20ca7e726b7c1fd0b45c5dadad1ed",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--264_80--209_159-410c336c33.zip",
+      "bytes": 8565472,
+      "sha256": "8c36c669c83d3a1339ae9dd6f83287d1db318ca02d689f3cd8e2ae7debd53d7c",
       "tiles": 623,
       "density": "multipolygon-updated",
       "bounds": {
@@ -3592,9 +3626,9 @@
       }
     },
     "-256_62--255_63-3cadeca69b": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--256_62--255_63-3cadeca69b.zip",
-      "bytes": 3546564,
-      "sha256": "5ac99839e28e9fcf58572e625afb7fb7f7169f8748efc4ba88c5df7f941a584f",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--256_62--255_63-3cadeca69b.zip",
+      "bytes": 3546710,
+      "sha256": "ee96fdde55605c48c242ca13bb12e09769d25d46241df206b54b9f85b9082c31",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -4008,9 +4042,9 @@
       }
     },
     "-232_-32--202_31-bb2628b2d2": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--232_-32--202_31-bb2628b2d2.zip",
-      "bytes": 4495685,
-      "sha256": "2ba198e3d7ed824998f5961de7a0603cf654cdc2d66d57bd84e0886b9952e2e3",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--232_-32--202_31-bb2628b2d2.zip",
+      "bytes": 4495762,
+      "sha256": "304a4fbf409c13ff36a34537fcf2e28c5036c2f9020e7fe0917e3fd0d9d8f682",
       "tiles": 264,
       "density": "multipolygon-updated",
       "bounds": {
@@ -4073,9 +4107,9 @@
       }
     },
     "-232_88--137_159-7b0c782c80": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--232_88--137_159-7b0c782c80.zip",
-      "bytes": 10408292,
-      "sha256": "a321143a60c0a75a2b37ad4b180adb9cf032c699a09dc7c17e314d575672ced0",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--232_88--137_159-7b0c782c80.zip",
+      "bytes": 10408293,
+      "sha256": "3f48a8638a43841d2f01d79d9e82430582ccb02c248ef0e67946162e5a643785",
       "tiles": 618,
       "density": "multipolygon-updated",
       "bounds": {
@@ -4086,9 +4120,9 @@
       }
     },
     "-232_112--169_159-8bcddc38f3": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--232_112--169_159-8bcddc38f3.zip",
-      "bytes": 10474499,
-      "sha256": "83d04d9d93640c8d6baf6f7dfa39ee98017cfdc935dc2c4d7f4f6359bdaa6a48",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--232_112--169_159-8bcddc38f3.zip",
+      "bytes": 10474553,
+      "sha256": "ca595f4cffa1af50e7c3ae2b3f4c128adc1fb27e573eb8711307ec24ae3b4d0d",
       "tiles": 521,
       "density": "multipolygon-updated",
       "bounds": {
@@ -4385,9 +4419,9 @@
       }
     },
     "-224_176--161_215-1058dd8cb2": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--224_176--161_215-1058dd8cb2.zip",
-      "bytes": 10475133,
-      "sha256": "af66aeb7c0bff241509dc8d2e23f35087a2bb381c2b78ed6b8d3c76b8ac715f4",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--224_176--161_215-1058dd8cb2.zip",
+      "bytes": 10475365,
+      "sha256": "9b09f265310ac7e143536463c6f91415645d2d011816c72b36f03ecb2f21552b",
       "tiles": 420,
       "density": "multipolygon-updated",
       "bounds": {
@@ -4736,9 +4770,9 @@
       }
     },
     "-216_64--161_103-31123a591a": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--216_64--161_103-31123a591a.zip",
-      "bytes": 10460536,
-      "sha256": "9b202e20fcd34cf6db8a50a71d73fc81bb146510d9932eb9ccbff8c384423e2e",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--216_64--161_103-31123a591a.zip",
+      "bytes": 10460606,
+      "sha256": "999cc5adc96d2f0469e9bbc1940e8b0440b658b2be7e80aac5d305b73eb38d41",
       "tiles": 494,
       "density": "multipolygon-updated",
       "bounds": {
@@ -4749,9 +4783,9 @@
       }
     },
     "-216_128--209_135-cefc8e84be": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--216_128--209_135-cefc8e84be.zip",
-      "bytes": 291604,
-      "sha256": "f0b266d0bc324278ef58f6f7f1643988609b42f0bdc265c1b2b1d38e0144ab6b",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--216_128--209_135-cefc8e84be.zip",
+      "bytes": 291687,
+      "sha256": "729246bb0793a6a2c9c2a13ab0790506a87d05e7bcd276b9adc4eaf188a42cc5",
       "tiles": 23,
       "density": "multipolygon-updated",
       "bounds": {
@@ -4762,9 +4796,9 @@
       }
     },
     "-216_136--207_175-3fb69dbf4c": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--216_136--207_175-3fb69dbf4c.zip",
-      "bytes": 5105207,
-      "sha256": "4472df0469e46f69402bb42495901d0279f22657f4e5e24f25a69a62ebb417b0",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--216_136--207_175-3fb69dbf4c.zip",
+      "bytes": 5108572,
+      "sha256": "393efce342e9ff5233df7cc36b5df7138b971e6d1acb9e7d83faba3cd43559fd",
       "tiles": 159,
       "density": "multipolygon-updated",
       "bounds": {
@@ -5256,9 +5290,9 @@
       }
     },
     "-202_152--201_153-d2f404a263": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--202_152--201_153-d2f404a263.zip",
-      "bytes": 2449097,
-      "sha256": "a2cefa3318f48ff2c2e8cfd103fc6892e59077133babd0682c81e0df3e598b22",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--202_152--201_153-d2f404a263.zip",
+      "bytes": 2449267,
+      "sha256": "6308910eb09a6b370b7166a3e160821f93fd81f7d0f6efa4c91acc24a7ada9eb",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -5269,9 +5303,9 @@
       }
     },
     "-202_154--201_155-0bb0394f1f": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--202_154--201_155-0bb0394f1f.zip",
-      "bytes": 2833603,
-      "sha256": "b30220075751f18fc7b1b3bb1da677fc436346a8d18ea52e313a140fd847bc24",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--202_154--201_155-0bb0394f1f.zip",
+      "bytes": 2833672,
+      "sha256": "efd88de59697e986e40164d1498ace7facae76ea92490fbb36e89402eb132b2c",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -6881,9 +6915,9 @@
       }
     },
     "-152_-32--121_31-40fb2ca3a5": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--152_-32--121_31-40fb2ca3a5.zip",
-      "bytes": 10452125,
-      "sha256": "206820a707d444974b21ea1d428bcd63994bb5692271c704791789272ddd81d3",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--152_-32--121_31-40fb2ca3a5.zip",
+      "bytes": 10452139,
+      "sha256": "428ed5a4ca8d93b00d36901db0a3c15c149cc40caa596379e436cc4b19f03e33",
       "tiles": 567,
       "density": "multipolygon-updated",
       "bounds": {
@@ -6894,9 +6928,9 @@
       }
     },
     "-152_12--151_13-d6eaba3383": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--152_12--151_13-d6eaba3383.zip",
-      "bytes": 1287965,
-      "sha256": "cc686c9f8ccd32c4e72c5b3b9e411a219caa5e58b6410e35ef955793a4ee810b",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--152_12--151_13-d6eaba3383.zip",
+      "bytes": 1288053,
+      "sha256": "10efdc0f91f69c777ba50ab0793ad65067e0ba6eecb11fd5a44b7afb49153dbe",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -7141,9 +7175,9 @@
       }
     },
     "-144_32--121_71-f73903dcb5": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--144_32--121_71-f73903dcb5.zip",
-      "bytes": 10461807,
-      "sha256": "8e6ab359eaf12b419b346ffa68353328d09ea9db3c0df36dc0a743f85b904092",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--144_32--121_71-f73903dcb5.zip",
+      "bytes": 10460519,
+      "sha256": "7f63892165c4e36e813a5df2be8e4d5c5561accd4af3df49fb077f272fccd4a8",
       "tiles": 400,
       "density": "multipolygon-updated",
       "bounds": {
@@ -7154,9 +7188,9 @@
       }
     },
     "-144_80--121_103-641b058576": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--144_80--121_103-641b058576.zip",
-      "bytes": 10367163,
-      "sha256": "8b9aef6814b1393d62ab94952dc5bb1a27d4c2ed4087fcbfaab22faf9f7038d7",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--144_80--121_103-641b058576.zip",
+      "bytes": 10367331,
+      "sha256": "69abf229ab5b6172eddaf48497a2c8cf34d0a7e22e0d231450d8d66841d7071a",
       "tiles": 358,
       "density": "multipolygon-updated",
       "bounds": {
@@ -7349,9 +7383,9 @@
       }
     },
     "-140_112--139_113-9c45b01cfc": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--140_112--139_113-9c45b01cfc.zip",
-      "bytes": 1553345,
-      "sha256": "b5c5a774ba0bbdeaa659512a3b821760ffe6b2ec6fb9f248652599681cd6c150",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--140_112--139_113-9c45b01cfc.zip",
+      "bytes": 1553341,
+      "sha256": "2b28b26ee4d4731bf6747fd7a43fe16013b7477de85f49c0710d20297eb40a40",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -7557,9 +7591,9 @@
       }
     },
     "-132_54--131_55-fb8ab2cf74": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--132_54--131_55-fb8ab2cf74.zip",
-      "bytes": 803111,
-      "sha256": "778a6b59f8c87905ce2bb9c47712d9f40fcfb9cfe58c4ee75e14f722f551eaba",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--132_54--131_55-fb8ab2cf74.zip",
+      "bytes": 803166,
+      "sha256": "6a3c7d7eed2f4a43c41f5d87552da87fcd0b4af3e97619498e0bbf9ac7005ce3",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -7596,9 +7630,9 @@
       }
     },
     "-130_54--129_55-5dfbd80e14": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--130_54--129_55-5dfbd80e14.zip",
-      "bytes": 896586,
-      "sha256": "4bdbe36093d7933378bdd5f35097ea6a7793b03da82afec7839f6c887d41b638",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--130_54--129_55-5dfbd80e14.zip",
+      "bytes": 896566,
+      "sha256": "460a2b9618d164a0af5aa52deb943a9855637838e4aeb3615c185072fe5b0453",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -8181,9 +8215,9 @@
       }
     },
     "-118_46--117_47-c572789055": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--118_46--117_47-c572789055.zip",
-      "bytes": 1074774,
-      "sha256": "cbb0db0e6729a2640ef999122094a41c9dbc536c4eb97d0ec67e9f622422a817",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--118_46--117_47-c572789055.zip",
+      "bytes": 1074765,
+      "sha256": "2d6c9ad483ee46094c858c2f170fa2f5ecaadfc6e32f863a2f05f2b6c7690bea",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -8467,9 +8501,9 @@
       }
     },
     "-116_96--115_97-7881491aac": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--116_96--115_97-7881491aac.zip",
-      "bytes": 700010,
-      "sha256": "cdd37d2174553f295c695b3978805f5e20e18a9eebd01936c609629e3d0a2932",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--116_96--115_97-7881491aac.zip",
+      "bytes": 700306,
+      "sha256": "0d3f5f033450601deb852c9ee17375126e5fcb55c42b171803a4c0d50e1581f4",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -8662,9 +8696,9 @@
       }
     },
     "-114_88--113_89-a25d6cdd11": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--114_88--113_89-a25d6cdd11.zip",
-      "bytes": 1540615,
-      "sha256": "fc37a9087c66785b590d1a5e032463d654be974611e7415ff7422c1b45046ce6",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--114_88--113_89-a25d6cdd11.zip",
+      "bytes": 1540678,
+      "sha256": "9f3ac89b59aafc8de35022754e68a92b7fda7ff90058d075f5fac9971cc13091",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -8766,9 +8800,9 @@
       }
     },
     "-114_112--113_113-447e205c20": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--114_112--113_113-447e205c20.zip",
-      "bytes": 7182922,
-      "sha256": "c76668defb89d9d62116fa891cef1b3dd7ae7000c102e6c2845e7b0c05e05d58",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--114_112--113_113-447e205c20.zip",
+      "bytes": 7183210,
+      "sha256": "414fa40049c9361fa3beef0f56ff1f99a00d2cf0978cdcbd244171357f9cfe70",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -8961,9 +8995,9 @@
       }
     },
     "-112_88--108_99-ab58da3cbd": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--112_88--108_99-ab58da3cbd.zip",
-      "bytes": 1254396,
-      "sha256": "82ddd19bccb8accf6f8f3937ef200859122edd454b5b1c854d562f5008bf70af",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--112_88--108_99-ab58da3cbd.zip",
+      "bytes": 1254567,
+      "sha256": "e0d34f26488238f2a8de914457f80efdfb9231be674323a47cab5ed6895c9911",
       "tiles": 16,
       "density": "multipolygon-updated",
       "bounds": {
@@ -9169,9 +9203,9 @@
       }
     },
     "-110_84--109_85-5276dc2c34": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--110_84--109_85-5276dc2c34.zip",
-      "bytes": 7130866,
-      "sha256": "69975f49a54c5388c965e0e598a81108f34601ac51efbba2887d1e3659baebd7",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--110_84--109_85-5276dc2c34.zip",
+      "bytes": 7130864,
+      "sha256": "fa6dbffc159c8bb8207744fa19acf20b471c48c12dd2d7628d56a0606893da06",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -9208,9 +9242,9 @@
       }
     },
     "-109_86--109_87-00b5c758bb": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--109_86--109_87-00b5c758bb.zip",
-      "bytes": 4492407,
-      "sha256": "dc3326ead1a6465fedf716f39f59493de7bec878af0ac23941cf02499e463faa",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--109_86--109_87-00b5c758bb.zip",
+      "bytes": 4492412,
+      "sha256": "62f7722bff2973a6871fe87f85a0133e1a38406a6bf740b15297d24ef1c570b7",
       "tiles": 2,
       "density": "multipolygon-updated",
       "bounds": {
@@ -9468,9 +9502,9 @@
       }
     },
     "-100_76--99_77-5a2ac88c41": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--100_76--99_77-5a2ac88c41.zip",
-      "bytes": 530611,
-      "sha256": "7d098177cc9314a58bfa91f08ce631cf84e29f5791f958b12017178e101bc062",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--100_76--99_77-5a2ac88c41.zip",
+      "bytes": 530571,
+      "sha256": "41e7d8e5f2eaa44a7ff136200731caae701d4f64722d39f7867e855859d102b1",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -9988,9 +10022,9 @@
       }
     },
     "-84_44--83_45-3295c984b2": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--84_44--83_45-3295c984b2.zip",
-      "bytes": 1451770,
-      "sha256": "1be9990bbbe367c3a7fdb128d90ed8b951990ff886ad6428d2bb9f195614c9a8",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--84_44--83_45-3295c984b2.zip",
+      "bytes": 1452071,
+      "sha256": "70f8a0d1aae07d4aa704ab7a7284a2bbb5158f6031ee0172ac251d4f36516b51",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -10326,9 +10360,9 @@
       }
     },
     "-76_150--75_151-4fd4a28390": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--76_150--75_151-4fd4a28390.zip",
-      "bytes": 850026,
-      "sha256": "48184751f26d580c2c189b7f39f6ee53bc00cc15779e8f265af9c36f7f52a80f",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--76_150--75_151-4fd4a28390.zip",
+      "bytes": 850196,
+      "sha256": "4d5b60ba5e6188fd070bab8376dc9a8af8fdb444ec68173202f46e8228561703",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -10599,9 +10633,9 @@
       }
     },
     "-58_24--57_25-5b3f0d12b3": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--58_24--57_25-5b3f0d12b3.zip",
-      "bytes": 3089475,
-      "sha256": "4e7a5967a8976025f49b78b26d4d1ee3f199d643d4a854420028035b1b024306",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--58_24--57_25-5b3f0d12b3.zip",
+      "bytes": 3089747,
+      "sha256": "77693f7078059d6accbd238287141526b2010d5cf5814e0dc3995170d8198790",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -10677,9 +10711,9 @@
       }
     },
     "-56_24--55_25-98eef8143d": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--56_24--55_25-98eef8143d.zip",
-      "bytes": 2832144,
-      "sha256": "e8e35295c6a77c65d6e181ef1998aa8e0878da23fd951696b49bcb5aa3788d34",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--56_24--55_25-98eef8143d.zip",
+      "bytes": 2832331,
+      "sha256": "8b93178f9e6f8bf1125e5e6a09573d7175aace1b4a538b3e03b8340c9d25702e",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -10794,9 +10828,9 @@
       }
     },
     "-54_26--53_27-fd11e2d309": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--54_26--53_27-fd11e2d309.zip",
-      "bytes": 1881164,
-      "sha256": "f73e4c2299b72f8ddc6b02c5fb446914fd179f2fa6b40b8701e6c24d6dae8a99",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--54_26--53_27-fd11e2d309.zip",
+      "bytes": 1882232,
+      "sha256": "3931be51980f814b4e95642be5aaf9067a58b3c652f6af8635b3b41c1426ca53",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -10963,9 +10997,9 @@
       }
     },
     "-48_13--9_55-343d13d397": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--48_13--9_55-343d13d397.zip",
-      "bytes": 10428763,
-      "sha256": "8ee0e7dc71c5c0ee9e962d245c3c71945ced90b36f18f82d247d5570f6cf84e5",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--48_13--9_55-343d13d397.zip",
+      "bytes": 10428750,
+      "sha256": "5311a2bb09052bd5074ab2a71a7af57ec42dcee1dd809df4536adc67373d0dc1",
       "tiles": 458,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11301,9 +11335,9 @@
       }
     },
     "-40_96--39_97-1e4356161d": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--40_96--39_97-1e4356161d.zip",
-      "bytes": 2515391,
-      "sha256": "6b8a9839f5e784cae485883d759c694f875e2005266d858c2c9c668f6af3e72e",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--40_96--39_97-1e4356161d.zip",
+      "bytes": 2515591,
+      "sha256": "dbf9dd4a96b09f382d1d9b34531713391ea254432d82e1f7a719f2a7963f55d6",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11613,9 +11647,9 @@
       }
     },
     "-34_42--33_43-f1ab9012d6": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--34_42--33_43-f1ab9012d6.zip",
-      "bytes": 2548105,
-      "sha256": "a4272e304b2aa1c63e815af1112934013d834e66a641ca630cd436490c8174a7",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--34_42--33_43-f1ab9012d6.zip",
+      "bytes": 2548430,
+      "sha256": "4bd1137927d951beeda5c78badfb65ce2d5e46a1f2688b9f37606eae10e664c1",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11626,9 +11660,9 @@
       }
     },
     "-34_44--33_45-4874c76989": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--34_44--33_45-4874c76989.zip",
-      "bytes": 4886750,
-      "sha256": "8cbb122dbf2fdbdc1826c65d504ac000e22428cd3fb450ee9e6c14be552f89b6",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--34_44--33_45-4874c76989.zip",
+      "bytes": 4886873,
+      "sha256": "9d4f0248b45b349ae2abaeef629bc0fa020a121b17fedaf7ca41d6476a247a17",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11639,9 +11673,9 @@
       }
     },
     "-34_46--33_47-f078258cbf": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--34_46--33_47-f078258cbf.zip",
-      "bytes": 1911946,
-      "sha256": "55cd5acb1c0ca87dca9a516cf029d78ea69c70f9f4ed768e4101b15678947923",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--34_46--33_47-f078258cbf.zip",
+      "bytes": 1911958,
+      "sha256": "2619222dd86dff467e1649735994f3900a57878b0988cbcfe2278cf71225d278",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11691,9 +11725,9 @@
       }
     },
     "-34_100--33_101-23f0e9e170": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--34_100--33_101-23f0e9e170.zip",
-      "bytes": 2932482,
-      "sha256": "87db5f87c05611cf918f07381aeec6990a9078206b93850d4dea173769c268b3",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--34_100--33_101-23f0e9e170.zip",
+      "bytes": 2932755,
+      "sha256": "2c367cd9e958671688ac3183e27b4e5663169414e72f73fc846dfe45944268ed",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11756,9 +11790,9 @@
       }
     },
     "-32_44--31_45-c908e9a308": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--32_44--31_45-c908e9a308.zip",
-      "bytes": 917545,
-      "sha256": "70c6d6b78ea329c023904d605aefe39a3a6a93040e670d9dc01c3d1196103967",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--32_44--31_45-c908e9a308.zip",
+      "bytes": 917847,
+      "sha256": "7bff5a220f2ad001925734bfb2f6cb7e16e231bd8e44fe2d63e46836f0ce0ca0",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11860,9 +11894,9 @@
       }
     },
     "-28_38--27_39-3f706d4aab": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--28_38--27_39-3f706d4aab.zip",
-      "bytes": 547457,
-      "sha256": "f4f396272bd83bc934670482f5aa01a97f64fde63cbb261892fe0d45ba49e5b3",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--28_38--27_39-3f706d4aab.zip",
+      "bytes": 547556,
+      "sha256": "d024930efbb1b5f24ab012ec2aa9f4a6766e4952f9f74746dde16fb0909b8f0a",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -11886,9 +11920,9 @@
       }
     },
     "-24_40-4_55-65a8d09a09": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--24_40-4_55-65a8d09a09.zip",
-      "bytes": 3301011,
-      "sha256": "77acdf0dd9aa76d3b9da24f71e0c1d5334d41bff9ed2a867d9b1fe33bae0646b",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--24_40-4_55-65a8d09a09.zip",
+      "bytes": 3301007,
+      "sha256": "b2326778c530e15b91da71d118f9f1801232bde58b00059f8ff4f97d28d919cb",
       "tiles": 208,
       "density": "multipolygon-updated",
       "bounds": {
@@ -12081,9 +12115,9 @@
       }
     },
     "-8_68--7_69-b12144e29d": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--8_68--7_69-b12144e29d.zip",
-      "bytes": 809914,
-      "sha256": "efa1747e5707ca6b5270264c99c7c554ab3748f66cc6ba89f4403aa4631da41a",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028/scene-us-midwest--8_68--7_69-b12144e29d.zip",
+      "bytes": 810187,
+      "sha256": "26e64f537ee748cfc791a6af8fd550530eb05f13762875eca933aae5914cb4d2",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -188649,5 +188683,5 @@
       "file": "-95_-2.json"
     }
   },
-  "manifestHash": "498d9c6691d9e5b6376f379fa0547dea3ef9f4fd6dccd034cb069f88dbda7044"
+  "manifestHash": "26ebd0e2cd449d245446d8c1671dc841c755392674ba427bcd409523c21c5711"
 }

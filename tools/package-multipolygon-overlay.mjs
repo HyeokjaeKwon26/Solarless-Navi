@@ -11,16 +11,21 @@ const require = createRequire(import.meta.url);
 const { unzipSync, zipSync } = require('fflate');
 const [region, workspaceArg] = process.argv.slice(2);
 if (!region || !workspaceArg || !/^us-(northeast|midwest|south|west)$/.test(region)) throw new Error('Expected region and workspace');
-const workspace = path.resolve(workspaceArg), auditDir = path.join(workspace, `multipolygon-${region}`);
+const workspace = path.resolve(workspaceArg);
+const incremental = process.env.SCENE_OVERLAY_INCREMENTAL === 'true';
+const auditDir = path.join(workspace, `${incremental ? 'multipolygon-recheck' : 'multipolygon'}-${region}`);
 const oldDir = path.join(workspace, `build-${region}`, 'release');
+const priorDir = path.join(workspace, `multipolygon-${region}`, 'release');
 const changedDir = path.join(auditDir, 'changed-tiles');
 const output = path.join(auditDir, 'release');
 const baseline = JSON.parse(fs.readFileSync(path.join('data', 'scene', region, 'manifest.json')));
 const overlay = JSON.parse(fs.readFileSync(path.join(auditDir, 'overlay-audit.json')));
 const assembly = JSON.parse(fs.readFileSync(path.join(auditDir, 'assembly-audit.json')));
 const prep = JSON.parse(fs.readFileSync(path.join(auditDir, 'scene-preparation-audit.json')));
-const tag = `scene-${region}-hybrid-v3-osm-20261027-multipolygon`;
+const tag = `scene-${region}-hybrid-v3-osm-20261027-multipolygon${incremental ? '-recheck-20261028' : ''}`;
 const baseTag = baseline.releaseTag;
+const originalTag = incremental ? baseline.packaging?.baselineReleaseTag : null;
+if (incremental && (!baseline.sourceMetadata?.multipolygon || !originalTag)) throw new Error('Missing multipolygon baseline provenance');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const coord = key => { const [x, y] = key.split(':').map(Number); return { x, y }; };
 const filename = key => `${key.replace(':', '_')}.json`;
@@ -72,11 +77,18 @@ for (const [key, oldGroup] of oldGroups) {
     const meta = baseline.packs[key];
     if (!meta || oldGroup.length !== meta.tiles) throw new Error(`Bad baseline pack ${key}`);
     if (!oldGroup.some(item => byKey.has(item.key))) {
-        packs[key] = { ...meta, path: `${baseTag}/${meta.path}` };
+        packs[key] = { ...meta, path: incremental ? meta.path : `${baseTag}/${meta.path}` };
         for (const item of oldGroup) tiles[item.key] = { pack: key, file: item.file };
         reused++;
     } else if (!resume) {
-        const file = fs.readFileSync(path.join(oldDir, meta.path));
+        let sourceDir = oldDir, sourceName = meta.path;
+        if (incremental) {
+            const parts = String(meta.path).split('/');
+            if (parts.length !== 2 || ![baseTag, originalTag].includes(parts[0])) throw new Error(`Unexpected baseline pack path ${meta.path}`);
+            sourceDir = parts[0] === baseTag ? priorDir : oldDir;
+            sourceName = parts[1];
+        }
+        const file = fs.readFileSync(path.join(sourceDir, sourceName));
         if (file.length !== meta.bytes || sha(file) !== meta.sha256) throw new Error(`Baseline pack checksum failed: ${meta.path}`);
         const oldEntries = unzipSync(file), content = new Map();
         for (const item of oldGroup) {
@@ -154,10 +166,13 @@ const values = Object.values(packs), sizes = values.map(value => value.bytes);
 const manifest = { ...baseline, releaseTag: tag,
     baseUrl: 'https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download',
     generatedAt: new Date().toISOString(),
-    sourceMetadata: { ...baseline.sourceMetadata, multipolygon: { baselineReleaseTag: baseTag,
-        method: 'validated OSM relations; hole-preserving simple polygon decomposition', assembly, prep, overlay } },
+    sourceMetadata: { ...baseline.sourceMetadata, multipolygon: incremental
+        ? { ...baseline.sourceMetadata.multipolygon, recheck: { baselineReleaseTag: baseTag,
+            method: 'conservative re-evaluation of previously excluded building relations', assembly, prep, overlay } }
+        : { baselineReleaseTag: baseTag, method: 'validated OSM relations; hole-preserving simple polygon decomposition', assembly, prep, overlay } },
     packaging: { ...baseline.packaging, mode: 'immutable-baseline-plus-updated-packs', maxReleaseAssets: maxAssets,
-        baselineReleaseTag: baseTag, reusedBaselinePacks: reused, newlyPublishedPacks: created.length },
+        baselineReleaseTag: baseTag, baselineReleaseTags: incremental ? [baseTag, originalTag] : [baseTag],
+        reusedBaselinePacks: reused, newlyPublishedPacks: created.length },
     stats: { ...baseline.stats, tileCount: Object.keys(tiles).length, packCount: values.length,
         releaseAssetCount: created.length + 1, totalBytes: sizes.reduce((sum, n) => sum + n, 0),
         minPackBytes: Math.min(...sizes), maxPackBytes: Math.max(...sizes) }, packs, tiles };

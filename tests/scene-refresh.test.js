@@ -10,12 +10,12 @@ const { zipSync, strToU8 } = require('fflate');
 const { terrainGridForKey } = require('../tools/scene-elevation.cjs');
 
 test('US scene manifests identify the verified multipolygon refresh and fit GitHub release limits', () => {
-    const expected = { 'us-northeast': [15445, 770, 686], 'us-midwest': [44083, 935, 613],
-        'us-south': [48034, 1044, 999], 'us-west': [42227, 930, 725] };
+    const expected = { 'us-northeast': [15445, 770, 63], 'us-midwest': [44083, 935, 41],
+        'us-south': [48034, 1044, 67], 'us-west': [42227, 930, 62] };
     for (const [region, [tiles, packs, newPacks]] of Object.entries(expected)) {
         const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../data/scene/${region}/manifest.json`)));
         assert.equal(manifest.schema, 3);
-        assert.equal(manifest.releaseTag, `scene-${region}-hybrid-v3-osm-20261027-multipolygon`);
+        assert.equal(manifest.releaseTag, `scene-${region}-hybrid-v3-osm-20261027-multipolygon-recheck-20261028`);
         assert.equal(manifest.osmExtractTimestamp, '2026-10-27T21:23:59Z');
         assert.match(manifest.osmPbfSha256, /^[a-f0-9]{64}$/);
         assert.equal(manifest.stats.tileCount, tiles);
@@ -23,7 +23,8 @@ test('US scene manifests identify the verified multipolygon refresh and fit GitH
         assert.equal(manifest.packaging.newlyPublishedPacks, newPacks);
         assert.equal(manifest.stats.releaseAssetCount, newPacks + 1);
         assert.ok(manifest.stats.releaseAssetCount <= 1000);
-        assert.ok(manifest.sourceMetadata.multipolygon);
+        assert.ok(manifest.sourceMetadata.multipolygon.recheck);
+        assert.equal(manifest.packaging.baselineReleaseTags.length, 2);
         assert.equal(manifest.uncertaintyModel.terrain.confidenceLevel, null);
     }
 });

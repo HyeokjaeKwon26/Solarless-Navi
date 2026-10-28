@@ -45,6 +45,8 @@ def relation_tags_and_overlap(rel, ways):
     # A way tagged as its own building can be an independent feature. Only
     # replace it when its structural tags are compatible with the relation.
     for way in tagged:
+        if way['id'] in rel.get('preserveWayIds', []):
+            continue
         wt = way['tags']
         for key in keys:
             if key not in wt:
@@ -52,9 +54,11 @@ def relation_tags_and_overlap(rel, ways):
             rel_value, way_value = tags.get(key), wt[key]
             if key == 'building' and rel_value and way_value and 'yes' in (rel_value, way_value):
                 continue
+            if key == 'building' and rel.get('allowClassMismatch') and rel_value and way_value:
+                continue
             if rel_value != way_value:
                 return None, [], 'conflicting_tagged_outer'
-    return tags, [way['id'] for way in tagged], None
+    return tags, [way['id'] for way in tagged if way['id'] not in rel.get('preserveWayIds', [])], None
 
 
 def main(audit_dir, node_index, manifest_path):
@@ -132,6 +136,7 @@ def main(audit_dir, node_index, manifest_path):
                     rejected.append((ident, 'invalid_assembled_geometry')); return
                 self.target.write(json.dumps({'id': ident, 'candidateKind': rel['candidateKind'],
                     'tags': rel['effectiveTags'], 'replaceWayIds': rel['replaceWayIds'],
+                    'omittedShortWayIds': rel.get('omittedShortWayIds', []),
                     'geometry': mapping(geom)}, separators=(',', ':')) + '\n')
                 accepted.add(ident)
                 stats['polygons'] += len(geom.geoms)

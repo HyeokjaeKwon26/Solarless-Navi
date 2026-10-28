@@ -68,6 +68,20 @@ test('overlay package reuses immutable packs and publishes changed packs under t
         assert.equal(compact.stats.tileCount, 3);
         const checkedAgain = spawnSync(process.execPath, [validator, region, root], { cwd: root, encoding: 'utf8' });
         assert.equal(checkedAgain.status, 0, checkedAgain.stderr);
+
+        fs.writeFileSync(path.join(data, 'manifest.json'), JSON.stringify(compact));
+        const recheck = path.join(root, `multipolygon-recheck-${region}`), recheckTiles = path.join(recheck, 'changed-tiles');
+        fs.mkdirSync(recheckTiles, { recursive: true });
+        changedTile.buildings.push({ id: 'relation/2/piece/0' });
+        fs.writeFileSync(path.join(recheckTiles, '1_0.json'), JSON.stringify(changedTile));
+        fs.writeFileSync(path.join(recheck, 'overlay-audit.json'), JSON.stringify({ changedExistingTiles: 1, newTiles: 0 }));
+        for (const name of ['assembly-audit.json', 'scene-preparation-audit.json']) fs.writeFileSync(path.join(recheck, name), '{}');
+        const incrementalEnv = { ...process.env, SCENE_OVERLAY_INCREMENTAL: 'true' };
+        const incremental = spawnSync(process.execPath, [script, region, root], { cwd: root, encoding: 'utf8', env: incrementalEnv });
+        assert.equal(incremental.status, 0, incremental.stderr);
+        const finalCheck = spawnSync(process.execPath, [validator, region, root], { cwd: root, encoding: 'utf8', env: incrementalEnv });
+        assert.equal(finalCheck.status, 0, finalCheck.stderr);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(recheck, 'validation.json'))).relationPieces, 2);
     } finally {
         assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep));
         fs.rmSync(root, { recursive: true, force: true });
@@ -103,6 +117,21 @@ test('overlay replaces only a verified duplicate outer way without changing the 
         assert.equal(updated.buildings[0].id, 'relation/7/piece/0');
         assert.equal(updated.buildings[0].ground, 0);
         assert.equal(fs.readFileSync(path.join(base, '0_0.json'), 'utf8'), original);
+
+        const current = { grid: tile.grid, tiles: { '0:0': { file: '0_0.json' } }, sourceMetadata: { multipolygon: {} } };
+        fs.writeFileSync(path.join(data, 'manifest.json'), JSON.stringify(current));
+        const recheck = path.join(root, 'multipolygon-recheck-us-northeast'); fs.mkdirSync(recheck);
+        for (const name of ['building-relations.jsonl','assembly-rejected.jsonl','triangulation-rejected.jsonl']) fs.writeFileSync(path.join(recheck, name), '');
+        fs.writeFileSync(path.join(audit, 'overlay-blocked.jsonl'), '');
+        const second = { id: 8, tags: { 'building:part': 'yes', height: '4' }, kind: 'relation-tagged',
+            pieces: [{ id: 'relation/8/piece/0', key: '0:0', polygon: [[40,-74],[40,-73],[41,-73],[40,-74]], groundPoint: [40,-74] }], removeWays: [] };
+        fs.writeFileSync(path.join(recheck, 'scene-relations.jsonl'), JSON.stringify(second) + '\n');
+        const increment = spawnSync(process.execPath, [script, 'us-northeast', root], { cwd: root, encoding: 'utf8',
+            env: { ...process.env, SCENE_OVERLAY_INCREMENTAL: 'true' } });
+        assert.equal(increment.status, 0, increment.stderr);
+        const again = JSON.parse(fs.readFileSync(path.join(recheck, 'changed-tiles', '0_0.json')));
+        assert.deepEqual(again.buildings.map(b => b.id), ['relation/7/piece/0', 'relation/8/piece/0']);
+        assert.equal(fs.readFileSync(path.join(audit, 'changed-tiles', '0_0.json'), 'utf8'), JSON.stringify(updated));
     } finally {
         assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep));
         fs.rmSync(root, { recursive: true, force: true });

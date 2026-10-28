@@ -13,18 +13,29 @@ const workspace = path.resolve(workspaceArg), output = path.resolve(outputArg);
 const allRegions = ['us-northeast', 'us-midwest', 'us-south', 'us-west'];
 const requestedRegion = process.env.SCENE_COMPARISON_REGION || null;
 const multipolygonComparison = process.env.SCENE_COMPARISON_MULTIPOLYGON === 'true';
+const recheckComparison = process.env.SCENE_COMPARISON_RECHECK === 'true';
+if (recheckComparison && !multipolygonComparison) throw new Error('Recheck comparison requires multipolygon mode');
 if (requestedRegion && !allRegions.includes(requestedRegion)) throw new Error('Invalid comparison region');
 const regionIds = requestedRegion ? [requestedRegion] : allRegions;
 const manifests = {}, directories = {}, tags = {};
 for (const id of regionIds) {
-    const directory = multipolygonComparison
+    const directory = recheckComparison
+        ? (version === 'old' ? path.join(workspace, `multipolygon-${id}`, 'release') : path.join(workspace, `multipolygon-recheck-${id}`, 'release'))
+        : multipolygonComparison
         ? (version === 'old' ? path.join(workspace, `build-${id}`, 'release') : path.join(workspace, `multipolygon-${id}`, 'release'))
         : (version === 'old' ? path.join(workspace, id) : path.join(workspace, `build-${id}`, 'release'));
     const manifestPath = multipolygonComparison || version === 'new' ? path.join(directory, 'manifest.json')
         : path.join(root, 'data', 'scene', id, 'manifest.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath));
     manifests[id] = manifestPath; directories[manifest.releaseTag] = directory; tags[id] = manifest.releaseTag;
-    if (multipolygonComparison && version === 'new') {
+    if (recheckComparison) {
+        const originalDir = path.join(workspace, `build-${id}`, 'release');
+        const original = JSON.parse(fs.readFileSync(path.join(originalDir, 'manifest.json')));
+        directories[original.releaseTag] = originalDir;
+        const priorDir = path.join(workspace, `multipolygon-${id}`, 'release');
+        const prior = JSON.parse(fs.readFileSync(path.join(priorDir, 'manifest.json')));
+        directories[prior.releaseTag] = priorDir;
+    } else if (multipolygonComparison && version === 'new') {
         const previousDir = path.join(workspace, `build-${id}`, 'release');
         const previous = JSON.parse(fs.readFileSync(path.join(previousDir, 'manifest.json')));
         directories[previous.releaseTag] = previousDir;

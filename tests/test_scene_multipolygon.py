@@ -16,6 +16,9 @@ spec.loader.exec_module(module)
 prep_spec = importlib.util.spec_from_file_location('prepare_scene_multipolygons', FILE.parent / 'prepare-scene-multipolygons.py')
 prep = importlib.util.module_from_spec(prep_spec)
 prep_spec.loader.exec_module(prep)
+recover_spec = importlib.util.spec_from_file_location('recover_scene_multipolygons', FILE.parent / 'recover-excluded-multipolygons.py')
+recover = importlib.util.module_from_spec(recover_spec)
+recover_spec.loader.exec_module(recover)
 
 
 class MultipolygonAssemblyTest(unittest.TestCase):
@@ -58,6 +61,54 @@ class MultipolygonAssemblyTest(unittest.TestCase):
         self.assertTrue(combined.equals(polygon))
         self.assertFalse(combined.covers(Point(5, 5)))
         self.assertTrue(combined.covers(Point(1, 1)))
+
+    def test_recovery_inherits_unambiguous_height_and_preserves_conflicts(self):
+        way = {'id': 1, 'tags': {'building': 'school', 'building:levels': '2'}, 'refs': [1, 2, 3, 1]}
+        rel = {'id': 8, 'candidateKind': 'relation-tagged', 'tags': {'type': 'multipolygon', 'building': 'school'},
+               'members': [{'type': 'way', 'id': 1, 'role': 'outer'}]}
+        selected, error = recover.reconsider(rel, {1: way}, 'conflicting_tagged_outer')
+        self.assertIsNone(error)
+        self.assertEqual(selected['tags']['building:levels'], '2')
+        self.assertIn('inherited_building:levels', selected['recoveryChanges'])
+        self.assertNotIn('building:levels', rel['tags'])
+        conflicting = {**rel, 'tags': {**rel['tags'], 'building:levels': '3'}}
+        self.assertEqual(recover.reconsider(conflicting, {1: way}, 'conflicting_tagged_outer')[1], 'conflicting_height_values')
+        part = {**way, 'tags': {'building:part': 'school'}}
+        self.assertEqual(recover.reconsider(rel, {1: part}, 'conflicting_tagged_outer')[1], 'building_part_or_multi_outer_ambiguous')
+
+    def test_recovery_ignores_only_non_geometric_nodes_and_flags_role_errors(self):
+        way = {'id': 1, 'tags': {}, 'refs': [1, 2, 3, 1]}
+        rel = {'id': 9, 'candidateKind': 'relation-tagged', 'tags': {'type': 'multipolygon', 'building': 'yes'},
+               'members': [{'type': 'way', 'id': 1, 'role': 'Outer'}, {'type': 'node', 'id': 2, 'role': 'entrance'}]}
+        selected, error = recover.reconsider(rel, {1: way}, 'unsupported_member_or_role')
+        self.assertIsNone(error)
+        self.assertEqual(selected['members'], [{'type': 'way', 'id': 1, 'role': 'outer'}])
+        self.assertIn('non_geometry_node_ignored', selected['recoveryChanges'])
+        bad = {**rel, 'members': rel['members'] + [{'type': 'node', 'id': 3, 'role': 'outer'}]}
+        self.assertEqual(recover.reconsider(bad, {1: way}, 'unsupported_member_or_role')[1], 'ambiguous_member_or_role')
+
+    def test_legacy_relation_does_not_overwrite_conflicting_height(self):
+        way = {'id': 1, 'tags': {'building': 'school', 'height': '12'}, 'refs': [1, 2, 3, 1]}
+        rel = {'id': 11, 'candidateKind': 'outer-tagged-legacy',
+               'tags': {'type': 'multipolygon', 'height': '15'},
+               'members': [{'type': 'way', 'id': 1, 'role': 'outer'}]}
+        self.assertEqual(recover.reconsider(rel, {1: way}, 'conflicting_legacy_outer_tags')[1], 'conflicting_height_values')
+        rel['tags'] = {'type': 'multipolygon', 'building:levels': '3'}
+        self.assertEqual(recover.reconsider(rel, {1: way}, 'conflicting_legacy_outer_tags')[1], 'conflicting_height_sources')
+
+    def test_recovery_retains_parent_when_relation_is_a_distinct_building_part(self):
+        way = {'id': 1, 'tags': {'building': 'yes', 'height': '121.4'}, 'refs': [1, 2, 3, 1]}
+        rel = {'id': 10, 'candidateKind': 'relation-tagged',
+               'tags': {'type': 'multipolygon', 'building:part': 'yes', 'height': '4'},
+               'members': [{'type': 'way', 'id': 1, 'role': 'outer'}]}
+        selected, error = recover.reconsider(rel, {1: way}, 'conflicting_tagged_outer')
+        self.assertIsNone(error)
+        self.assertEqual(selected['preserveWayIds'], [1])
+        _, removals, error = module.relation_tags_and_overlap(selected, {1: way})
+        self.assertIsNone(error)
+        self.assertEqual(removals, [])
+        no_height = {**rel, 'tags': {'type': 'multipolygon', 'building:part': 'yes'}}
+        self.assertEqual(recover.reconsider(no_height, {1: way}, 'conflicting_tagged_outer')[1], 'part_height_not_explicit')
 
 
 if __name__ == '__main__':

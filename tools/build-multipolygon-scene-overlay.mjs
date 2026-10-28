@@ -12,12 +12,20 @@ const { SceneElevationStore, terrainGridForKey } = require('./scene-elevation.cj
 
 const [region, workspaceArg] = process.argv.slice(2);
 if (!region || !workspaceArg || !/^us-(northeast|midwest|south|west)$/.test(region)) throw new Error('Expected region and workspace');
-const workspace = path.resolve(workspaceArg), auditDir = path.join(workspace, `multipolygon-${region}`);
+const workspace = path.resolve(workspaceArg);
+const incremental = process.env.SCENE_OVERLAY_INCREMENTAL === 'true';
+const auditDir = path.join(workspace, `${incremental ? 'multipolygon-recheck' : 'multipolygon'}-${region}`);
 const baseDir = path.join(workspace, `build-${region}`, 'generated');
+const priorChangedDir = path.join(workspace, `multipolygon-${region}`, 'changed-tiles');
 const output = path.join(auditDir, 'changed-tiles');
 fs.mkdirSync(output, { recursive: true });
 const manifest = JSON.parse(fs.readFileSync(path.join('data', 'scene', region, 'manifest.json')));
-if (manifest.sourceMetadata?.multipolygon) throw new Error('The baseline already contains multipolygon geometry; rebuild against a verified way-only baseline');
+if (manifest.sourceMetadata?.multipolygon && !incremental) throw new Error('The baseline already contains multipolygon geometry; rebuild against a verified way-only baseline');
+if (incremental && !manifest.sourceMetadata?.multipolygon) throw new Error('Incremental overlay requires an existing multipolygon baseline');
+function baselineTile(file) {
+    const prior = path.join(priorChangedDir, file);
+    return JSON.parse(fs.readFileSync(incremental && fs.existsSync(prior) ? prior : path.join(baseDir, file)));
+}
 const elevation = new SceneElevationStore(path.join(workspace, 'us-hgt'));
 const rows = [];
 const readRows = async (file, fn) => {
@@ -29,12 +37,20 @@ for (const name of ['assembly-rejected.jsonl', 'triangulation-rejected.jsonl']) 
     await readRows(path.join(auditDir, name), row => rejectedIds.add(row.id));
 }
 const rejectedOuter = new Set();
-await readRows(path.join(auditDir, 'building-relations.jsonl'), row => {
+await readRows(path.join(auditDir, 'scene-relations.jsonl'), row => { rows.push(row); });
+if (incremental) {
+    const recoverable = new Set(rows.map(row => row.id));
+    for (const name of ['assembly-rejected.jsonl', 'triangulation-rejected.jsonl', 'overlay-blocked.jsonl']) {
+        await readRows(path.join(workspace, `multipolygon-${region}`, name), row => {
+            if (!recoverable.has(row.id)) rejectedIds.add(row.id);
+        });
+    }
+}
+await readRows(path.join(incremental ? path.join(workspace, `multipolygon-${region}`) : auditDir, 'building-relations.jsonl'), row => {
     if (rejectedIds.has(row.id)) for (const member of row.members) {
         if (member.type === 'way' && (member.role === 'outer' || member.role === '')) rejectedOuter.add(member.id);
     }
 });
-await readRows(path.join(auditDir, 'scene-relations.jsonl'), row => { rows.push(row); });
 const blocked = new Map();
 const block = (id, reason) => { if (!blocked.has(id)) blocked.set(id, reason); };
 const removalsByTile = new Map(), points = new Map();
@@ -50,7 +66,7 @@ for (const [key, removals] of removalsByTile) {
     const entry = manifest.tiles[key];
     let ids = new Set();
     if (entry) {
-        const tile = JSON.parse(fs.readFileSync(path.join(baseDir, entry.file)));
+        const tile = baselineTile(entry.file);
         ids = new Set((tile.buildings || []).map(b => b.id));
     }
     for (const removal of removals) if (!ids.has(removal.id)) block(removal.relation, 'tagged_outer_not_found_in_baseline');
@@ -96,14 +112,14 @@ for (const row of rows) {
     stats.appliedRelations++;
 }
 const first = Object.values(manifest.tiles)[0];
-const template = JSON.parse(fs.readFileSync(path.join(baseDir, first.file)));
+const template = baselineTile(first.file);
 const earth = 6371000, degrees = 180 / Math.PI;
 for (const [key, changes] of tileChanges) {
     const old = manifest.tiles[key];
     const filename = old ? old.file : `${key.replace(':', '_')}.json`;
     let tile;
     if (old) {
-        tile = JSON.parse(fs.readFileSync(path.join(baseDir, filename)));
+        tile = baselineTile(filename);
         stats.changedExistingTiles++;
     } else {
         const [x, y] = key.split(':').map(Number), grid = manifest.grid;
@@ -119,7 +135,12 @@ for (const [key, changes] of tileChanges) {
     const prior = tile.buildings.length;
     tile.buildings = tile.buildings.filter(building => !changes.removals.has(building.id));
     stats.removedWays += prior - tile.buildings.length;
-    tile.buildings.push(...changes.additions);
+    const existingIds = new Set(tile.buildings.map(building => building.id));
+    for (const building of changes.additions) {
+        if (existingIds.has(building.id)) throw new Error(`Relation piece already exists: ${building.id}`);
+        existingIds.add(building.id);
+        tile.buildings.push(building);
+    }
     tile.sceneCoverage.buildingGround = tile.buildings.every(b => b.ground != null && Number.isFinite(Number(b.ground)));
     tile.source.multipolygonGeometry = 'OSM relation rings split into hole-preserving simple polygons';
     fs.writeFileSync(path.join(output, filename), JSON.stringify(tile));

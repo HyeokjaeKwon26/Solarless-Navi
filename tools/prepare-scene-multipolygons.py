@@ -91,6 +91,8 @@ def main(audit_dir, node_index, manifest_path):
                         'polygon': points, 'groundPoint': [ground.y, ground.x]})
                 removals = []
                 for way_id in row['replaceWayIds']:
+                    if way_id in row.get('omittedShortWayIds', []):
+                        continue
                     refs = np.asarray(ways[way_id]['refs'], dtype=np.uint64)
                     positions = np.searchsorted(index['id'], refs)
                     if np.any(positions >= len(index)) or np.any(index['id'][positions] != refs):
