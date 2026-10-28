@@ -55,3 +55,16 @@
 ## 공개 서비스 점검
 
 - 이번 직접 Overpass 요청은 HTTP 429(요청 제한)를 반환했습니다. 재시도를 반복하지 않았고 실제 데이터 다운로드 성공으로 기록하지 않습니다. 합성 응답으로 저장·검색·경로 동작을 검증했습니다. 앱에는 서버 요청 제한과 기존 자료 유지 안내를 추가했습니다. 무료 서버 사정에 따라 새 지역 저장과 주변 장소 조회가 일시적으로 실패할 수 있습니다.
+
+## 최종 소스 및 공개 APK 검증
+
+- 배포 소스: `9fad0f5ee86b7b13f633301e54a7df8846493357`.
+- [APK 배포 검사](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40636197027)의 validate와 publish 모두 성공했습니다. 최종 소스 기준 Node 283/283, 브라우저 120/120(10.7분), 취약점 0건, 웹 자산 56개 일치, Android 검사·빌드 성공입니다.
+- 추가 화면 확인: 영어/한국어 음성 검색 버튼과 언어 선택 메뉴가 320px 화면 안에 들어오는 것을 확인했습니다.
+- [1.3.13 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.13), [APK 직접 다운로드](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.13/SolarLessNavi-1.3.13.apk).
+- 공개 APK를 직접 다운로드해 package `com.solaris.nav`, versionName `1.3.13`, versionCode `17`, release 빌드(debuggable 아님)를 확인했습니다.
+- 크기: **4,414,438 bytes (약 4.41 MB)**. 1.3.12의 4,403,071 bytes 대비 **11,367 bytes(약 11 KB, 0.26%) 증가**입니다. 선택 저장용 지리 데이터가 APK에 포함되지 않았음을 확인했습니다. Android 설치 후 전체 앱 저장 공간은 APK 크기와 다릅니다.
+- APK SHA-256: `a820b127017ae7511b53be2401a582e8fe79816096310a16898fdeb002229dcf`.
+- 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`. 기존 배포 인증서와 동일하고 APK 암호학적 서명 검증을 통과했습니다.
+- 공개 update.json 및 SHA256SUMS.txt의 해시·크기·인증서가 APK와 일치했습니다. APK 안의 웹 자산 56개가 배포 소스 커밋의 www 파일과 바이트 단위로 일치했습니다.
+- 배송되는 업데이트 코드를 Chromium에서 실행하고 실제 공개 GitHub 응답을 사용했습니다. Android 설치 정보만 1.3.12/code 16, 1.3.5/code 9로 모의했을 때 1.3.13 업데이트 가능, 1.3.13/code 17에서는 최신 버전으로 표시됐습니다. 실제 폰의 네이티브 네트워크 브리지, Android 설치 승인, 데이터 유지 실측을 대신하는 검사는 아닙니다.
