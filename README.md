@@ -198,6 +198,8 @@ CSV, JSON과 SVG 그래프도 보고서와 함께 저장됩니다. 재현 명령
 
 한국 데이터는 2026-10-26 21:24:46 UTC, 미국 네 권역은 2026-10-27 21:23:59 UTC까지의 OSM 추출본을 사용합니다. 기존 v3의 지형 격자를 보존하고 신규 타일과 새로 생성되거나 형상이 바뀐 건물의 지면 고도에는 Mapzen Terrain Tiles Skadi를 사용합니다. 출처와 비교 결과는 [한국과 기존 미국 점검 기록](docs/SCENE_DATA_AUDIT_2026-10-27.md)과 [미국 갱신 및 경로 비교](docs/US_SCENE_UPDATE_2026-10-27.md)에 기록합니다.
 
+권역별 원본 기준 시각, 릴리스 공개일과 다음 갱신 때 확인할 사항은 [지도 데이터 현황](docs/SCENE_DATA_STATUS.md)에 모아 둡니다.
+
 미국 네 권역에는 안뜰을 보존한 건물 multipolygon 관계도 포함합니다. Northeast와 Midwest manifest는 이번 릴리스와 이전 네 릴리스, South와 West는 이번 릴리스와 이전 세 릴리스의 ZIP을 참조하므로 해당 릴리스를 모두 보존해야 합니다. 검증·제외 내역과 경로 비교는 [multipolygon 점검 기록](docs/US_MULTIPOLYGON_UPDATE_2026-10-28.md), [미적용 항목 재검토](docs/US_MULTIPOLYGON_RECHECK_2026-10-28.md), [미해결 항목 추가 검토](docs/US_MULTIPOLYGON_FOLLOWUP_2026-10-28.md) 및 [472개 후속 검토](docs/US_MULTIPOLYGON_REMAINING_472_2026-10-28.md)에 있습니다.
 
 공개 manifest와 Release 자산은 모두 schema v3입니다. v3는 건물 높이 출처와 민감도 범위, 지형의 상대 수직오차 범위를 보존하며 경계가 불확실한 차광에는 이득을 부여하지 않습니다.
