@@ -630,6 +630,7 @@ window.ShadowRouter = (function () {
             const diffuseEnergyWhM2 = Math.max(0, Number(irradiance.dhi) || 0) * segmentDurationSec / 3600;
 
             segments.push({
+                geometryIndex: i,
                 p1: p1,
                 p2: p2,
                 heading: heading,
@@ -707,6 +708,7 @@ window.ShadowRouter = (function () {
             ? confirmedShadeTimeSeconds / confirmedSceneTimeSeconds : 0;
         const estimatedShadeRatio = estimatedDistance > 0 ? estimatedShadeWeighted / estimatedDistance : 0;
         return {
+            weatherProfile,
             segments: segments,
             avgGlareRisk: isFinite(avgGlare) ? avgGlare : 0,
             avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
@@ -1036,11 +1038,19 @@ window.ShadowRouter = (function () {
             const precision = precisionSegments[precisionIndex];
             if (!precision) return Object.assign({}, segment);
             return Object.assign({}, segment, {
+                // Recompute with the original road heading and the refined
+                // irradiance/occlusion; retaining the heuristic glare here
+                // used to leave shaded roads orange after precision finished.
+                glareRisk: calculateSegmentGlare(segment.heading,
+                    SunCalc.getPosition(new Date(segment.passTime), segment.p1[0], segment.p1[1], precision.atmosphereOptions || {}),
+                    precision.irradiance, precision.occlusionRatio),
                 shadeScore: precision.shadeScore,
                 shadeState: precision.shadeState,
                 confirmedShade: precision.confirmedShade,
                 estimatedShadePotential: precision.estimatedShadePotential,
                 occlusionRatio: precision.occlusionRatio,
+                occlusionAt: precision.passTime,
+                atmosphereOptions: precision.atmosphereOptions,
                 sunIntensity: precision.sunIntensity,
                 directSolarExposure: precision.directSolarExposure,
                 irradiance: precision.irradiance,
@@ -1059,6 +1069,7 @@ window.ShadowRouter = (function () {
             // and turn guidance, so it must remain byte-for-byte OSRM-shaped.
             coordinates: rawCoordinates,
             segments: mappedSegments,
+            avgGlareRisk: glareMetrics({ segments: mappedSegments }).average,
             precisionAnalysisCoordinates: sampling.coordinates,
             precisionSampling: {
                 originalCoordinateCount: sampling.originalCoordinateCount,
@@ -1242,7 +1253,7 @@ window.ShadowRouter = (function () {
         const fastest = stableSortRoutes(routes, (a, b) => routeDurationForSelection(a) - routeDurationForSelection(b))[0];
         const glareCandidates = stableSortRoutes(routes.filter(route => route.id === fastest.id ||
             isMeaningfulGlareAlternative(calculateRouteTradeoff(fastest, route))),
-        (a, b) => a.analyzed.avgGlareRisk - b.analyzed.avgGlareRisk).slice(0, 2);
+        compareGlareRoutes).slice(0, 2);
         const shadeCandidates = stableSortRoutes(routes.filter(route => route.id === fastest.id ||
             isPromisingShadePrecisionCandidate(calculateRouteTradeoff(fastest, route))), (a, b) => {
             const exposureDifference = routeSolarExposure(a.analyzed) - routeSolarExposure(b.analyzed);
@@ -1369,6 +1380,9 @@ window.ShadowRouter = (function () {
             extraDurationSec: Number.isFinite(candidateDuration) && Number.isFinite(fastestDuration)
                 ? Math.max(0, candidateDuration - fastestDuration) : Infinity,
             glareImprovement: (Number(fastestAnalyzed.avgGlareRisk) || 0) - (Number(candidateAnalyzed.avgGlareRisk) || 0),
+            strongGlareSecondsSaved: glareMetrics(fastestAnalyzed).strongSeconds - glareMetrics(candidateAnalyzed).strongSeconds,
+            continuousGlareSecondsSaved: glareMetrics(fastestAnalyzed).longestSeconds - glareMetrics(candidateAnalyzed).longestSeconds,
+            glareBurdenSaved: glareMetrics(fastestAnalyzed).burden - glareMetrics(candidateAnalyzed).burden,
             // uvReductionPct is retained only for older UI/state consumers.
             // The value is broadband direct-solar energy reduction, not UV.
             uvReductionPct: Math.max(0, solarExposureReductionPct),
@@ -1386,7 +1400,67 @@ window.ShadowRouter = (function () {
 
     function isMeaningfulGlareAlternative(tradeoff) {
         return tradeoff.detourRatio <= MAX_ALTERNATIVE_DETOUR_RATIO &&
-            tradeoff.glareImprovement >= MIN_GLARE_IMPROVEMENT;
+            tradeoff.glareBurdenSaved > 0 &&
+            (tradeoff.glareImprovement >= MIN_GLARE_IMPROVEMENT ||
+                (tradeoff.glareImprovement >= -0.02 && tradeoff.glareBurdenSaved > 0 &&
+                    (tradeoff.strongGlareSecondsSaved >= 30 || tradeoff.continuousGlareSecondsSaved >= 30)));
+    }
+
+    // Experimental ranking cost, not a measured glare probability or ETA.
+    // Penalize both total and uninterrupted strong-glare exposure so that a
+    // short intense section is not hidden by a low whole-route mean.
+    function glareMetrics(analyzed) {
+        let total = 0, weighted = 0, strongSeconds = 0, longestSeconds = 0, run = 0;
+        for (const segment of analyzed?.segments || []) {
+            const seconds = Math.max(0, Number(segment.segmentDurationSec) || 0);
+            const risk = Math.max(0, Math.min(1, Number(segment.glareRisk) || 0));
+            total += seconds; weighted += risk * seconds;
+            if (risk > .45) { strongSeconds += seconds; run += seconds; longestSeconds = Math.max(longestSeconds, run); }
+            else run = 0;
+        }
+        const average = total > 0 ? weighted / total : Number(analyzed?.avgGlareRisk) || 0;
+        return { average, strongSeconds, longestSeconds,
+            burden: total > 0 ? weighted + strongSeconds + longestSeconds : average };
+    }
+
+    function compareGlareRoutes(a, b) {
+        return glareMetrics(a.analyzed).burden - glareMetrics(b.analyzed).burden ||
+            routeDurationForSelection(a) - routeDurationForSelection(b);
+    }
+
+    function glareAlternativeReason(routes, selected, budgetMinutes) {
+        const fastest = routes?.fastest;
+        if (!fastest || !selected || selected.id !== fastest.id) return 'alternative';
+        const alternatives = (routes.all || []).filter(r => r.id !== fastest.id && !r.traffic?.blocked &&
+            r.analysisMode === fastest.analysisMode && r.weatherMode === fastest.weatherMode);
+        if (!alternatives.length) return 'no-candidates';
+        const cap = Math.max(0, Number(budgetMinutes) || 0) * 60;
+        const useful = alternatives.filter(r => isMeaningfulGlareAlternative(calculateRouteTradeoff(fastest, r)));
+        if (useful.length && useful.every(r => r.durationSec > fastest.durationSec + cap)) return 'budget';
+        if (alternatives.every(r => routeDurationForSelection(r) > routeDurationForSelection(fastest) * MAX_ALTERNATIVE_DETOUR_RATIO)) return 'ratio';
+        return 'no-improvement';
+    }
+
+    function refreshGlareSegments(segments, startIndex, fraction, at, weatherProfile) {
+        let elapsed = 0;
+        return segments.map((segment, index) => {
+            if (index < startIndex) return segment;
+            const seconds = Math.max(0, Number(segment.segmentDurationSec) || 0) * (index === startIndex ? 1 - Math.max(0, Math.min(1, fraction || 0)) : 1);
+            const passTime = new Date(at.getTime() + (elapsed + (index === startIndex ? 0 : seconds / 2)) * 1000);
+            elapsed += seconds;
+            const sun = SunCalc.getPosition(passTime, segment.p1[0], segment.p1[1], segment.atmosphereOptions || {});
+            const clear = window.SolarPhysics.birdClearSky(sun, passTime, segment.atmosphereOptions || {});
+            const forecast = forecastIrradianceAt(weatherProfile, segment.p1, passTime, sun, clear);
+            // Do not extend the life of a shadow by repeatedly stamping it with
+            // the refresh time. Its original ray time remains the reference.
+            const shadeAt = new Date(segment.occlusionAt || segment.passTime).getTime();
+            const shadeFresh = Number.isFinite(shadeAt) && Math.abs(passTime.getTime() - shadeAt) <= 120000;
+            const occlusion = shadeFresh && typeof segment.occlusionRatio === 'number' && Number.isFinite(segment.occlusionRatio) ? segment.occlusionRatio : null;
+            const irradiance = forecast || clear;
+            return { ...segment, passTime, occlusionAt: shadeAt, irradiance, occlusionRatio: occlusion,
+                confirmedShade: occlusion === 1, shadeState: occlusion === null ? 'uncertain' : segment.shadeState,
+                glareRisk: calculateSegmentGlare(segment.heading, sun, irradiance, occlusion) };
+        });
     }
 
     function isMeaningfulShadeAlternative(tradeoff) {
@@ -1423,7 +1497,7 @@ window.ShadowRouter = (function () {
         const scored = alternatives.map(route => ({ route, tradeoff: calculateRouteTradeoff(fastest, route) }));
         const glarePool = scored.filter(item => isMeaningfulGlareAlternative(item.tradeoff));
         const glareFree = glarePool.length > 0
-            ? stableSortRoutes(glarePool, (a, b) => a.route.analyzed.avgGlareRisk - b.route.analyzed.avgGlareRisk ||
+            ? stableSortRoutes(glarePool, (a, b) => compareGlareRoutes(a.route, b.route) ||
                 a.tradeoff.extraDurationSec - b.tradeoff.extraDurationSec).map(item => item.route)[0]
             : fastest;
         const shadePool = scored.filter(item => isMeaningfulShadeAlternative(item.tradeoff));
@@ -1558,7 +1632,7 @@ window.ShadowRouter = (function () {
         const alternatives = views.slice(1).map(route => ({ route, tradeoff: calculateRouteTradeoff(baseline, route) }));
         const pool = role === 'glare'
             ? alternatives.filter(item => isMeaningfulGlareAlternative(item.tradeoff))
-                .sort((a, b) => a.route.analyzed.avgGlareRisk - b.route.analyzed.avgGlareRisk ||
+                .sort((a, b) => compareGlareRoutes(a.route, b.route) ||
                     a.tradeoff.extraDurationSec - b.tradeoff.extraDurationSec)
             : alternatives.filter(item => isMeaningfulShadeAlternative(item.tradeoff))
                 .sort((a, b) => compareShadeRoutes(a.route, b.route));
@@ -2405,6 +2479,7 @@ window.ShadowRouter = (function () {
         selectRouteRoles: selectRouteRoles,
         buildHeuristicProgressResult: buildHeuristicProgressResult,
         calculateRouteTradeoff: calculateRouteTradeoff,
+        glareMetrics, compareGlareRoutes, glareAlternativeReason, refreshGlareSegments,
         routeSolarExposure: routeSolarExposure,
         routeSunlitTimeSeconds: routeSunlitTimeSeconds,
         compareShadeRoutes: compareShadeRoutes,

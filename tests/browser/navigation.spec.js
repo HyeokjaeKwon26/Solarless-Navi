@@ -1,6 +1,41 @@
 const { test, expect } = require('@playwright/test');
 const { version: mapVersion } = require('maplibre-gl/package.json');
 
+test('live glare colors, banner and voice share forecast and uncertainty on unchanged geometry', async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);
+    await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-map-start-nav').click();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:0});return journeyTestApi.state().snapped;})).toBe(true);
+    await page.evaluate(()=>{
+        SunCalc.getPosition=()=>({azimuth:0,altitude:10});
+        WeatherRadiation.interpolateAt=p=>({dni:p.dni,directRadiation:p.dni*.17,diffuseRadiation:0,shortwaveRadiation:p.dni*.17});
+        window.glareVoiceCalls=0;TTSVoice.announceProactiveGlareWarning=()=>glareVoiceCalls++;
+        window.setGlareFixture=(dni,occlusion)=>{
+            const route=journeyTestApi.state().route,at=Date.now();
+            route.analyzed={...route.analyzed,segments:route.analyzed.segments.map(s=>({...s,heading:0,passTime:new Date(at),occlusionRatio:occlusion,confirmedShade:occlusion===1,shadeState:occlusion===1?'confirmed-shade':'confirmed-clear'}))};
+            route.remainingForecast={analyzed:{weatherProfile:{dni,weatherRetrievedAt:at}}};
+            window.glareVoiceCalls=0;
+        };
+        setGlareFixture(600,0);
+    });
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:0});return document.getElementById('banner-desc').textContent;})).toContain('Glare predicted');
+    await expect(page.locator('#map path[stroke="#f59e0b"]').first()).toBeAttached();
+    expect(await page.evaluate(()=>glareVoiceCalls)).toBeGreaterThan(0);
+    await page.evaluate(()=>setGlareFixture(0,0));
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:0});return document.getElementById('banner-desc').textContent;})).not.toContain('Glare predicted');
+    await expect(page.locator('#map path[stroke="#f59e0b"]')).toHaveCount(0);
+    expect(await page.evaluate(()=>glareVoiceCalls)).toBe(0);
+    await page.evaluate(()=>setGlareFixture(600,null));
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:0});return document.getElementById('banner-desc').textContent;})).toContain('shade/weather unverified');
+    await expect(page.locator('#map path[stroke="#eab308"][stroke-dasharray="7 7"]').first()).toBeAttached();
+    expect(await page.evaluate(()=>glareVoiceCalls)).toBe(0);
+    await page.screenshot({path:test.info().outputPath('glare-uncertain.png')});
+    await page.evaluate(()=>setGlareFixture(600,1));
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:0});return document.getElementById('banner-desc').textContent;})).not.toContain('Possible glare');
+    await expect(page.locator('#map path[stroke="#7c3aed"]').first()).toBeAttached();
+    expect(await page.evaluate(()=>glareVoiceCalls)).toBe(0);expect(state.errors).toEqual([]);
+});
+
 async function captureJourneyControls(page){
     await page.route('**/js/journey-controls.js',async route=>{
         const original=await route.fetch();
@@ -848,12 +883,12 @@ test('route colors legend is readable on narrow and landscape screens and closes
         const dialog=page.getByRole('dialog',{name:'Route colors'});
         await expect(dialog).toBeVisible();
         await expect(dialog).toHaveCSS('opacity','1');
-        await expect(dialog.locator('li')).toHaveCount(5);
+        await expect(dialog.locator('li')).toHaveCount(6);
         await expect(dialog).toContainText('do not show traffic congestion');
         await expect(dialog).toContainText('not field-verified shade');
         await expect(dialog).toContainText('grayscale');
         const colors=await dialog.locator('.route-legend-swatch').evaluateAll(items=>items.map(item=>getComputedStyle(item).borderTopColor));
-        expect(colors).toEqual(['rgb(245, 158, 11)','rgb(124, 58, 237)','rgb(14, 116, 144)','rgb(2, 132, 199)','rgb(100, 116, 139)']);
+        expect(colors).toEqual(['rgb(245, 158, 11)','rgb(234, 179, 8)','rgb(124, 58, 237)','rgb(14, 116, 144)','rgb(2, 132, 199)','rgb(100, 116, 139)']);
         const card=await dialog.locator('.route-legend-card').boundingBox();
         expect(card.x).toBeGreaterThanOrEqual(0);expect(card.x+card.width).toBeLessThanOrEqual(viewport.width);
         expect(card.y).toBeGreaterThanOrEqual(0);expect(card.y+card.height).toBeLessThanOrEqual(viewport.height);

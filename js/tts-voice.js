@@ -267,9 +267,7 @@ window.TTSVoice = (function () {
         lastProactiveGlareTime = now;
 
         const isKorean = currentLang.startsWith('ko');
-        const msg = isKorean ?
-            `⚠️ ${spokenDistance(200)} 앞 서쪽 도로 진입 시 강한 태양 정면 직사광선 발생! 햇빛 가리개를 미리 내려주세요.` :
-            `⚠️ Strong direct sun glare ahead in ${spokenDistance(200)}! Please lower your sun visor in advance.`;
+        const msg = isKorean ? '현재 구간에 눈부심이 예상됩니다. 전방 시야를 확인하세요.' : 'Sun glare is predicted on this section. Check visibility ahead.';
 
         speak(msg, true, 'glare');
     }
@@ -289,23 +287,10 @@ window.TTSVoice = (function () {
 
         let msg = "";
 
-        if (glareRisk > 0.45) {
-            if (bucket === "now") {
-                msg = isKorean ? `잠시 후 역광 우회 도로 진입입니다. 직사광선 주의하세요.` : `Entering glare avoidance route now. Watch out for direct sunlight.`;
-            } else if (bucket === "near") {
-                msg = isKorean ? `${spokenDistance(100)} 앞 역광 위험 구간입니다. 햇빛 가리개를 내려주세요.` : `Heavy sun glare in ${spokenDistance(100)}. Please lower your sun visor.`;
-            } else {
-                msg = isKorean ? `${spokenDistance(300)} 앞 서쪽 역광 우회 도로로 진입합니다.` : `In ${spokenDistance(300)}, enter the glare avoidance route.`;
-            }
-        } else {
-            if (bucket === "now") {
-                msg = isKorean ? `잠시 후 직진 주행입니다.` : `Continue straight ahead now.`;
-            } else if (bucket === "near") {
-                msg = isKorean ? `${spokenDistance(100)} 앞 쾌적한 그늘 도로로 진행합니다.` : `In ${spokenDistance(100)}, continue on shaded route.`;
-            } else {
-                msg = isKorean ? `${spokenDistance(300)} 앞 안전 주행 구간입니다.` : `In ${spokenDistance(300)}, clear and safe road segment.`;
-            }
-        }
+        // Do not invent a distance, westbound road, avoidance turn or safe
+        // shaded section from a scalar current-segment estimate.
+        if (glareRisk <= 0.45) return;
+        msg = isKorean ? '현재 구간에 눈부심이 예상됩니다. 전방 시야를 확인하세요.' : 'Sun glare is predicted on this section. Check visibility ahead.';
 
         speak(msg, false, glareRisk > 0.45 ? 'glare' : null);
     }

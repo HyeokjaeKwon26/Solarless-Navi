@@ -128,7 +128,7 @@ test('partly spoken native instruction is not duplicated through browser fallbac
     assert.deepEqual(v.spoken,[]);
 });
 
-test('turn and hazard speech use the selected units independently of voice language', async () => {
+test('turn speech respects selected units and glare speech does not invent distance or direction', async () => {
     const v = voice();
     v.units.setCountry('US');
     v.api.announceTurnManeuver(turn, 295, 60); await flush();
@@ -140,7 +140,8 @@ test('turn and hazard speech use the selected units independently of voice langu
     v.api.announceTurnManeuver({...turn,sequence:3,following:{type:'turn',modifier:'left',distanceAfter:90}},40,40); await flush();
     assert.match(v.spoken.at(-1), /Then in 300 feet/);
     v.advance(7000); v.api.announceNavHazard(100,90,0.8,'New Road'); await flush();
-    assert.match(v.spoken.at(-1), /330 feet/);
+    assert.match(v.spoken.at(-1), /predicted on this section/);
+    assert.doesNotMatch(v.spoken.at(-1), /feet|meters|west|avoidance/);
     v.units.setPreference('metric'); v.advance(7000);
     v.api.announceTurnManeuver({...turn,sequence:4},295,60); await flush();
     assert.match(v.spoken.at(-1), /300 meters/);

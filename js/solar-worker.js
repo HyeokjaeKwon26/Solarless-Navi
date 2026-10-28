@@ -240,6 +240,7 @@ self.onmessage = function (e) {
         const diffuseEnergyWhM2 = Math.max(0, Number(irradiance.dhi) || 0) * segmentDurationSec / 3600;
 
         segments.push({
+            geometryIndex: i,
             p1,
             p2,
             passTime: new Date(passTimeMs),
@@ -322,6 +323,7 @@ self.onmessage = function (e) {
         result: {
             segments,
             avgGlareRisk: isFinite(avgGlare) ? avgGlare : 0,
+            weatherProfile,
             avgShadeCoverage: isFinite(avgShade) ? avgShade : 0.5,
             totalDirectSolarExposureUnits: isFinite(totalSolarExposure) ? totalSolarExposure : 0,
             directSolarEnergyWhM2: isFinite(totalDirectSolarEnergyWhM2) ? totalDirectSolarEnergyWhM2 : 0,

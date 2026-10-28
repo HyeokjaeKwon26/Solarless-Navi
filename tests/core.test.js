@@ -42,6 +42,57 @@ const Geocoder = sandbox.Geocoder;
 const VersionUtils = sandbox.SolarlessVersionUtils;
 const SolarPhysics = sandbox.SolarPhysics;
 
+test('strong glare duration can justify a detour even when mean improvement is small', () => {
+    const make = (id, durationSec, risks) => ({id, durationSec, analyzed:{
+        avgGlareRisk:risks.reduce((n,[risk,s])=>n+risk*s,0)/durationSec,
+        segments:risks.map(([glareRisk,segmentDurationSec])=>({glareRisk,segmentDurationSec}))}});
+    const base=make('base',600,[[.9,30],[0,570]]), alternative=make('alternative',660,[[0,660]]);
+    assert.ok(base.analyzed.avgGlareRisk < .05);
+    assert.equal(ShadowRouter.selectRouteRoles([base,alternative]).glareFree.id,'alternative');
+    alternative.durationSec=900;
+    assert.equal(ShadowRouter.selectRouteRoles([base,alternative]).glareFree.id,'base');
+    assert.equal(ShadowRouter.glareAlternativeReason({fastest:base,all:[base,alternative]},base,10),'ratio');
+    alternative.durationSec=660;
+    assert.equal(ShadowRouter.glareAlternativeReason({fastest:base,all:[base,alternative]},base,0),'budget');
+});
+
+test('glare burden separates uninterrupted exposure from equal total exposure', () => {
+    const metrics=rows=>ShadowRouter.glareMetrics({segments:rows.map(([glareRisk,segmentDurationSec])=>({glareRisk,segmentDurationSec}))});
+    const a=metrics([[.8,120],[0,120]]),b=metrics([[.8,60],[0,60],[.8,60],[0,60]]);
+    assert.equal(a.strongSeconds,b.strongSeconds);
+    assert.equal(a.longestSeconds,120);assert.equal(b.longestSeconds,60);
+    assert.ok(a.burden>b.burden);
+});
+
+test('live glare preserves forecast and expires original shadow time without renewing it', () => {
+    const originalSun=sandbox.SunCalc.getPosition, originalForecast=sandbox.WeatherRadiation.interpolateAt;
+    try {
+        sandbox.SunCalc.getPosition=()=>({altitude:10,azimuth:250});
+        sandbox.WeatherRadiation.interpolateAt=profile=>({dni:profile.dni,directRadiation:profile.dni*.17,diffuseRadiation:0,shortwaveRadiation:profile.dni*.17});
+        const at=new Date('2026-10-28T21:17:00Z');
+        const base={heading:230,p1:[42.34,-71.14],p2:[42.33,-71.14],passTime:at,segmentDurationSec:60,occlusionRatio:0};
+        const bright=ShadowRouter.refreshGlareSegments([base],0,0,at,{dni:600})[0];
+        const dim=ShadowRouter.refreshGlareSegments([base],0,0,at,{dni:60})[0];
+        assert.ok(bright.glareRisk>.45);assert.ok(dim.glareRisk<.45);
+        assert.equal(dim.irradiance.model,'OPEN_METEO_FORECAST');
+        const shade=ShadowRouter.refreshGlareSegments([{...base,occlusionRatio:1}],0,0,at,{dni:600})[0];
+        assert.equal(shade.glareRisk,0);
+        const stale=ShadowRouter.refreshGlareSegments([shade],0,0,new Date(+at+121000),{dni:600})[0];
+        assert.equal(stale.occlusionRatio,null);assert.equal(stale.confirmedShade,false);
+        const unknown=ShadowRouter.refreshGlareSegments([{...base,occlusionRatio:null}],0,0,at,{dni:600})[0];
+        assert.equal(unknown.occlusionRatio,null);
+    } finally {sandbox.SunCalc.getPosition=originalSun;sandbox.WeatherRadiation.interpolateAt=originalForecast;}
+});
+
+test('precision remapping replaces heuristic glare with the refined occlusion', () => {
+    const at=new Date('2026-10-28T21:17:00Z'),coords=[[-71.14,42.34],[-71.15,42.34]];
+    const segment={p1:[42.34,-71.14],p2:[42.34,-71.15],heading:270,passTime:at,glareRisk:.9,segmentDurationSec:60};
+    const refined={segments:[{...segment,occlusionRatio:1,confirmedShade:true,shadeState:'confirmed-shade',irradiance:{dni:600}}]};
+    const mapped=ShadowRouter.mapPrecisionAnalysisToOriginalGeometry(refined,{segments:[segment]},coords,{distances:[0,1000],coordinates:coords});
+    assert.equal(mapped.segments[0].glareRisk,0);assert.equal(mapped.avgGlareRisk,0);
+    assert.equal(mapped.coordinates,coords);
+});
+
 test('via candidates follow a bent road corridor instead of crossing its OD chord', () => {
     const route = { geometry: { coordinates: [[-71, 42], [-71, 42.03], [-70.96, 42.03]] } };
     const points = ShadowRouter.buildExplorationViaPoints(route);
@@ -3016,14 +3067,6 @@ test('navigation lifecycle survives brief interruptions without recalculating th
     assert.ok(appSource.includes('navigationResumePromise'));
 });
 
-test('live glare guidance reuses Bird irradiance and fresh scene occlusion', () => {
-    const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
-    assert.ok(appSource.includes('function calculateLiveGlareRisk'));
-    assert.ok(appSource.includes('SolarPhysics.birdClearSky(sunPos, at, atmosphereOptions)'));
-    assert.ok(appSource.includes('Math.abs(at.getTime() - passTimeMs) <= 15 * 60 * 1000'));
-    assert.equal((appSource.match(/calculateSegmentGlare\(currentHeading, sunPos\)/g) || []).length, 0);
-});
-
 test('navigation start-stop is serialized and destination changes use a safe live reroute', () => {
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('if (navigationTransitionPending) return'));
@@ -3437,7 +3480,7 @@ test('identical purpose routes explain the fastest fallback and explored-candida
     const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
     assert.ok(appSource.includes('최단시간 경로와 동일'));
     assert.ok(appSource.includes('Same as fastest'));
-    assert.ok(appSource.includes('No explored alternative met the glare-reduction and detour limits.'));
+    assert.ok(appSource.includes('RoutePresentation.fallbackText(ShadowRouter.glareAlternativeReason'));
     assert.ok(appSource.includes('No explored alternative met the sun-exposure and detour limits.'));
     assert.ok(appSource.includes('glr.id === fst.id'));
     assert.ok(appSource.includes('shd.id === fst.id'));

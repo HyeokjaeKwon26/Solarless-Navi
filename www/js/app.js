@@ -935,7 +935,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const swatch = document.createElement('span');
             swatch.className = 'route-legend-swatch';
             swatch.style.borderColor = color;
-            if (key === 'alternative') swatch.style.borderTopStyle = 'dashed';
+            if (key === 'alternative' || key === 'uncertain') swatch.style.borderTopStyle = 'dashed';
             swatch.setAttribute('aria-hidden', 'true');
             const label = document.createElement('span');
             label.textContent = labels.items[index];
@@ -1661,12 +1661,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Glare overlay warning
             if (glareRisk > 0.45) {
-                descText += isKo ? ' ☀️ 역광주의' : ' ☀️ Glare';
+                descText += isKo ? ' ☀️ 눈부심 예상' : ' ☀️ Glare predicted';
                 banner.classList.add('hazard');
             } else {
                 banner.classList.remove('hazard');
             }
 
+            if (liveGlareAssessment.uncertain) descText += isKo ? ' · 눈부심 가능 · 차폐/기상 미확인' : ' · Possible glare · shade/weather unverified';
             if (bannerDesc) bannerDesc.innerText = descText;
             if (bannerIcon) bannerIcon.innerHTML = getManeuverIcon(nextManeuver.type, nextManeuver.modifier);
             updatePipHud(
@@ -1687,7 +1688,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 banner.classList.add('hazard');
                 if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
             } else {
-                if (bannerDesc) bannerDesc.innerText = I18n.getText('turnBannerSafe');
+                if (bannerDesc) bannerDesc.innerText = liveGlareAssessment.uncertain
+                    ? (isKo ? '눈부심 가능 · 차폐/기상 미확인' : 'Possible glare · shade/weather unverified')
+                    : (isKo ? '전방 도로를 확인하세요' : 'Observe the road ahead');
                 banner.classList.remove('hazard');
                 if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
             }
@@ -2346,29 +2349,52 @@ document.addEventListener('DOMContentLoaded', () => {
         }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 });
     }
 
+    let liveGlareAssessment = { risk: 0, uncertain: false, warningRisk: 0 };
+    function currentGlareSegments(route, snap, at = new Date()) {
+        if (!route?.analyzed?.segments) return [];
+        const old = route.glareSnapshot;
+        if (old && old.analyzed === route.analyzed && old.forecast === route.remainingForecast &&
+            at.getTime() >= old.at && at.getTime() - old.at < 60000) return old.segments;
+        const candidateProfile = route.remainingForecast ? route.remainingForecast.analyzed?.weatherProfile : route.analyzed.weatherProfile;
+        const retrievedAt = Number(candidateProfile?.weatherRetrievedAt);
+        const profile = Number.isFinite(retrievedAt) && at.getTime() >= retrievedAt && at.getTime() - retrievedAt <= 30 * 60 * 1000 ? candidateProfile : null;
+        const segments = ShadowRouter.refreshGlareSegments(route.analyzed.segments, Math.max(0, snap?.segmentIndex || 0), snap?.t || 0, at, profile);
+        route.glareSnapshot = { at: at.getTime(), analyzed: route.analyzed, forecast: route.remainingForecast, segments };
+        return segments;
+    }
+
     function calculateLiveGlareRisk(lat, lng, heading, at = new Date()) {
-        const analyzed = selectedRouteObj && selectedRouteObj.analyzed;
-        const coordinates = analyzed && analyzed.coordinates;
-        let segment = null;
-        if (Array.isArray(coordinates) && coordinates.length > 1 && Array.isArray(analyzed.segments)) {
-            const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, coordinates);
-            const index = Math.max(0, Math.min(analyzed.segments.length - 1, Number(snap.segmentIndex) || 0));
-            segment = analyzed.segments[index] || null;
+        const analyzed = selectedRouteObj?.analyzed;
+        let segment;
+        if (!isFreeDriveMode && analyzed?.coordinates?.length > 1) {
+            const snap = ShadowRouter.snapPositionAndHeadingToRoad(lat, lng, heading, analyzed.coordinates);
+            const segments = currentGlareSegments(selectedRouteObj, snap, at);
+            segment = snap.isSnapped ? segments[snap.segmentIndex] : null;
+        } else {
+            const sun = SunCalc.getPosition(at, lat, lng);
+            const irradiance = SolarPhysics.birdClearSky(sun, at, {});
+            segment = { glareRisk: ShadowRouter.calculateSegmentGlare(heading, sun, irradiance, null), irradiance, occlusionRatio: null };
         }
-        const atmosphereOptions = segment && segment.atmosphereOptions || {};
-        const sunPos = SunCalc.getPosition(at, lat, lng, atmosphereOptions);
-        const irradiance = window.SolarPhysics && typeof window.SolarPhysics.birdClearSky === 'function'
-            ? window.SolarPhysics.birdClearSky(sunPos, at, atmosphereOptions)
-            : null;
-        const passTimeMs = segment && segment.passTime instanceof Date
-            ? segment.passTime.getTime() : new Date(segment && segment.passTime).getTime();
-        // A scene occlusion computed for the expected pass time remains useful
-        // for ordinary ETA drift. After a large delay, do not silently reuse a
-        // shadow cast for a materially different solar angle.
-        const occlusionFresh = Number.isFinite(passTimeMs) && Math.abs(at.getTime() - passTimeMs) <= 15 * 60 * 1000;
-        const occlusionRatio = occlusionFresh && Number.isFinite(Number(segment && segment.occlusionRatio))
-            ? Number(segment.occlusionRatio) : null;
-        return ShadowRouter.calculateSegmentGlare(heading, sunPos, irradiance, occlusionRatio);
+        liveGlareAssessment = RoutePresentation.assessment(segment);
+        renderGlareStatus(liveGlareAssessment.risk, liveGlareAssessment.uncertain, true);
+        return liveGlareAssessment.warningRisk;
+    }
+
+    function renderGlareStatus(risk, uncertain, current) {
+        const ko = I18n.getLanguage().startsWith('ko');
+        const score = Math.round(Math.max(0, Math.min(1, risk || 0)) * 100);
+        document.getElementById('meter-label-text').textContent = current
+            ? (ko ? '현재 구간 눈부심 추정 지수' : 'Current section glare estimate')
+            : (ko ? '경로 평균 눈부심 추정 지수' : 'Route-average glare estimate');
+        document.getElementById('glare-pct-val').textContent = `${score}/100`;
+        document.getElementById('glare-meter-fill').style.width = `${score}%`;
+        const badge = document.getElementById('glare-risk-badge');
+        badge.textContent = uncertain ? (ko ? '자료 미확인' : 'UNVERIFIED')
+            : score > 45 ? (ko ? '눈부심 예상' : 'GLARE PREDICTED') : (ko ? '낮은 추정값' : 'LOW ESTIMATE');
+        badge.className = 'status-badge' + (uncertain ? ' mod' : score > 45 ? '' : ' low');
+        document.getElementById('hazard-advice-text').textContent = uncertain
+            ? (ko ? '차폐 또는 기상을 확인하지 못했습니다. 실제 눈부심과 다를 수 있습니다.' : 'Shade or weather is unverified. Actual glare may differ.')
+            : (ko ? '지도·기상 기반 추정 지수이며 발생 확률이나 현장 측정값이 아닙니다.' : 'A map/weather estimate, not a probability or field measurement.');
     }
 
     function restartWebGpsWatchAfterInterruption() {
@@ -3156,7 +3182,7 @@ document.addEventListener('DOMContentLoaded', () => {
             selectedRouteObj._remainingDistanceLookup = ShadowRouter.buildRemainingDistanceLookup(coords);
             selectedRouteObj._remainingDistanceLookupCoordinates = coords;
         }
-        const segments = selectedRouteObj.analyzed.segments;
+        const segments = currentGlareSegments(selectedRouteObj, snap);
         if (dynamicRemainingRouteId !== routeIdentity) {
             dynamicRemainingPolylineGroup.clearLayers();
             dynamicRemainingLayers = new Map();
@@ -3166,7 +3192,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const colorForSegment = RoutePresentation.segmentColor;
         // Reuse one Leaflet layer per segment. GPS ticks update only the
         // current segment; unchanged future layers keep their DOM/SVG path.
-        if (dynamicRemainingSegmentIndex === segIdx && dynamicRemainingLayers.size > 0) {
+        if (dynamicRemainingSegmentIndex === segIdx && dynamicRemainingLayers.size > 0 &&
+            dynamicRemainingPolylineGroup._glareSegments === segments) {
             const currentLayer = dynamicRemainingLayers.get(segIdx);
             if (currentLayer) currentLayer.setLatLngs([[effectiveLat, effectiveLng], segments[segIdx].p2]);
             const remDistMeters = ShadowRouter.calculateRemainingRouteDistance(
@@ -3179,6 +3206,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateRemainingSummary(remSec, remDistMeters);
             return;
         }
+        dynamicRemainingPolylineGroup._glareSegments = segments;
         for (let i = 0; i < segments.length; i++) {
             const seg = segments[i];
             let layer = dynamicRemainingLayers.get(i);
@@ -3189,6 +3217,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }).addTo(dynamicRemainingPolylineGroup);
                 dynamicRemainingLayers.set(i, layer);
             }
+            layer.setStyle(RoutePresentation.segmentStyle(seg));
             if (i < segIdx) layer.setLatLngs([]);
             else if (i === segIdx) layer.setLatLngs([[effectiveLat, effectiveLng], seg.p2]);
             else layer.setLatLngs([seg.p1, seg.p2]);
@@ -4221,7 +4250,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 2. Glare-Free Route (estimated glare possibility and solar exposure)
         const glrDiffText = glr.id === fst.id
-            ? (isKo ? '최단시간 경로와 동일 · 탐색한 후보 중 허용 우회시간 내 역광 감소 기준을 충족한 경로가 없습니다.' : 'Same as fastest · No explored alternative met the glare-reduction and detour limits.')
+            ? RoutePresentation.fallbackText(ShadowRouter.glareAlternativeReason(routeData.routes, glr, routeData.preferenceBudgetMinutes), I18n.getLanguage())
             : formatRouteDetourText(glrMin, glr.distanceMeters, fstMin, fst.distanceMeters);
         document.getElementById('eta-glare').innerText = `⏱️ ${glrMin}${isKo ? '분' : ' min'} (${NavigationUnits.distance(glr.distanceMeters, { long: true })})`;
 
@@ -4234,6 +4263,14 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 glrDesc.innerText = `${glrDiffText} | ${isKo ? `역광 위험 추정 ${glrGlarePct}% | 태양 노출 기준 | ${routeShadeText(glr)} 🛡️` : `Estimated glare ${glrGlarePct}% | Solar exposure baseline | ${routeShadeText(glr)} 🛡️`}`;
             }
+        }
+
+        if (glrDesc) {
+            const metrics = ShadowRouter.glareMetrics(glr.analyzed);
+            const minutes = seconds => Math.round(seconds / 6) / 10;
+            glrDesc.innerText += isKo
+                ? ` | 강한 눈부심 가능 구간 약 ${minutes(metrics.strongSeconds)}분 · 최장 연속 ${minutes(metrics.longestSeconds)}분 (추정)`
+                : ` | Strong-glare potential ~${minutes(metrics.strongSeconds)} min · longest continuous ${minutes(metrics.longestSeconds)} min (estimated)`;
         }
 
         // 3. Shade Route (estimated shade possibility and solar exposure)
@@ -4438,7 +4475,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const segColor = RoutePresentation.segmentColor(seg);
 
                 L.polyline([seg.p1, seg.p2], {
-                    color: segColor,
+                    ...RoutePresentation.segmentStyle(seg), color: segColor,
                     weight: 8,
                     opacity: 0.95,
                     lineCap: 'round',
@@ -4561,26 +4598,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ? (isKo ? '저장 도로 경로 · 정체/통제 미반영 · 기본 ETA' : 'Saved-road route · no live traffic/closures · base ETA')
             : PublicTraffic.label(selectedRouteObj.traffic, isKo);
         if (selectedRouteObj.offline && map) RoadPack.draw(map);
-        const glarePct = selectedRouteObj.analyzed ? Math.round(selectedRouteObj.analyzed.avgGlareRisk * 100) : 0;
-        document.getElementById('glare-pct-val').innerText = `${glarePct}%`;
-        document.getElementById('glare-meter-fill').style.width = `${glarePct}%`;
-
-        const badge = document.getElementById('glare-risk-badge');
-        const advice = document.getElementById('hazard-advice-text');
-
-        if (glarePct > 55) {
-            badge.innerText = 'CRITICAL GLARE';
-            badge.className = 'status-badge';
-            advice.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${isKo ? '서쪽/태양 정면 진입 구간 다수 포함! 햇빛 가리개 필수.' : 'Heavy sun glare ahead. Lower sun visor.'}`;
-        } else if (glarePct > 25) {
-            badge.innerText = 'MODERATE GLARE';
-            badge.className = 'status-badge mod';
-            advice.innerHTML = `<i class="fa-solid fa-circle-info"></i> ${isKo ? '부분적 역광 구간 포함. 안전거리 확보.' : 'Partial sun glare segments. Maintain safe distance.'}`;
-        } else {
-            badge.innerText = 'SAFE / LOW GLARE';
-            badge.className = 'status-badge low';
-            advice.innerHTML = `<i class="fa-solid fa-shield-halved"></i> ${isKo ? '역광 위험도가 낮은 쾌적한 주행 경로입니다.' : 'Low glare risk. Comfortable driving route.'}`;
-        }
+        const analyzed = selectedRouteObj.analyzed;
+        renderGlareStatus(analyzed?.avgGlareRisk || 0, (analyzed?.segments || []).some(s => RoutePresentation.assessment(s).uncertain), false);
     }
 
     function setupAutocomplete(inputId, dropdownId, onSelect) {

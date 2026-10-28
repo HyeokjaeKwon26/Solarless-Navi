@@ -2,12 +2,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const presentation = require('../js/route-presentation');
 test('route colors preserve priority and distinguish modeled from estimated shade', () => {
-    assert.equal(presentation.segmentColor({glareRisk:0.46,confirmedShade:true}), presentation.colors.glare);
+    assert.equal(presentation.segmentColor({glareRisk:0.46,occlusionRatio:0,irradiance:{model:'OPEN_METEO_FORECAST'}}), presentation.colors.glare);
+    assert.equal(presentation.segmentColor({glareRisk:0.46,occlusionRatio:null}), presentation.colors.uncertain);
+    assert.equal(presentation.assessment({glareRisk:.9,occlusionRatio:null}).warningRisk, 0);
+    assert.equal(presentation.segmentStyle({glareRisk:.9,occlusionRatio:null}).dashArray, '7 7');
+    assert.equal(presentation.assessment({glareRisk:.9,occlusionRatio:0,irradiance:{model:'BIRD'}}).uncertain, true);
     assert.equal(presentation.segmentColor({glareRisk:0.45,confirmedShade:true}), presentation.colors.shade);
     assert.equal(presentation.segmentColor({shadeState:'estimated-shade',shadeScore:0.51}), presentation.colors.estimated);
     assert.equal(presentation.segmentColor({shadeState:'estimated-shade',shadeScore:0.5}), presentation.colors.normal);
     assert.equal(presentation.segmentColor({shadeState:'uncertain',shadeScore:1}), presentation.colors.normal);
     assert.equal(presentation.segmentColor({shadeState:'night'}), presentation.colors.normal);
+});
+
+test('fallback explanations distinguish no candidates, limits, and no modeled improvement', () => {
+    for (const lang of ['ko','en']) for (const reason of ['no-candidates','budget','ratio','no-improvement']) {
+        assert.ok(presentation.fallbackText(reason,lang).length > 20);
+        assert.ok(!presentation.fallbackText(reason,lang).includes('undefined'));
+    }
 });
 test('both legends describe every rendered color and explain the estimates', () => {
     for(const language of ['en-US','ko-KR']){
