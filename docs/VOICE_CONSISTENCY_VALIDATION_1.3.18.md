@@ -29,3 +29,25 @@
 5. 안내 직전 설정을 변경했을 때 이전 대기 음성이 멈추고 다음 안내부터 새 목소리로 나오는지 확인한다. PiP 진입·복귀, 화면 끄기·복귀, 차량 블루투스·통화 후 재개에서도 동일 설정을 확인한다.
 6. 기기용/인터넷용 음성을 비행기 모드·네트워크 복귀에서 비교한다. 음성 데이터 삭제나 엔진 변경 후 사용 불가 표시와 목록 새로고침을 확인한다.
 7. 실제 주행에서는 동승자가 회전 안내 시점·음량·발음·음성 누락을 확인한다. 이번 변경은 실제 엔진·기기에서 소리까지 검증한 결과가 아니다.
+
+## 로컬 검사 결과
+
+- Node 단위 검사 314건 통과. 마지막 별칭 조회 방어 수정 후 해당 2건도 다시 통과했다.
+- 음성 관련 브라우저 집중 검사 8건 통과. 320px 및 가로 화면의 캡처와 한국어 별칭 표시를 직접 확인했다.
+- Android JVM 29건 통과, debug APK 빌드 성공. lint 오류 0건·기존 경고 19건.
+- root/www 자산 62개 SHA-256 일치. npm audit 취약점 0건. 버전 증가 및 기존 패키지·서명 인증서 유지 검사 통과.
+- ADB 연결 기기 없음. 실제 음성 엔진·설치·PiP·화면 꺼짐·블루투스·주행은 미실시다.
+- 로컬 전체 브라우저 회귀 150건(root/www), 8.1분, 전부 통과. 기존 업데이트·검색·경로 미리보기·단위·GPS·음소거·배터리·오프라인 회복 검사도 포함한다.
+
+## 공개 배포 검증 — 2026-10-28
+
+- 배포 소스 커밋: `9ee53cc04ed7cd3c0b5d14d72fa6525f9811de1f`.
+- [배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40782587067)의 validate/publish 모두 성공. Node 314건, 브라우저 150건(15.6분), 자산 일치·취약점 검사 및 Android 테스트·debug 빌드·lint·정식 서명 빌드 통과.
+- [릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.18), [APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.18/SolarLessNavi-1.3.18.apk), update.json, SHA256SUMS.txt를 공개 다운로드로 확인했다.
+- APK 4,444,075바이트. 1.3.17보다 3,242바이트 증가. 음성 모델이나 지도 DB를 번들하지 않았다.
+- APK SHA-256: `cbf6bfa5fb6b4970f64d19e17b323a5178bf24e97783051bef1bbf13d5ab90cf`. 공개 매니페스트·체크섬과 일치한다.
+- 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`. 기존 정식 키와 동일하다. apksigner 서명 검증, com.solaris.nav, 버전 1.3.18 / 22, debuggable=false를 확인했다.
+- 공개 APK 내부 웹 자산 62개가 배포 커밋 www와 바이트 단위로 일치한다. DEX에 음성 설정 브리지와 unifiedVoice 필드가 포함된 것을 확인했다.
+- 공개 GitHub HTTP 응답과 실제 업데이터 코드를 사용하는 Chromium 검사: 설치 정보를 모의한 1.3.17/1.3.16/1.3.15/1.3.14/1.3.13/1.3.5에서 업데이트 가능, 1.3.18에서 최신 판정. 실제 폰의 Android HTTP 브리지·설치 화면·데이터 보존 검사는 아니다.
+- 별도 [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40782575687)는 이 기록 시점에 브라우저 검사를 마치고 Android debug 빌드 중이다. 위 배포 CI가 동일 소스의 전체 검증을 이미 완료했다. main CI 성공으로 기록하지 않았다.
+- 실제 폰의 소리·발음·음색 일관성·PiP·화면 꺼짐·블루투스·주행 확인은 위 목록대로 별도 진행해야 한다.
