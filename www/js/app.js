@@ -111,6 +111,34 @@ document.addEventListener('DOMContentLoaded', () => {
     let isLiveNavActive = false;
     let isFreeDriveMode = false;
     let isPipMode = false;
+    const etaLearning = EtaLearning.create(localStorage);
+    let tripEta = null;
+    function etaEstimate(route) {
+        if (!etaLearning.enabled || !isRealTimeMode || route?.remainingForecast?.traffic?.coverage > 0 || route?.traffic?.coverage > 0) return {factor:1,applied:false,count:0};
+        if (isLiveNavActive) return tripEta?.key === EtaLearning.routeKey(route) ? tripEta : {factor:1,applied:false,count:0};
+        return etaLearning.estimate(route);
+    }
+    function renderEtaSettings(error = false) {
+        const ko=I18n.getLanguage().startsWith('ko');
+        document.getElementById('eta-learning-title').textContent=ko?'내 주행 기반 도착시간':'Personal arrival estimates';
+        document.getElementById('eta-learning-label').textContent=ko?'기기에 주행 이력을 저장하고 ETA 보정':'Save local trip history to adjust ETA';
+        document.getElementById('eta-learning-enabled').checked=etaLearning.enabled;
+        document.getElementById('eta-learning-help').textContent=ko?'같은 경로·요일·2시간대의 완료 주행 5회 이상으로 검증 후 적용합니다. 최대 100회·90일, 기기에만 저장합니다. 실시간 교통이 아닙니다.':'Uses at least 5 completed trips on the same route, weekday and two-hour window, after validation. Up to 100 trips / 90 days, only on this device. Not live traffic.';
+        document.getElementById('btn-eta-clear').textContent=ko?'ETA 이력 삭제':'Delete ETA history';
+        document.getElementById('eta-learning-status').textContent=error?(ko?'저장 실패 · 설정을 변경하지 못했습니다.':'Could not save the change.'):(ko?`저장 ${etaLearning.count}회 · ${etaLearning.enabled?'학습 켜짐':'학습 꺼짐'}`:`${etaLearning.count} saved trips · ${etaLearning.enabled?'Learning on':'Learning off'}`);
+    }
+    document.getElementById('eta-learning-enabled').addEventListener('change',event=>{
+        try{etaLearning.enable(event.target.checked);tripEta=null;renderEtaSettings();}catch{renderEtaSettings(true);}
+        document.getElementById('eta-learning-badge').hidden=true;
+        if(routeData)updateRouteOptionButtons(routeData);
+        if(selectedRouteObj&&!isLiveNavActive)updateRemainingSummary(selectedRouteObj.durationSec,selectedRouteObj.distanceMeters);
+    });
+    document.getElementById('btn-eta-clear').addEventListener('click',()=>{
+        try{etaLearning.clear();tripEta=null;renderEtaSettings();}catch{renderEtaSettings(true);}
+        document.getElementById('eta-learning-badge').hidden=true;
+        if(routeData)updateRouteOptionButtons(routeData);
+        if(selectedRouteObj&&!isLiveNavActive)updateRemainingSummary(selectedRouteObj.durationSec,selectedRouteObj.distanceMeters);
+    });
     let gpsWatchId = null;
     let passiveGpsWatchId = null;
     let passiveGpsRestartTimer = null;
@@ -537,6 +565,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const confirmed = NavigationGuidance.confirmMatch(candidate, fix, previous);
         candidate = confirmed.result;
+        if(isLiveNavActive&&!isFreeDriveMode){if(isRealTimeMode)etaLearning.sample(route,{...candidate,speedKmh:fix.speedKmh});else etaLearning.cancel();}
         // Keep raw route distance independent of continuity/heading rejection.
         candidate.rawDistanceMeters = candidate.isSnapped ? candidate.distMeters :
             ShadowRouter.distanceToRoute(lat, lng, route.analyzed.coordinates);
@@ -1263,6 +1292,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('btn-next-stop').textContent=ko?'다음 목적지로':'Go to next destination';
         document.getElementById('btn-clear-stops').textContent=ko?'남은 경유 취소':'Clear remaining stops';
         document.getElementById('btn-route-fuel').textContent=ko?'경로 주변 주유소':'Fuel along route';
+        renderEtaSettings();
         document.getElementById('btn-route-parking').textContent=ko?'경로 주변 주차장':'Parking along route';
         renderTripPlan();
         document.getElementById('btn-compare-routes').textContent=ko?'대안 경로 비교':'Compare alternatives';
@@ -3633,7 +3663,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const fraction = index === 0 ? (snap.t - forecast.startT) / Math.max(.0001, 1 - forecast.startT) : snap.t;
             remainingSec = ShadowRouter.calculateRemainingRouteDuration(forecast.analyzed.coordinates, forecast.steps, forecast.traffic.duration, index, fraction, forecast.lookup);
         }
-        const seconds = Math.max(30, Number(remainingSec) || 0);
+        const estimate=etaEstimate(selectedRouteObj);
+        const seconds = Math.max(30, (Number(remainingSec) || 0)*estimate.factor);
+        const badge=document.getElementById('eta-learning-badge');
+        badge.hidden=!estimate.applied;
+        badge.textContent=isKo?`내 기록 ${estimate.count}회 보정`:`Adjusted · ${estimate.count} trips`;
         const arrivalEl = document.getElementById('sum-time');
         const durationEl = document.getElementById('sum-duration');
         const distanceEl = document.getElementById('sum-dist');
@@ -3934,6 +3968,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             // verified OSRM result. This is the point where it
                             // is safe to remove the old remaining polyline.
                             liveRerouteCommitted = true;
+                            etaLearning.cancel();tripEta=null;
                             DriveArchive.record('reroute-ready', {id:rerouteRecordId});
                             rerouteRecorded = true;
                             if (rerouteReason === 'destination-change') {
@@ -4086,9 +4121,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const glr = routeData.routes.glareFree;
         const shd = routeData.routes.shade;
 
-        const fstMin = Math.max(1, Math.round(fst.durationSec / 60));
-        const glrMin = Math.max(1, Math.round(glr.durationSec / 60));
-        const shdMin = Math.max(1, Math.round(shd.durationSec / 60));
+        const fstMin = Math.max(1, Math.round(fst.durationSec * etaEstimate(fst).factor / 60));
+        const glrMin = Math.max(1, Math.round(glr.durationSec * etaEstimate(glr).factor / 60));
+        const shdMin = Math.max(1, Math.round(shd.durationSec * etaEstimate(shd).factor / 60));
 
         function formatRouteDetourText(routeMin, routeMeters, fstMin, fstMeters) {
             const diffMin = routeMin - fstMin;
@@ -4182,6 +4217,10 @@ document.addEventListener('DOMContentLoaded', () => {
             ? (isKo ? '최단시간 경로와 동일 · 탐색한 후보 중 허용 우회시간 내 햇빛 노출 감소 기준을 충족한 경로가 없습니다.' : 'Same as fastest · No explored alternative met the sun-exposure and detour limits.')
             : formatRouteDetourText(shdMin, shd.distanceMeters, fstMin, fst.distanceMeters);
         document.getElementById('eta-shade').innerText = `⏱️ ${shdMin}${isKo ? '분' : ' min'} (${NavigationUnits.distance(shd.distanceMeters, { long: true })})`;
+        for(const [id,route] of [['eta-fastest',fst],['eta-glare',glr],['eta-shade',shd]]){
+            const prediction=etaEstimate(route);
+            if(prediction.applied)document.getElementById(id).innerText+=isKo?' · 내 기록 보정':' · Personal estimate';
+        }
 
         const shdDesc = document.getElementById('desc-shade');
         if (shdDesc) {
@@ -4774,9 +4813,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }catch{status.textContent=ko?'음성 입력을 사용할 수 없습니다. 시스템 음성 앱을 확인하거나 직접 입력하세요.':'Voice input unavailable. Check the system recognizer or type the address.';}
         finally{button.disabled=false;}
     });
-    let lastPlaceSearch=0;
+    let lastPlaceSearch=0,placeSearchGeneration=0,placeSearchAbort=null;
     async function findAlongRoute(kind){
+        const generation=++placeSearchGeneration;
+        placeSearchAbort?.abort();placeSearchAbort=new AbortController();
+        const signal=placeSearchAbort.signal;
         const route=selectedRouteObj,ko=I18n.getLanguage().startsWith('ko'),container=document.getElementById('route-place-results');
+        const start=isLiveNavActive&&navigationRouteProgress.snap?{lat:navigationRouteProgress.snap.lat,lng:navigationRouteProgress.snap.lng}:{...currentStart};
+        const end=currentEnd?{...currentEnd}:null;
+        const quoteAt=Date.now(),quoteToll=isTollFreeOnly,quoteGeometry=EtaLearning.routeKey(route);
+        // Scene/weather refinement replaces route objects without changing
+        // the road. Only a different geometry invalidates these driving quotes.
+        const current=()=>generation===placeSearchGeneration&&!!quoteGeometry&&quoteGeometry===EtaLearning.routeKey(selectedRouteObj)&&!signal.aborted&&TripTools.same(end,currentEnd)&&quoteToll===isTollFreeOnly&&Date.now()-quoteAt<120000&&
+            (!isLiveNavActive||navigationRouteProgress.result?.isSnapped&&ShadowRouter.calculateDistanceMeters(start.lat,start.lng,navigationRouteProgress.snap.lat,navigationRouteProgress.snap.lng)<100);
         container.replaceChildren();
         if(!route||!currentEnd||isLiveNavActive&&!navigationRouteProgress.result?.isSnapped){container.textContent=ko?'경로와 현재 위치를 먼저 확인하세요.':'Confirm a route and your position first.';return;}
         const progress=isLiveNavActive?navigationRouteProgress.snap.progressMeters:0,coords=route.analyzed.coordinates;
@@ -4795,14 +4844,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 const ids=new Set(items.map(i=>i.id));items=[...items,...found.filter(i=>!ids.has(i.id))].sort((a,b)=>a.aheadMeters-b.aheadMeters).slice(0,8);
             }catch{liveSearchFailed=true;}
         }
-        if(route!==selectedRouteObj){container.textContent=ko?'경로가 변경되었습니다. 다시 검색하세요.':'Route changed. Search again.';return;}
+        if(generation!==placeSearchGeneration)return;
+        if(!current()){container.textContent=ko?'경로 또는 위치가 변경되었습니다. 다시 검색하세요.':'Route or position changed. Search again.';return;}
+        if(items.length&&navigator.onLine!==false){
+            container.textContent=ko?'최대 3곳의 실제 우회 경로 비교 중…':'Comparing driving detours for up to 3 places…';
+            items=await RouteDetours.rank(items,start,end,{signal,isCurrent:current,tollFree:isTollFreeOnly,
+                heading:isLiveNavActive?currentHeading:undefined,
+                inspect:async routes=>{const feeds=await PublicTraffic.load(routes.flatMap(r=>r.geometry.coordinates));return routes.map(r=>!PublicTraffic.evaluate(r,feeds).blocked);}});
+        }
+        if(generation!==placeSearchGeneration)return;
+        if(!current()){container.textContent=ko?'경로 또는 위치가 변경되었습니다. 다시 검색하세요.':'Route or position changed. Search again.';return;}
         const range=NavigationUnits.distance(10000,{long:true});
-        container.textContent=ko?`앞쪽 최대 ${range}의 표본 구간 · 실제 우회 시간/영업/출입구 미확인`:`Sampled sections up to ${range} ahead · detour time, opening and entrances unverified`;
+        container.textContent=ko?`앞쪽 최대 ${range}의 표본 구간 · 계산된 곳은 직접 경로 대비 추가 시간 순 · 기본 속도 추정, 정차 시간 제외 · 영업/차량 입구 미확인`:`Sampled sections up to ${range} ahead · quoted places sorted by added driving time vs direct route · base speeds, stop time excluded · opening/entrances unverified`;
         if(liveSearchFailed)container.textContent+=ko?' · 온라인 검색 실패, 저장 자료만 사용':' · Online search failed; saved data only';
         if(!items.length){container.textContent+=' · '+(ko?'사용 가능한 결과 없음':'No available results');return;}
         for(const item of items){const button=document.createElement('button');button.type='button';button.className='nav-btn secondary';
             button.textContent=`${item.shortTitle} · ${ko?'경로 앞쪽':'Ahead'} ${NavigationUnits.distance(item.aheadMeters,{long:true})} · ${ko?'경로와 거리':'Distance from route'} ${NavigationUnits.distance(item.corridorMeters)}`;
-            button.addEventListener('click',()=>{if(route===selectedRouteObj)addTripStop({lat:item.lat,lng:item.lng},item.displayName);else showApiNotice(ko?'경로가 변경되었습니다. 다시 검색하세요.':'Route changed. Search again.');});container.appendChild(button);}
+            button.textContent+=item.detour?` · +${Math.ceil(item.detour.extraSeconds/60)} ${ko?'분':'min'} · +${NavigationUnits.distance(item.detour.extraMeters)} · ${ko?'유턴':'U-turns'} ${item.detour.uturns}`:(item.blocked?(ko?' · 확인된 통제 경로':' · Verified closure on quoted route'):(ko?' · 우회 시간 미확인':' · Detour not verified'));
+            button.disabled=!!item.blocked;
+            button.addEventListener('click',()=>{if(current())addTripStop({lat:item.lat,lng:item.lng},item.displayName);else showApiNotice(ko?'경로 또는 위치가 변경되었습니다. 다시 검색하세요.':'Route or position changed. Search again.');});container.appendChild(button);}
     }
     document.getElementById('btn-route-fuel').addEventListener('click',()=>findAlongRoute('fuel'));
     document.getElementById('btn-route-parking').addEventListener('click',()=>findAlongRoute('parking'));
@@ -5098,6 +5158,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
+        try{etaLearning.finish(selectedRouteObj,true);renderEtaSettings();}catch{renderEtaSettings(true);}
+        tripEta=null;
         DriveArchive.record('trip-end', {id:navigationSessionStartedAt,arrived:true});
         navigationSessionArrived = true;
         clearActiveNavigationSession();
@@ -5178,6 +5240,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isLiveNavActive) {
             const wasFreeDrive = isFreeDriveMode;
             DriveArchive.record('trip-end', {id:navigationSessionStartedAt,arrived:false});
+            etaLearning.cancel();tripEta=null;
             stopGpsWatch();
             isLiveNavActive = false;
             isFreeDriveMode = false;
@@ -5284,7 +5347,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const navStartTime = Date.now();
         const navStartDistanceMeters = selectedRouteObj ? (selectedRouteObj.distanceMeters || 0) : 0;
         navigationSessionStartedAt = navStartTime;
-        if (!isFreeDriveMode) DriveArchive.record('trip-start', {id:navStartTime,predictedDurationSec:selectedRouteObj?.durationSec,
+        tripEta=!isFreeDriveMode&&isRealTimeMode?{...etaLearning.estimate(selectedRouteObj),key:EtaLearning.routeKey(selectedRouteObj)}:null;
+        if(!isFreeDriveMode&&isRealTimeMode)etaLearning.start(selectedRouteObj);else etaLearning.cancel();
+        if (!isFreeDriveMode) DriveArchive.record('trip-start', {id:navStartTime,predictedDurationSec:selectedRouteObj?.durationSec*(tripEta?.factor||1),baseDurationSec:selectedRouteObj?.durationSec,
             solar:JourneyPolicy.solarTradeoff(routeData?.routes?.fastest, selectedRouteObj)});
         lastReliableFixAt = 0;
         routingUnavailable = false;
@@ -5563,7 +5628,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 offRouteEvidence = RouteState.evaluateOffRoute(offRouteEvidence, {
                     timestamp: now, distanceMeters: offRouteDist, accuracy: incomingAccuracy,
                     oppositeDirection: navigationSnap && navigationSnap.reason === 'opposite-direction',
-                    uncertain: navigationSnap && ['ambiguous', 'nearby-road-conflict', 'reacquiring'].includes(navigationSnap.reason),
+                    uncertain: navigationSnap && ['ambiguous', 'nearby-road-conflict', 'reacquiring', 'motion-conflict'].includes(navigationSnap.reason),
                     online: navigator.onLine !== false || !!RoadPack.graph, pending: !!pendingRouteRequestKey || !!routeAbortController
                 });
                 if (offRouteEvidence.shouldReroute) {

@@ -63,11 +63,15 @@
         const speed = Math.max(0, Number(fix.speedKmh) || 0) / 3.6;
         const accuracy = clamp(Number(fix.accuracy) || 10, 3, 35);
         const elapsed = previous ? (fix.timestamp - previous.timestamp) / 1000 : 0;
+        if (previous && elapsed <= 0) return { isSnapped: false, reason: 'stale', timestamp: fix.timestamp, remainingMeters: Infinity };
         const continuous = previous && elapsed >= 0 && elapsed <= 15;
+        const history = continuous ? (previous.history || []).filter(p => fix.timestamp - p.timestamp <= 8000) : [];
+        const travelled = history.length ? history[history.length - 1].travelled + distance(point, history[history.length - 1].point) : 0;
         const allowance = Math.max(45, speed * Math.max(0, elapsed) * 1.8 + accuracy * 2);
         const candidates = [];
         let nearest = Infinity;
         let oppositeNearby = false;
+        let motionConflict = false;
         for (let i = 0; i < data.coordinates.length - 1; i++) {
             if (continuous && (data.cumulative[i + 1] < previous.progressMeters - 120 || data.cumulative[i] > previous.progressMeters + allowance)) continue;
             const p = project(point, data.coordinates[i], data.coordinates[i + 1]);
@@ -81,7 +85,15 @@
                 continue;
             }
             if (continuous && (progress < previous.progressMeters - 20 || progress > previous.progressMeters + allowance)) continue;
-            const score = p.distance + difference * 0.15 + (continuous ? Math.max(0, previous.progressMeters - progress) * 0.5 : 0);
+            // A string of individually plausible snaps must not creep onto a
+            // later parallel/loop segment while the raw fixes barely move.
+            const anchor = history.find(h => fix.timestamp - h.timestamp >= 2000);
+            const moved = anchor ? travelled - anchor.travelled : 0;
+            if (anchor && Math.abs(progress - anchor.progressMeters) > moved * 1.5 + accuracy + anchor.accuracy + 15) {
+                motionConflict = true; continue;
+            }
+            const residual = anchor ? Math.abs(Math.max(0, progress - anchor.progressMeters) - moved) : 0;
+            const score = p.distance + difference * 0.15 + (continuous ? Math.max(0, previous.progressMeters - progress) * 0.5 : 0) + Math.min(12, residual * 0.2);
             candidates.push({ ...p, score, progressMeters: progress, segmentIndex: i });
         }
         candidates.sort((a, b) => a.score - b.score);
@@ -91,18 +103,19 @@
         const accepted = best && best.distance <= Math.min(40, Math.max(18, accuracy * 1.5)) && !ambiguous;
         const raw = { lat: fix.lat, lng: fix.lng, heading: fix.heading || 0, isSnapped: false,
             distMeters: nearest, segmentIndex: -1, t: 0, remainingMeters: Infinity,
-            reason: ambiguous ? 'ambiguous' : oppositeNearby ? 'opposite-direction' : 'unmatched', timestamp: fix.timestamp };
+            reason: ambiguous ? 'ambiguous' : motionConflict ? 'motion-conflict' : oppositeNearby ? 'opposite-direction' : 'unmatched', timestamp: fix.timestamp };
         if (!accepted) return raw;
         return { lat: best.point[1], lng: best.point[0], heading: data.headings[best.segmentIndex],
             isSnapped: true, distMeters: best.distance, segmentIndex: best.segmentIndex, t: best.t,
             progressMeters: best.progressMeters, remainingMeters: data.total - best.progressMeters,
-            timestamp: fix.timestamp, reason: 'matched' };
+            timestamp: fix.timestamp, reason: 'matched',
+            history: [...history, {point, timestamp: fix.timestamp, progressMeters: best.progressMeters, accuracy, travelled}].slice(-32) };
     }
     function confirmMatch(candidate, fix, previous = {}) {
         const recovering = previous.recovering === true || previous.snap && fix.timestamp - previous.snap.timestamp > 15000 ||
-            ['ambiguous', 'nearby-road-conflict', 'reacquiring'].includes(previous.result?.reason);
+            ['ambiguous', 'nearby-road-conflict', 'reacquiring', 'motion-conflict'].includes(previous.result?.reason);
         if (!candidate.isSnapped) return { result: candidate, pending: null,
-            recovering: !!recovering || ['ambiguous','nearby-road-conflict'].includes(candidate.reason) };
+            recovering: !!recovering || ['ambiguous','nearby-road-conflict','motion-conflict'].includes(candidate.reason) };
         if (!recovering) return { result: candidate, pending: null, recovering: false };
         const pending = previous.pending;
         const elapsed = pending ? fix.timestamp - pending.timestamp : 0;

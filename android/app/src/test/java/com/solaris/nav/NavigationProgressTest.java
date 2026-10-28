@@ -3,6 +3,19 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NavigationProgressTest {
+    @Test public void trajectoryRejectsShortcutOntoLaterLoopDespiteHighReportedSpeed() {
+        NavigationProgress p=new NavigationProgress(new double[][]{{0,0},{.00027,0},{.00027,.00009},{0,.00009},{0,.00018},{.002,.00018}});
+        assertTrue(p.match(0,0,5,90,50,10000,10000)>=0);
+        assertTrue(p.match(.00004,0,5,90,50,11000,11000)>0);
+        assertTrue(Double.isNaN(p.match(.00004,.00018,5,90,50,12000,12000)));
+        assertTrue(Double.isNaN(p.match(.00006,0,5,90,50,13000,13000)));
+        assertTrue(p.match(.00008,0,5,90,50,14000,14000)<10);
+    }
+    @Test public void frequentFixesKeepNormalProgressAndTurns() {
+        NavigationProgress p=line();double progress=0;
+        for(int i=0;i<40;i++){progress=p.match(-70.999+i*.00002,40,5,90,10,10000+i*250,10000+i*250);assertTrue(Double.isFinite(progress));}
+        assertTrue(progress>100);
+    }
     @Test public void complexJunctionPreparesEarlierWithoutEarlyExecution() {
         assertEquals(1,NavigationProgress.phase(350,28,false));
         assertEquals(2,NavigationProgress.phase(350,28,true));

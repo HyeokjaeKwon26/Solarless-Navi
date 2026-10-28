@@ -20,7 +20,7 @@
                 previous = sample;
                 if (sample.routeId !== undefined && sample.routeId !== offRoute.routeId) offRoute = {};
                 offRoute = { ...rules.evaluateOffRoute(offRoute, {...sample,
-                    uncertain: sample.uncertain === true || ['ambiguous','nearby-road-conflict','reacquiring'].includes(sample.snapReason)}), routeId: sample.routeId };
+                    uncertain: sample.uncertain === true || ['ambiguous','nearby-road-conflict','reacquiring','motion-conflict'].includes(sample.snapReason)}), routeId: sample.routeId };
                 if (offRoute.shouldReroute) {
                     report.rerouteRequests++;
                     if (typeof sample.expectedOffRoute === 'boolean') {

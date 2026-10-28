@@ -76,6 +76,55 @@ const places = {
     Charlie: [-71.055, 42.38]
 };
 
+test('personal ETA consent persists, handles save failure and stays usable on small screens',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    const toggle=page.locator('#eta-learning-enabled');await expect(toggle).not.toBeChecked();await toggle.check();
+    await expect(page.locator('#eta-learning-status')).toContainText('Learning on');
+    await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(toggle).toBeChecked();
+    for(const width of [320,640]){await page.setViewportSize({width,height:width===320?740:320});await page.locator('#btn-eta-clear').scrollIntoViewIfNeeded();
+        const box=await page.locator('#btn-eta-clear').boundingBox();expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(width+1);expect(box.height).toBeGreaterThanOrEqual(44);
+        await page.locator('[aria-labelledby="eta-learning-title"]').screenshot({path:test.info().outputPath(`eta-settings-${width}.png`)});}
+    await page.locator('#btn-eta-clear').click();await expect(page.locator('#eta-learning-status')).toContainText('0 saved trips');
+    await page.evaluate(()=>{const set=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k===EtaLearning.KEY)throw Error('full');return set.call(this,k,v);};});
+    await toggle.click();await expect(toggle).toBeChecked();await expect(page.locator('#eta-learning-status')).toContainText('Could not save');
+    expect(state.errors).toEqual([]);
+});
+
+test('personal ETA uses validated history in cards and HUD then removes it when deleted',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');
+    await page.evaluate(()=>{
+        const coordinates=Array.from({length:41},(_,i)=>[-71.07+(-71.065+71.07)*i/40,42.36+(42.37-42.36)*i/40]);
+        const r={durationSec:300,analyzed:{coordinates}},at=Date.now();
+        localStorage.setItem(EtaLearning.KEY,JSON.stringify({enabled:true,records:Array.from({length:5},(_,i)=>({key:EtaLearning.routeKey(r),slot:EtaLearning.slot(at),at:at-(i+1)*7*86400000,base:300,actual:390}))}));
+    });
+    await page.reload();await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await expect(page.locator('#eta-fastest')).toContainText('Personal estimate');
+    await expect(page.locator('#eta-learning-badge')).toContainText('5 trips');
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-eta-clear').click();
+    await expect(page.locator('#eta-fastest')).not.toContainText('Personal estimate');await expect(page.locator('#eta-learning-badge')).toBeHidden();
+    expect(state.errors).toEqual([]);
+});
+
+test('along-route places rank by quoted driving time and require destination review',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.route('https://overpass.private.coffee/api/interpreter',route=>route.fulfill({json:{elements:[
+        {type:'node',id:991,lat:42.364,lon:-71.068,tags:{amenity:'fuel',name:'Long detour'}},
+        {type:'node',id:992,lat:42.366,lon:-71.067,tags:{amenity:'fuel',name:'Easy stop'}}]}}));
+    let requests=0;
+    await page.route('https://router.project-osrm.org/route/v1/driving/**',route=>{
+        if(new URL(route.request().url()).searchParams.get('alternatives')!=='false')return route.fallback();
+        requests++;const points=new URL(route.request().url()).pathname.split('/').at(-1).split(';').map(p=>p.split(',').map(Number));
+        const duration=points.length===2?300:points[1][1]<42.365?600:360;
+        return route.fulfill({json:{code:'Ok',waypoints:points.map(location=>({location,distance:0})),routes:[{duration,distance:duration*8,geometry:{coordinates:points},legs:points.slice(1).map(()=>({steps:[]}))}]}});
+    });
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-route-fuel').click();
+    await expect(page.locator('#route-place-results button').first()).toContainText('Easy stop',{timeout:10000});
+    await expect(page.locator('#route-place-results button').first()).toContainText('+1 min');expect(requests).toBe(3);
+    await page.locator('#route-place-results').screenshot({path:test.info().outputPath('detour-results.png')});
+    await page.locator('#route-place-results button').first().click();await expect(page.locator('#destination-review-modal')).toBeVisible();
+    expect(state.errors).toEqual([]);
+});
+
 const optionalAreaElements = [
     {type:'node',id:1,lat:42.36,lon:-71.07},
     {type:'node',id:2,lat:42.365,lon:-71.0675},

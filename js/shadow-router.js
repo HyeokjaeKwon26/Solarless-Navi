@@ -53,7 +53,8 @@ window.ShadowRouter = (function () {
         }
 
         try {
-            const response = await fetch(url, controller ? { signal: controller.signal } : {});
+            const request = window.RouteDetours?.routingFetch || fetch;
+            const response = await request(url, controller ? { signal: controller.signal } : {});
             if (!response.ok) {
                 throw createApiError('HTTP_ERROR', 'routeNetworkError', `${response.status} ${url}`);
             }

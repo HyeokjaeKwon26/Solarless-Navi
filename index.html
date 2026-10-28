@@ -584,6 +584,13 @@
                                 <small id="road-pack-help">7일 유효 · 저장 지역에서만 재탐색 · 지도 타일 미포함</small>
                                 <small class="settings-attribution">© OpenStreetMap contributors (ODbL)</small>
                             </section>
+                            <section class="settings-section" aria-labelledby="eta-learning-title">
+                                <h4 id="eta-learning-title">내 주행 기반 도착시간</h4>
+                                <label class="arrival-check"><input type="checkbox" id="eta-learning-enabled"><span id="eta-learning-label">기기에 주행 이력을 저장하고 ETA 보정</span></label>
+                                <p id="eta-learning-help"></p>
+                                <small id="eta-learning-status" role="status"></small>
+                                <button type="button" id="btn-eta-clear" class="nav-btn secondary">ETA 이력 삭제</button>
+                            </section>
                             <small id="traffic-status" role="status"></small>
                             <small id="remaining-solar-status" role="status"></small>
                             <section class="settings-section" aria-labelledby="diagnostics-section-title">
@@ -747,6 +754,7 @@
                             <div>
                                 <div class="stat-val" id="sum-duration">--</div>
                                 <div class="stat-lbl" id="sum-duration-lbl">남은 시간</div>
+                                <small id="eta-learning-badge" hidden></small>
                             </div>
                         </div>
                         <div class="summary-divider" data-summary-page="1"></div>
@@ -794,6 +802,8 @@
     <script src="js/route-comparison.js"></script>
     <script src="js/offline-catalog.js"></script>
     <script src="js/trip-tools.js"></script>
+    <script src="js/route-detours.js"></script>
+    <script src="js/eta-learning.js"></script>
     <script src="js/road-pack.js"></script>
     <script src="js/native-navigation.js"></script>
     <script src="js/drive-archive.js"></script>

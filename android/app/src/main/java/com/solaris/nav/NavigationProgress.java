@@ -9,6 +9,8 @@ final class NavigationProgress {
     private boolean uncertain;
     private double pending = -1;
     private long pendingAt;
+    // lon, lat, timestamp, route progress, accuracy, cumulative raw travel.
+    private final java.util.ArrayList<double[]> history = new java.util.ArrayList<>();
     NavigationProgress(double[][] points) {
         this.points = points;
         meters = new double[points.length];
@@ -21,6 +23,10 @@ final class NavigationProgress {
     double match(double lon, double lat, double accuracy, double heading, double speed, long at, long now) {
         if (!finite(lon) || !finite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90 || !finite(speed) || speed < 0 || !finite(accuracy) || accuracy <= 0 || accuracy > 35 || now - at > 10000 || at - now > 2000 || at <= lastAt || (pending >= 0 && at <= pendingAt)) return Double.NaN;
         boolean continuous = last >= 0 && at - lastAt <= 15000;
+        while (!history.isEmpty() && (!continuous || at - history.get(0)[2] > 8000)) history.remove(0);
+        double travelled = history.isEmpty() ? 0 : history.get(history.size()-1)[5] + distance(lon, lat, history.get(history.size()-1)[0], history.get(history.size()-1)[1]);
+        double[] anchor = !history.isEmpty() && at - history.get(0)[2] >= 2000 ? history.get(0) : null;
+        boolean motionConflict = false;
         double allowance = Math.max(45, speed * Math.max(0, at - lastAt) / 1000 * 1.8 + accuracy * 2);
         double best = Double.POSITIVE_INFINITY, progress = -1;
         java.util.ArrayList<double[]> candidates = new java.util.ArrayList<>();
@@ -35,11 +41,14 @@ final class NavigationProgress {
             double bearing = (Math.toDegrees(Math.atan2(dx, dy)) + 360) % 360;
             double diff = finite(heading) && speed >= 2.2 ? Math.abs((heading - bearing + 540) % 360 - 180) : 0;
             if (diff > 110) continue;
-            double score = d + diff * 0.15;
+            double moved = anchor == null ? 0 : travelled - anchor[5];
+            if (anchor != null && Math.abs(p-anchor[3]) > moved*1.5 + accuracy + anchor[4] + 15) { motionConflict = true; continue; }
+            double residual = anchor == null ? 0 : Math.abs(Math.max(0, p-anchor[3])-moved);
+            double score = d + diff * 0.15 + (continuous ? Math.max(0,last-p)*0.5 : 0) + Math.min(12,residual*0.2);
             candidates.add(new double[]{p, score});
             if (score < best) { best = score; progress = p; }
         }
-        if (progress < 0) { pending = -1; return Double.NaN; }
+        if (progress < 0) { if (motionConflict) uncertain = true; pending = -1; return Double.NaN; }
         for (double[] candidate : candidates) if (Math.abs(candidate[0] - progress) > 60 && candidate[1] - best < Math.max(8, accuracy * 0.6)) {
             uncertain = true; pending = -1; return Double.NaN;
         }
@@ -52,6 +61,8 @@ final class NavigationProgress {
         }
         uncertain = false; pending = -1;
         last = progress; lastAt = at;
+        history.add(new double[]{lon,lat,at,progress,accuracy,travelled});
+        while (history.size()>32) history.remove(0);
         return progress;
     }
     static int phase(double distance, double speed) {
