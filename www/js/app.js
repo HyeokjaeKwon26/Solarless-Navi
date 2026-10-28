@@ -4849,7 +4849,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if(items.length&&navigator.onLine!==false){
             container.textContent=ko?'최대 3곳의 실제 우회 경로 비교 중…':'Comparing driving detours for up to 3 places…';
             items=await RouteDetours.rank(items,start,end,{signal,isCurrent:current,tollFree:isTollFreeOnly,
-                heading:isLiveNavActive?currentHeading:undefined,
+                heading:isLiveNavActive&&hasValidGpsHeading?currentHeading:undefined,
                 inspect:async routes=>{const feeds=await PublicTraffic.load(routes.flatMap(r=>r.geometry.coordinates));return routes.map(r=>!PublicTraffic.evaluate(r,feeds).blocked);}});
         }
         if(generation!==placeSearchGeneration)return;

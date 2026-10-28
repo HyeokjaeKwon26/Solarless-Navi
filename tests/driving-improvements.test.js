@@ -59,6 +59,7 @@ test('detours stop on throttling, reject far snaps and discard stale results',as
     const far=response(600,2);far.waypoints[1].distance=61;assert.throws(()=>Detours.validate(far,start));
     assert.deepEqual(await Detours.rank(items,start,end,{isCurrent:()=>false,fetcher:async()=>({ok:true,text:async()=>JSON.stringify(response(600))})}),[]);
     assert.match(Detours.url(start,end,start,{tollFree:true,heading:90}),/exclude=toll&bearings=90,60;;$/);
+    assert.ok(!Detours.url(start,end,start,{heading:undefined}).includes('bearings='));
 });
 test('verified closures are never presented as valid detour quotes',async()=>{
     let calls=0;const p={lat:42,lng:-71};
