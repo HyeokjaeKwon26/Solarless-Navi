@@ -241,8 +241,11 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (automaticBatterySaver && isBatterySaverActive && !manualBatterySaver) message = isKo ? '기기 상태에 따라 자동 절전 중' : 'Automatic battery saver active';
             if (gpsStale && !isFreeDriveMode) {
                 TTSVoice.pauseGuidance();
-                document.getElementById('banner-dist').textContent = '—';
-                document.getElementById('banner-desc').textContent = isKo ? 'GPS 신호 확인 중 · 회전 안내 대기' : 'Waiting for GPS · turn guidance paused';
+                if (navigationRouteNeedsReliableOrigin) renderProvisionalGuidanceBanner();
+                else {
+                    document.getElementById('banner-dist').textContent = '—';
+                    document.getElementById('banner-desc').textContent = isKo ? 'GPS 신호 확인 중 · 회전 안내 대기' : 'Waiting for GPS · turn guidance paused';
+                }
                 document.getElementById('banner-lanes').hidden = true;
                 const following = document.getElementById('banner-following');
                 if (following) following.hidden = true;
@@ -1142,7 +1145,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('road-save-label').textContent = ko ? `주변 도로 저장 (약 ${radius})` : `Save nearby roads (about ${radius})`;
         if (routeData) updateRouteOptionButtons(routeData);
         if (isLiveNavActive) {
-            updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare);
+            updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare, true);
             NativeNavigation.invalidate();
             if (!isFreeDriveMode && selectedRouteObj && !navigationRouteNeedsReliableOrigin) NativeNavigation.sync(selectedRouteObj);
         }
@@ -1297,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 // Update Mobile Turn Banner Language if Active
-                updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare);
+                updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare, true);
 
                 // Refresh Active Route Cards & Summary Text if Routes Exist
                 if (routeData) {
@@ -1382,7 +1385,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* TURN BANNER WITH MANEUVER + ESTIMATED GLARE POSSIBILITY OVERLAY */
-    function updateTurnBannerText(nextManeuver, glareRisk) {
+    function renderProvisionalGuidanceBanner() {
+        const ko = I18n.getLanguage().startsWith('ko');
+        const distance = ko ? 'GPS 보정 중' : 'Refining GPS';
+        const description = ko ? '정확한 위치가 확인되면 실제 도로 경로를 표시합니다.' : 'Road guidance will appear after a reliable location fix.';
+        const icon = '<i class="fa-solid fa-location-crosshairs fa-pulse"></i>';
+        document.getElementById('banner-turn-icon').innerHTML = icon;
+        document.getElementById('banner-dist').textContent = distance;
+        document.getElementById('banner-desc').textContent = description;
+        document.getElementById('banner-lanes').hidden = true;
+        const following = document.getElementById('banner-following');
+        if (following) following.hidden = true;
+        updatePipHud(description, document.getElementById('sum-time')?.innerText || '--', distance, icon, false, document.getElementById('sum-dist')?.innerText || '--');
+    }
+
+    function updateTurnBannerText(nextManeuver, glareRisk, presentationOnly = false) {
+        if (isLiveNavActive && !isFreeDriveMode && navigationRouteNeedsReliableOrigin) {
+            lastTurnPresentation = { maneuver: null, glare: 0 };
+            renderProvisionalGuidanceBanner();
+            return;
+        }
+        // A preference refresh must not revive a previously paused turn.
+        if (presentationOnly && isLiveNavActive && !isFreeDriveMode &&
+            (!lastReliableFixAt || Date.now() - lastReliableFixAt > 10000 || offRouteEvidence.confirmed ||
+                (navigationRouteProgress.snap && !navigationRouteProgress.snap.isSnapped))) return;
         lastTurnPresentation = { maneuver: nextManeuver, glare: glareRisk };
         const banner = document.getElementById('mobile-turn-banner');
         if (!banner) return;
@@ -5077,14 +5103,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (activeRoutePolylineGroup) activeRoutePolylineGroup.clearLayers();
             if (dynamicRemainingPolylineGroup) dynamicRemainingPolylineGroup.clearLayers();
             updateVehicleMarkerPosition(currentStart.lat, currentStart.lng, currentHeading, 0, { snapToRoute: false });
-            const bannerIcon = document.getElementById('banner-turn-icon');
-            const bannerDistance = document.getElementById('banner-dist');
-            const bannerDescription = document.getElementById('banner-desc');
-            if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-location-crosshairs fa-pulse"></i>';
-            if (bannerDistance) bannerDistance.textContent = isKo ? 'GPS 보정 중' : 'Refining GPS';
-            if (bannerDescription) bannerDescription.textContent = isKo
-                ? '정확한 위치가 확인되면 실제 도로 경로를 표시합니다.'
-                : 'Road guidance will appear after a reliable location fix.';
+            renderProvisionalGuidanceBanner();
         }
 
         enableKeepAwake();

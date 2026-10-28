@@ -301,6 +301,14 @@ for (const originKind of ['stale GPS','selected address','coarse GPS']) {
         if(originKind==='selected address') await expect(page.locator('#route-preview-status')).toContainText('selected origin');
         await page.screenshot({path:test.info().outputPath('route-preview.png')});
         await page.locator('#btn-map-start-nav').click();
+        // Wait for the health timer that used to overwrite the provisional
+        // banner, rather than asserting only during its first frame.
+        await expect(page.locator('#guidance-health')).toContainText('Waiting for GPS');
+        await expect(page.locator('#banner-dist')).toContainText('Refining GPS');
+        await page.evaluate(()=>NavigationUnits.setPreference('metric'));
+        await page.locator('#btn-toggle-lang').click();
+        await expect(page.locator('#banner-dist')).toContainText('GPS 보정 중');
+        await page.locator('#btn-toggle-lang').click();
         await expect(page.locator('#banner-dist')).toContainText('Refining GPS');
         await expect(page.locator('#route-preview-status')).toBeHidden();
         expect((await previewGeometry(page,start,places.Alpha)).paths).toBe(0);
@@ -560,6 +568,9 @@ test('lane guidance renders and GPS silence is reported until a reliable fix ret
     await expect(page.locator('#guidance-health')).toBeHidden();
     await page.screenshot({ path: `.codex-remote-attachments/lanes-${test.info().project.name}.png` });
     await expect(page.locator('#guidance-health')).toContainText('Waiting for GPS', { timeout: 13000 });
+    await page.evaluate(()=>NavigationUnits.setPreference('metric'));
+    await expect(page.locator('#banner-dist')).toHaveText('—');
+    await expect(page.locator('#banner-desc')).toContainText('Waiting for GPS');
     await page.evaluate(() => window.testGps.emit({ latitude: 42.3601 }));
     await expect(page.locator('#guidance-health')).toBeHidden();
     expect(state.errors).toEqual([]);

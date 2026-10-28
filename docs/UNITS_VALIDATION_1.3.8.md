@@ -6,6 +6,7 @@
 - Automatic mode follows current location: US/GB use mph and mi/ft; other/unknown countries use km/h and km/m. Geographic detection provides an immediate estimate; cached/reverse-geocoded country data can refine it. Manual metric/imperial selection persists independently of UI language.
 - A speed render updates both number and label synchronously from the last raw speed sample. A delayed country correction does not require another GPS tick.
 - English ETA cards and placeholders use `min` instead of `m`.
+- The provisional-GPS banner survives the health timer and unit/language refreshes, including in PiP. The initial CI run exposed a pre-existing race: the first health tick replaced `Refining GPS` with a generic dash while a reliable origin was still pending. A shared provisional renderer now preserves this state. Regression checks wait for the health tick before asserting the banner and still require accurate GPS before drawing live geometry.
 - Native route snapshots carry the resolved unit system. Presentation changes on the same route are not dropped when an earlier bridge request is pending. Shared distance fixtures check Java and JavaScript speech, including metric/imperial boundaries and Korean/English under a non-English device locale.
 
 ## Validation
@@ -15,6 +16,7 @@
 - Unit tests cover distance and speed conversion, manual/automatic selection, voice output, and pending native bridge updates.
 - Release-target Node tests: 239 passed.
 - Complete browser suite: 88 passed across root and packaged `www`, including the new unit regressions and existing update, search, route-preview and live-guidance checks.
+- After the CI-discovered GPS banner race was fixed, 16 focused unit/preview/GPS browser scenarios passed again. Additional GPS-silence checks verify a unit refresh cannot revive a paused turn.
 - Android: 16 JVM tests passed; debug build succeeded; lint reported 0 errors and 19 existing warnings. The shared speech fixture covers 13 metric/imperial cases in both languages.
 - All 52 root/`www` assets match by SHA-256. Dependency audit found 0 vulnerabilities; version 1.3.8 / code 12 passes monotonic-version and signing-identity checks.
 
