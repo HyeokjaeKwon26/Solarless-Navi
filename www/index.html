@@ -196,6 +196,16 @@
                 </div>
             </div>
 
+            <div class="start-search-overlay hidden" id="route-legend-modal" role="dialog" aria-modal="true" aria-labelledby="route-legend-title">
+                <div class="start-search-card route-legend-card">
+                    <h2 id="route-legend-title">경로 색상 범례</h2>
+                    <ul id="route-legend-items"></ul>
+                    <p id="route-legend-note"></p>
+                    <p id="route-legend-saver"></p>
+                    <button type="button" class="nav-btn" id="btn-close-route-legend">닫기</button>
+                </div>
+            </div>
+
             <!-- Update Notification Modal Overlay (Z-Index 9500) -->
             <div class="start-search-overlay hidden" id="update-modal" role="dialog" aria-modal="true" aria-labelledby="update-modal-title">
                 <div class="start-search-card update-card">
@@ -567,6 +577,7 @@
                     </div>
                 </div>
                 <div class="map-bottom-overlay-stack" id="map-bottom-overlay-stack" aria-live="polite">
+                    <div id="route-preview-status" class="route-preview-status" role="status" hidden></div>
                     <div class="map-attribution" id="map-attribution" aria-label="Map attribution">
                         <span id="map-attribution-text"><a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> · © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer">OpenMapTiles</a> · Data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a></span>
                     </div>
@@ -617,6 +628,9 @@
 
                 <!-- Floating Navigation Control Buttons on Map -->
                 <div class="map-controls-group">
+                    <button type="button" class="map-floating-btn route-legend-btn" id="btn-route-legend" aria-controls="route-legend-modal" aria-expanded="false" aria-label="경로 색상 범례">
+                        <i class="fa-solid fa-list" aria-hidden="true"></i><span id="route-legend-button-label">범례</span>
+                    </button>
                     <!-- OLED Heat & Battery Saver Mode Toggle Button -->
                     <button class="map-floating-btn saver-btn" id="btn-toggle-battery-saver" title="OLED 발열/배터리 절전 HUD 모드">
                         <i class="fa-solid fa-battery-half"></i>
@@ -708,6 +722,7 @@
     <script src="js/tts-voice.js"></script>
     <script src="js/offline-map.js"></script>
     <script src="js/pip-controller.js"></script>
+    <script src="js/route-presentation.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

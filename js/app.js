@@ -721,6 +721,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setupAppResumeListener();
         setupDrawerSwipeDownToDismiss();
         setupFeatureListeners();
+        setupRouteLegend();
         setupMapPanTrackingListeners();
         initAmbientLightSensor();
 
@@ -752,6 +753,67 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* MAP PANNING TRACKING & SHORT AUTO RECENTER COUNTDOWN TOAST */
+    let routeLegendPreviousFocus = null;
+    function updateRoutePreviewStatus() {
+        const status = document.getElementById('route-preview-status');
+        if (!status) return;
+        const labels = RoutePresentation.labels(I18n.getLanguage());
+        status.textContent = currentStart && currentStart.source === 'selected-address' ? labels.previewAddress : labels.previewGps;
+        status.hidden = isLiveNavActive || !selectedRouteObj || !verifiedRouteOriginProvisional;
+    }
+
+    function refreshRouteLegend() {
+        const labels = RoutePresentation.labels(I18n.getLanguage());
+        const button = document.getElementById('btn-route-legend');
+        button.title = labels.title;
+        button.setAttribute('aria-label', labels.title);
+        document.getElementById('route-legend-button-label').textContent = labels.button;
+        document.getElementById('route-legend-title').textContent = labels.title;
+        document.getElementById('route-legend-note').textContent = labels.note;
+        document.getElementById('route-legend-saver').textContent = labels.saver;
+        document.getElementById('btn-close-route-legend').textContent = labels.close;
+        const list = document.getElementById('route-legend-items');
+        list.replaceChildren();
+        Object.entries(RoutePresentation.colors).forEach(([key, color], index) => {
+            const item = document.createElement('li');
+            const swatch = document.createElement('span');
+            swatch.className = 'route-legend-swatch';
+            swatch.style.borderColor = color;
+            if (key === 'alternative') swatch.style.borderTopStyle = 'dashed';
+            swatch.setAttribute('aria-hidden', 'true');
+            const label = document.createElement('span');
+            label.textContent = labels.items[index];
+            item.append(swatch, label);
+            list.appendChild(item);
+        });
+        updateRoutePreviewStatus();
+    }
+
+    function closeRouteLegend() {
+        document.getElementById('route-legend-modal').classList.add('hidden');
+        document.getElementById('btn-route-legend').setAttribute('aria-expanded', 'false');
+        if (routeLegendPreviousFocus && routeLegendPreviousFocus.isConnected) routeLegendPreviousFocus.focus({ preventScroll: true });
+    }
+
+    function setupRouteLegend() {
+        refreshRouteLegend();
+        const modal = document.getElementById('route-legend-modal');
+        const close = document.getElementById('btn-close-route-legend');
+        document.getElementById('btn-route-legend').addEventListener('click', () => {
+            routeLegendPreviousFocus = document.activeElement;
+            refreshRouteLegend();
+            modal.classList.remove('hidden');
+            document.getElementById('btn-route-legend').setAttribute('aria-expanded', 'true');
+            close.focus({ preventScroll: true });
+        });
+        close.addEventListener('click', closeRouteLegend);
+        modal.addEventListener('click', event => { if (event.target === modal) closeRouteLegend(); });
+        modal.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { event.preventDefault(); closeRouteLegend(); }
+            if (event.key === 'Tab') { event.preventDefault(); close.focus({ preventScroll: true }); }
+        });
+    }
+
     function resetRecenterInactivityTimer() {
         clearTimeout(recenterWaitTimer);
         clearInterval(recenterCountdownInterval);
@@ -1170,6 +1232,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 I18n.setLanguage(nextLang);
+                refreshRouteLegend();
                 TTSVoice.setLanguage(nextLang);
 
                 // Dynamically update solar info and buttons in new language
@@ -1977,7 +2040,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const userIsEditing = Date.now() - lastDestinationEditingAt < AUTO_FREE_DRIVE_EDITING_GRACE_MS;
             const sidebar = document.getElementById('sidebar-panel');
             const blockingModal = document.querySelector(
-                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden)'
+                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden)'
             );
             if (userIsEditing || (sidebar && sidebar.classList.contains('active')) || blockingModal) {
                 autoFreeDriveMotionState = {};
@@ -2405,6 +2468,10 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('btn-close-update-modal').click();
             return;
         }
+        if (!document.getElementById('route-legend-modal').classList.contains('hidden')) {
+            closeRouteLegend();
+            return;
+        }
 
         if (isLiveNavActive) {
             const confirmExit = confirm(isKo ? "경로 안내를 종료하시겠습니까?" : "Exit route navigation?");
@@ -2443,6 +2510,7 @@ document.addEventListener('DOMContentLoaded', () => {
             'btn-recenter-gps',
             'btn-toggle-compass',
             'btn-toggle-battery-saver',
+            'btn-route-legend',
             'mobile-toggle-panel'
         ];
 
@@ -2455,7 +2523,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const fullDisableUis = [
             'start-search-modal',
-            'about-app-modal'
+            'about-app-modal',
+            'route-legend-modal'
         ];
         fullDisableUis.forEach(id => {
             const el = document.getElementById(id);
@@ -2847,10 +2916,7 @@ document.addEventListener('DOMContentLoaded', () => {
             dynamicRemainingRouteId = routeIdentity;
             dynamicRemainingSegmentIndex = null;
         }
-        const colorForSegment = seg => seg.glareRisk > 0.45
-            ? '#f59e0b'
-            : (seg.confirmedShade ? '#7c3aed'
-                : (seg.shadeState === 'estimated-shade' && seg.shadeScore > 0.5 ? '#0e7490' : '#0284c7'));
+        const colorForSegment = RoutePresentation.segmentColor;
         // Reuse one Leaflet layer per segment. GPS ticks update only the
         // current segment; unchanged future layers keep their DOM/SVG path.
         if (dynamicRemainingSegmentIndex === segIdx && dynamicRemainingLayers.size > 0) {
@@ -3690,8 +3756,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             });
                         }
                         setNavigationButtonsEnabled(isCurrentRouteReady());
-                        renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
                         updateSummaryBox(selectedRouteObj);
+                        renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
                         updateHUDWithRoute(selectedRouteObj, sunPos);
                         if (window.DebugLogger) window.DebugLogger.log('route-first-result', { elapsedMs: Date.now() - routeStartedAt, routeCount: routeData.routes.all.length });
                         if (window.DebugLogger) window.DebugLogger.log('route-progress-rendered', { elapsedMs: Date.now() - routeStartedAt });
@@ -3770,8 +3836,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         setNavigationButtonsEnabled(isCurrentRouteReady());
 
-        renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
         updateSummaryBox(selectedRouteObj);
+        renderMapMarkersAndPolyline(selectedRouteObj, isMidDrive || isLiveNavActive);
         updateHUDWithRoute(selectedRouteObj, sunPos);
 
         if (isMidDrive || isLiveNavActive) {
@@ -4048,18 +4114,18 @@ document.addEventListener('DOMContentLoaded', () => {
             snapToRoute: !verifiedRouteOriginProvisional
         });
 
-        // A stale/coarse origin may still produce a real OSRM response, but
-        // drawing it as trusted guidance creates a conspicuous line from the
-        // wrong road. Keep only the raw vehicle/accuracy position until a
-        // reliable fix triggers an immediate forward reroute.
-        if (verifiedRouteOriginProvisional) return;
+        // Planning may use an older GPS fix or a deliberately selected address.
+        // Show its verified road geometry as a preview, while retaining the
+        // strict reliable-origin requirement for actual live guidance.
+        updateRoutePreviewStatus();
+        if ((isLiveDrive || isLiveNavActive) && verifiedRouteOriginProvisional) return;
 
         if (!isLiveDrive && routeData && routeData.routes && routeData.routes.all) {
             routeData.routes.all.forEach(rt => {
                 if (rt !== selectedRouteObj && rt.analyzed && rt.analyzed.coordinates) {
                     const inactiveCoords = rt.analyzed.coordinates.map(c => [c[1], c[0]]);
                     L.polyline(inactiveCoords, {
-                        color: '#64748b',
+                        color: RoutePresentation.colors.alternative,
                         weight: 5,
                         opacity: 0.5,
                         dashArray: '6, 8'
@@ -4072,10 +4138,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const useDynamicRemainingPath = isLiveDrive && isLiveNavActive;
         if (segments && !useDynamicRemainingPath) {
             segments.forEach(seg => {
-                let segColor = '#0284c7';
-                if (seg.glareRisk > 0.45) segColor = '#f59e0b';
-                else if (seg.confirmedShade) segColor = '#7c3aed';
-                else if (seg.shadeState === 'estimated-shade' && seg.shadeScore > 0.5) segColor = '#0e7490';
+                const segColor = RoutePresentation.segmentColor(seg);
 
                 L.polyline([seg.p1, seg.p2], {
                     color: segColor,
@@ -4094,9 +4157,15 @@ document.addEventListener('DOMContentLoaded', () => {
             if (allCoords.length >= 2) {
                 // Reserve space occupied by the destination/header and the
                 // bottom route summary so both endpoints remain visible.
+                const size = map.getSize();
+                const mapRect = map.getContainer().getBoundingClientRect();
+                const topBar = document.getElementById('map-top-bar')?.getBoundingClientRect();
+                const bottomStack = document.getElementById('map-bottom-overlay-stack')?.getBoundingClientRect();
+                const topSpace = Math.min(size.y * 0.25, Math.max(68, topBar ? topBar.bottom - mapRect.top + 12 : 68));
+                const bottomSpace = Math.min(size.y * 0.45, Math.max(156, bottomStack ? mapRect.bottom - bottomStack.top + 20 : 156));
                 map.fitBounds(L.latLngBounds(allCoords), {
-                    paddingTopLeft: [48, 176],
-                    paddingBottomRight: [48, 156],
+                    paddingTopLeft: [60, topSpace],
+                    paddingBottomRight: [60, bottomSpace],
                     maxZoom: PREVIEW_MAX_ZOOM,
                     animate: false
                 });
@@ -4141,6 +4210,8 @@ document.addEventListener('DOMContentLoaded', () => {
         routeRefinementPending = false;
         verifiedRouteRequestKey = null;
         verifiedRouteOriginProvisional = false;
+
+        updateRoutePreviewStatus();
 
         const isKo = I18n.getLanguage().startsWith('ko');
         const destChip = document.getElementById('bar-dest-text');
@@ -4396,7 +4467,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     setupAutocomplete('origin-input', 'origin-results', (coords, name) => {
-        currentStart = coords;
+        currentStart = { ...coords, source: 'selected-address' };
         if (currentEnd) updateRoute();
     });
 
@@ -4863,6 +4934,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         stopPassiveDrivingDetection();
         isLiveNavActive = true;
+        updateRoutePreviewStatus();
         isFreeDriveMode = requestedFreeDrive;
         if (isFreeDriveMode) NativeNavigation.clear(true);
         setFreeDriveUi(isFreeDriveMode);
@@ -5537,8 +5609,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (routeRefinementPending) activeRouteRequestKey = currentRequestKey;
                     verifiedRouteRequestKey = currentRequestKey;
                     updateRouteOptionButtons(routeData);
-                    renderMapMarkersAndPolyline(selectedRouteObj, false);
                     updateSummaryBox(selectedRouteObj);
+                    renderMapMarkersAndPolyline(selectedRouteObj, false);
                     updateHUDWithRoute(selectedRouteObj, updateSunInfo());
                     setNavigationButtonsEnabled(isCurrentRouteReady());
                 } else if (currentEnd) {

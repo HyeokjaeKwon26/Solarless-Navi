@@ -87,15 +87,15 @@ const style = {
     ]
 };
 
-async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false } = {}) {
+async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false, initialAccuracy = 5, holdWatchFix = false } = {}) {
     const state = { routes: [], errors: [], releaseBravo: null, bravoFinished: false };
     page.on('pageerror', error => state.errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
-    await page.addInitScript(() => {
+    await page.addInitScript(({initialAccuracy, holdWatchFix}) => {
         localStorage.setItem('solarless_auto_free_drive_enabled', 'false');
         let nextId = 0;
         const watchers = new Map();
-        let coords = { latitude: 42.36, longitude: -71.07, accuracy: 5, heading: 45, speed: 12,
+        let coords = { latitude: 42.36, longitude: -71.07, accuracy: initialAccuracy, heading: 45, speed: 12,
             altitude: 0, altitudeAccuracy: 5 };
         const fix = () => ({ coords: { ...coords }, timestamp: Date.now() });
         Object.defineProperty(navigator, 'geolocation', { value: {
@@ -103,7 +103,7 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
             watchPosition(success) {
                 const id = ++nextId;
                 watchers.set(id, success);
-                setTimeout(() => { if (watchers.has(id)) success(fix()); }, 0);
+                setTimeout(() => { if (!holdWatchFix && watchers.has(id)) success(fix()); }, 0);
                 return id;
             },
             clearWatch(id) { watchers.delete(id); }
@@ -112,7 +112,7 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
             emit(update) { coords = { ...coords, ...update }; for (const callback of watchers.values()) callback(fix()); },
             watchers() { return watchers.size; }
         };
-    });
+    }, {initialAccuracy, holdWatchFix});
     // No public routing, geocoding, weather or tile service is contacted.
     await page.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -186,6 +186,111 @@ async function changeDestination(page, name) {
     await page.locator('#btn-open-search-modal').click();
     await selectDestination(page, name);
 }
+
+async function observePreviewMap(page) {
+    await page.route('**/js/leaflet.js', async route => {
+        const response = await route.fetch();
+        await route.fulfill({response,body:(await response.text()) + '\nL.Map.addInitHook(function(){window.previewTestMap=this;});'});
+    });
+}
+
+async function previewGeometry(page, start, end) {
+    return page.evaluate(({start,end}) => {
+        const map=window.previewTestMap;
+        let paths=0;
+        map.eachLayer(layer=>{if(layer instanceof L.Polyline && !(layer instanceof L.Polygon)) paths++;});
+        const rect=map.getContainer().getBoundingClientRect();
+        const top=document.getElementById('map-top-bar').getBoundingClientRect().bottom;
+        const bottom=document.getElementById('map-bottom-overlay-stack').getBoundingClientRect().top;
+        const endpoints=[start,end].map(point=>{
+            const p=map.latLngToContainerPoint([point[1],point[0]]);
+            return {visible:map.getBounds().contains([point[1],point[0]]),x:rect.left+p.x,y:rect.top+p.y};
+        });
+        return {paths,endpoints,top,bottom};
+    },{start,end});
+}
+
+for (const originKind of ['stale GPS','selected address','coarse GPS']) {
+    test(`route preview draws both endpoints with ${originKind} and waits for reliable live GPS`, async ({page})=>{
+        const state=await fixtures(page,{brokenMap:true,initialAccuracy:originKind==='coarse GPS'?150:5,holdWatchFix:true});
+        await observePreviewMap(page);
+        await page.goto('./');
+        await expect(page.locator('#origin-input')).toHaveValue(/Fixture road/);
+        let start=[-71.07,42.36];
+        if(originKind==='selected address'){
+            await page.locator('#origin-input').fill('Bravo');
+            await page.locator('#origin-input').press('Enter');
+            await page.locator('#origin-results [role="option"]').first().click();
+            start=places.Bravo;
+        }else if(originKind==='stale GPS') await page.waitForTimeout(2200);
+        await selectDestination(page,'Alpha');
+        await expect(page.locator('#eta-fastest')).toContainText('5m');
+        await expect.poll(async()=> (await previewGeometry(page,start,places.Alpha)).paths).toBeGreaterThan(0);
+        const preview=await previewGeometry(page,start,places.Alpha);
+        for(const point of preview.endpoints){
+            expect(point.visible).toBe(true);
+            expect(point.y).toBeGreaterThan(preview.top);
+            expect(point.y).toBeLessThan(preview.bottom);
+        }
+        await expect(page.locator('#route-preview-status')).toBeVisible();
+        if(originKind==='selected address') await expect(page.locator('#route-preview-status')).toContainText('selected origin');
+        await page.screenshot({path:test.info().outputPath('route-preview.png')});
+        await page.locator('#btn-map-start-nav').click();
+        await expect(page.locator('#banner-dist')).toContainText('Refining GPS');
+        await expect(page.locator('#route-preview-status')).toBeHidden();
+        expect((await previewGeometry(page,start,places.Alpha)).paths).toBe(0);
+        await page.evaluate(()=>window.testGps.emit({accuracy:150}));
+        expect((await previewGeometry(page,start,places.Alpha)).paths).toBe(0);
+        await establishReliableGuidance(page);
+        await expect.poll(async()=> (await previewGeometry(page,start,places.Alpha)).paths).toBeGreaterThan(0);
+        expect(state.errors).toEqual([]);
+    });
+}
+
+test('route colors legend is readable on narrow and landscape screens and closes without ending guidance',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});
+    await page.goto('./');
+    await selectDestination(page,'Alpha');
+    for(const viewport of [{width:320,height:740},{width:844,height:390}]){
+        await page.setViewportSize(viewport);
+        const trigger=page.locator('#btn-route-legend');
+        await trigger.click();
+        await expect(trigger).toHaveAttribute('aria-expanded','true');
+        const dialog=page.getByRole('dialog',{name:'Route colors'});
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toHaveCSS('opacity','1');
+        await expect(dialog.locator('li')).toHaveCount(5);
+        await expect(dialog).toContainText('do not show traffic congestion');
+        await expect(dialog).toContainText('not field-verified shade');
+        await expect(dialog).toContainText('grayscale');
+        const colors=await dialog.locator('.route-legend-swatch').evaluateAll(items=>items.map(item=>getComputedStyle(item).borderTopColor));
+        expect(colors).toEqual(['rgb(245, 158, 11)','rgb(124, 58, 237)','rgb(14, 116, 144)','rgb(2, 132, 199)','rgb(100, 116, 139)']);
+        const card=await dialog.locator('.route-legend-card').boundingBox();
+        expect(card.x).toBeGreaterThanOrEqual(0);expect(card.x+card.width).toBeLessThanOrEqual(viewport.width);
+        expect(card.y).toBeGreaterThanOrEqual(0);expect(card.y+card.height).toBeLessThanOrEqual(viewport.height);
+        await page.screenshot({path:test.info().outputPath(`legend-${viewport.width}.png`)});
+        await expect(page.locator('#btn-close-route-legend')).toBeFocused();
+        await page.keyboard.press('Escape');
+        await expect(page.locator('#route-legend-modal')).toHaveClass(/hidden/);
+        await expect(trigger).toBeFocused();
+    }
+    await page.setViewportSize({width:412,height:915});
+    await page.locator('#btn-toggle-lang').click();
+    await page.locator('#btn-route-legend').click();
+    await expect(page.getByRole('dialog',{name:'경로 색상 범례'})).toContainText('교통 정체 표시가 아닙니다');
+    await page.getByRole('button',{name:'닫기',exact:true}).click();
+    await page.locator('#btn-toggle-lang').click();
+    await page.locator('#btn-map-start-nav').click();
+    await page.locator('#btn-route-legend').click();
+    await page.getByRole('button',{name:'Close',exact:true}).click();
+    await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);
+    await page.locator('#btn-route-legend').click();
+    // Browser history and Android Back share the same app handler.
+    await page.evaluate(()=>window.dispatchEvent(new PopStateEvent('popstate')));
+    await expect(page.locator('#route-legend-modal')).toHaveClass(/hidden/);
+    await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);
+    expect(state.errors).toEqual([]);
+});
 
 async function establishReliableGuidance(page) {
     // A route origin older than two seconds correctly starts provisionally.

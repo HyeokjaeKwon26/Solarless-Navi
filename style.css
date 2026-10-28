@@ -853,6 +853,17 @@ body.pip-mode .map-attribution {
     transition: all 0.2s ease;
 }
 .map-floating-btn:active { transform: scale(0.92); }
+.map-controls-group .route-legend-btn { position: absolute; right: calc(100% + 8px); bottom: 0; }
+.route-legend-btn span { font-size: 9px; line-height: 1.2; margin-top: 2px; }
+#route-legend-modal { position: fixed; inset: 0; z-index: 11000; transition: opacity 0.3s ease; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.route-legend-card { max-height: calc(100dvh - max(16px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom))); }
+.route-legend-card h2 { font-size: 20px; margin-bottom: 16px; }
+.route-legend-card ul { list-style: none; padding: 0; margin: 0 0 14px; }
+.route-legend-card li { display: flex; align-items: center; gap: 12px; margin: 14px 0; font-size: 14px; line-height: 1.5; }
+.route-legend-swatch { width: 32px; flex: 0 0 32px; border-top: 6px solid; border-radius: 3px; }
+.route-legend-card p { font-size: 12px; line-height: 1.6; color: var(--text-secondary); margin-bottom: 14px; }
+.route-preview-status { background: rgba(15, 23, 42, .94); border: 1px solid #64748b; border-radius: 8px; padding: 6px 10px; font-size: 11px; line-height: 1.4; color: #cbd5e1; }
+.route-preview-status[hidden], body.pip-mode #route-legend-modal { display: none; }
 
 .map-floating-btn.saver-btn { border-color: #a78bfa; color: #a78bfa; }
 .map-floating-btn.saver-btn.active { background: #7c3aed; color: #fff; box-shadow: 0 0 15px rgba(124, 58, 237, 0.7); }
