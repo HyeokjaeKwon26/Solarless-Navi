@@ -28,3 +28,13 @@
 4. During a safe passenger-operated road test, compare foreground and screen-off/background voice units in Korean and English. Verify continuous progress, turn timing and overspeed behavior after changing preferences.
 
 No physical-phone installation or road test was performed in this session.
+
+## Published release verification
+
+- Final release source: `c3a71bad2f06fab8a769e203def9a66d024e791f` (unit implementation: `024185ec2d77ccd15212f881c5f3f680b1cddb30`).
+- Final [APK workflow](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40619724140) and [general CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40619724054) succeeded, including the full browser suite after the GPS-state fix.
+- [Public release](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.8) provides the APK, update manifest and checksum file.
+- Downloaded APK: 4,387,498 bytes; SHA-256 `afabc04bf719ae67789db952b493c3b3e0bba1806e2bb5c40b7dfc7cfd921dad`.
+- Signature verifies against existing certificate `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`; package `com.solaris.nav`, version 1.3.8 / code 12; not debuggable.
+- All seven changed web assets in the downloaded APK match the final release commit byte-for-byte.
+- Shipping updater with real public GitHub responses and simulated installed versions 1.3.5, 1.3.6 and 1.3.7 offers 1.3.8; simulated 1.3.8 reports up to date. Physical Android installation and data retention remain device checks.
