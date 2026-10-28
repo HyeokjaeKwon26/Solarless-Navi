@@ -105,6 +105,20 @@ test('personal ETA uses validated history in cards and HUD then removes it when 
     expect(state.errors).toEqual([]);
 });
 
+test('starting guidance discards a delayed place quote from planning',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.route('https://overpass.private.coffee/api/interpreter',route=>route.fulfill({json:{elements:[{type:'node',id:991,lat:42.364,lon:-71.068,tags:{amenity:'fuel',name:'Late stop'}}]}}));
+    let release;
+    await page.route('https://router.project-osrm.org/route/v1/driving/**',async route=>{
+        if(new URL(route.request().url()).searchParams.get('alternatives')!=='false')return route.fallback();
+        await new Promise(resolve=>release=resolve);return route.fulfill({status:503,json:{}});
+    });
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-route-fuel').click();
+    await expect.poll(()=>!!release).toBe(true);await page.locator('#live-gps-nav-btn').click();release();
+    await expect(page.locator('#route-place-results')).toContainText('changed');await expect(page.locator('#route-place-results button')).toHaveCount(0);
+    expect(state.errors).toEqual([]);
+});
+
 test('along-route places rank by quoted driving time and require destination review',async({page})=>{
     const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
     await page.route('https://overpass.private.coffee/api/interpreter',route=>route.fulfill({json:{elements:[

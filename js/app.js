@@ -4821,10 +4821,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const route=selectedRouteObj,ko=I18n.getLanguage().startsWith('ko'),container=document.getElementById('route-place-results');
         const start=isLiveNavActive&&navigationRouteProgress.snap?{lat:navigationRouteProgress.snap.lat,lng:navigationRouteProgress.snap.lng}:{...currentStart};
         const end=currentEnd?{...currentEnd}:null;
-        const quoteAt=Date.now(),quoteToll=isTollFreeOnly,quoteGeometry=EtaLearning.routeKey(route);
+        const quoteAt=Date.now(),quoteToll=isTollFreeOnly,quoteGeometry=EtaLearning.routeKey(route),quoteLive=isLiveNavActive;
         // Scene/weather refinement replaces route objects without changing
         // the road. Only a different geometry invalidates these driving quotes.
-        const current=()=>generation===placeSearchGeneration&&!!quoteGeometry&&quoteGeometry===EtaLearning.routeKey(selectedRouteObj)&&!signal.aborted&&TripTools.same(end,currentEnd)&&quoteToll===isTollFreeOnly&&Date.now()-quoteAt<120000&&
+        const current=()=>generation===placeSearchGeneration&&quoteLive===isLiveNavActive&&!!quoteGeometry&&quoteGeometry===EtaLearning.routeKey(selectedRouteObj)&&!signal.aborted&&TripTools.same(end,currentEnd)&&quoteToll===isTollFreeOnly&&Date.now()-quoteAt<120000&&
             (!isLiveNavActive||navigationRouteProgress.result?.isSnapped&&ShadowRouter.calculateDistanceMeters(start.lat,start.lng,navigationRouteProgress.snap.lat,navigationRouteProgress.snap.lng)<100);
         container.replaceChildren();
         if(!route||!currentEnd||isLiveNavActive&&!navigationRouteProgress.result?.isSnapped){container.textContent=ko?'경로와 현재 위치를 먼저 확인하세요.':'Confirm a route and your position first.';return;}
