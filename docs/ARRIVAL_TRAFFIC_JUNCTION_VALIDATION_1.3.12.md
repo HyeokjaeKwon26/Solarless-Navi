@@ -22,7 +22,7 @@
 - 핵심 브라우저: root/www 각 3건, 총 6건 통과. 전면 통제의 초기/최종 경로 차단, 진입점 즐겨찾기 재사용/핀 이동 확인 해제, 도착 미리보기 320px/가로 화면, 차로 화살표/다음 도로 표시 검사.
 - 전체 브라우저: 106건 통과. 화면 회전 후 도착 핀을 다시 화면 안에 맞추는 보정을 추가하고 관련 화면을 재검사했습니다.
 - Android JVM 22건 통과, debug 빌드 성공, lint 0 errors / 기존 19 warnings. npm audit 취약점 0건. root/www 53개 파일 SHA-256 일치.
-- 최종 배포 소스의 전체 검사는 GitHub APK workflow에서 다시 실행하며, 서명·공개 APK·업데이트 정보 확인 결과는 배포 후 기록합니다.
+- 최종 배포 소스의 전체 GitHub 검사와 공개 APK 검증 결과는 아래에 기록했습니다.
 
 ## 실제 폰에서 확인할 항목
 
@@ -40,3 +40,22 @@
 - 실제 통제 지역에서 피드 시각·검증 여부·도로 방향을 현장과 대조. 반대편 차로·고가/지하·평행도로의 잘못된 제외 여부 확인. 무료 피드가 현장을 누락할 수 있습니다.
 - 진단 기록을 켜고 같은 출발지/목적지의 여러 시간대 ETA 오차 수집. 충분한 완주 데이터 없이 ETA 향상을 수치로 주장하지 않습니다.
 
+
+## GitHub 최종 소스 검증
+
+- 배포 소스: `1c8776bd8dcc4f99f0ec93cdc8e3f3126b44512b`.
+- [메인 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40632146480): 성공.
+- [APK 배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40632146867)의 validate 작업: 성공. Node 276/276, 브라우저 106/106, 취약점 0, 웹 파일 53개 일치, Android 검사·빌드 성공.
+- 최종 UI 확인: 미리보기 핀의 화면 내부 유지와 설정 버튼 언어·스타일 검사 4건 추가 통과.
+
+## 공개 APK 검증 완료
+
+- [1.3.12 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.12), [APK 직접 다운로드](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.12/SolarLessNavi-1.3.12.apk).
+- 배포 CI의 validate 및 publish 작업 모두 성공했습니다.
+- 공개 APK를 직접 다운로드해 package `com.solaris.nav`, versionName `1.3.12`, versionCode `16`, release 빌드(debuggable 아님)를 확인했습니다.
+- 크기: 4,403,071 bytes.
+- APK SHA-256: `86042e87962eb08136c482af4942ae146d448e076428e4e0e1f4802173a8ce24`.
+- 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`. 기존 배포 인증서와 동일하며 APK 서명 검증을 통과했습니다.
+- 공개 update.json 및 SHA256SUMS.txt의 해시·크기·인증서가 APK와 일치했습니다.
+- APK 내부 웹 자산 53개가 배포 소스 커밋의 www 파일과 바이트 단위로 일치했습니다.
+- 배송되는 업데이트 코드를 브라우저에서 실행하고 실제 공개 GitHub 응답을 사용했습니다. 설치 정보만 1.3.11/code 15, 1.3.5/code 9로 모의했을 때 1.3.12 업데이트 가능, 1.3.12/code 16에서는 최신 버전으로 표시됐습니다. 이 검사는 실제 Android HTTP 브리지·설치 창·폰 데이터 유지를 검증한 것은 아닙니다.
