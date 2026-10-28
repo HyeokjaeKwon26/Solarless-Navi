@@ -112,7 +112,7 @@ $$O_i=\begin{cases}1,&\text{오차 하한에서도 직달광 차단}\cr0,&\text{
 
 건물 높이는 OSM `height`를 우선합니다. `building:levels`만 있으면 층당 3.2m를 중심값으로 사용하되 3.0–4.5m/층 범위를 함께 검사합니다. 두 태그가 모두 없으면 6m를 중심값으로 두고 3–12m 민감도 범위를 검사합니다. `min_height` 또는 `building:min_level`이 있는 떠 있는 `building:part`는 그 아래 열린 공간을 차광물로 채우지 않고, 태양 광선이 가능한 하단과 상단 사이를 통과할 때만 차광 후보로 봅니다. 이 범위는 통계적 신뢰구간이 아니라 건물 용도·층고 차이를 보수적으로 드러내는 설계 범위입니다. OSM 자체에 건물이 없거나 way가 아닌 복잡한 multipolygon relation으로만 존재하면 현재 전처리에서 누락될 수 있습니다.
 
-지형은 SRTM 1 arc-second 표본과 방향별 지평선 프로필을 사용합니다. NASADEM/SRTM의 상대 수직오차 지침을 따라 v3 장면에서는 ±10m(90% 수준) 범위를 검사합니다. 지형 광선 여유가 +10m보다 크면 확정 차광, -10m보다 작으면 확정 맑음, 그 사이는 불확실로 표시합니다. 수목, 공사, 교량, 옥상 형상, DEM 수평 해상도와 OSM 태그 정확도는 여전히 모델 밖 불확실성입니다.
+지형은 SRTM 1 arc-second 기반 표본과 방향별 지평선 프로필을 사용합니다. 한국의 2026년 OSM 갱신에서 기존 지형 격자는 유지했고, 신규 타일과 신규·형상 변경 건물의 지면 고도에는 Mapzen Terrain Tiles Skadi를 사용했습니다. NASADEM/SRTM의 상대 수직오차 지침을 참고해 v3 장면에서는 ±10m 범위를 검사합니다. 한국 갱신본에 보충한 혼합 출처 Skadi 고도에는 90% 수준이 확인되지 않아 ±10m를 민감도 가정으로만 표시합니다. 지형 광선 여유가 +10m보다 크면 확정 차광, -10m보다 작으면 확정 맑음, 그 사이는 불확실로 표시합니다. 수목, 공사, 교량, 옥상 형상, DEM 수평 해상도와 OSM 태그 정확도는 여전히 모델 밖 불확실성입니다.
 
 - OpenStreetMap [`building:levels`](https://wiki.openstreetmap.org/wiki/Key%3Abuilding%3Alevels)
 - NASA LP DAAC [NASADEM User Guide](https://lpdaac.usgs.gov/documents/592/NASADEM_User_Guide_V1.pdf)
@@ -194,7 +194,9 @@ CSV, JSON과 SVG 그래프도 보고서와 함께 저장됩니다. 재현 명령
 | 미국 Midwest | 43,707 | 899 | [v3](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v3) |
 | 미국 South | 47,566 | 899 | [v3](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v3) |
 | 미국 West | 41,802 | 899 | [v3](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v3) |
-| 대한민국 | 3,961 | 158 | [v3](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-kr-hybrid-v3) |
+| 대한민국 | 4,719 | 160 | [v3, OSM 2026-10-26](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-kr-hybrid-v3-osm-20261026-r2) |
+
+한국 데이터는 2026-10-26 21:24:46 UTC까지의 OSM 추출본을 사용합니다. 기존 v3의 지형 격자를 보존하고 신규 타일과 새로 생성되거나 형상이 바뀐 건물의 지면 고도에는 Mapzen Terrain Tiles Skadi를 사용합니다. 출처와 비교 결과는 [장면 데이터 점검 기록](docs/SCENE_DATA_AUDIT_2026-10-27.md)에 기록합니다.
 
 공개 manifest와 Release 자산은 모두 schema v3입니다. v3는 건물 높이 출처와 민감도 범위, 지형의 상대 수직오차 범위를 보존하며 경계가 불확실한 차광에는 이득을 부여하지 않습니다.
 
@@ -258,7 +260,7 @@ SolarLess Navi는 연구·연습 목적의 실험용 소프트웨어입니다. �
 - 지도 데이터: © OpenStreetMap contributors
 - 도로·건물·터널: OpenStreetMap ODbL
 - 태양 위치: `nrel-spa`와 NREL SPA — 자세한 조건은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-- 지형: SRTM 및 fallback ASTER30m
+- 지형: SRTM, 한국 갱신 타일 일부의 Mapzen Terrain Tiles Skadi 및 fallback ASTER30m
 - 기상예보: Open-Meteo Forecast API — 공급자 표시와 이용 조건은 해당 서비스 정책을 따름
 
 ## 개발자
@@ -280,7 +282,7 @@ SolarLess Navi is an experimental Android-focused navigation app that compares t
 1. **Time mapping:** OSRM step durations are scaled to the route duration to estimate each segment pass time.
 2. **Solar position:** NREL SPA computes zenith and azimuth ([Reda & Andreas](https://doi.org/10.2172/15003974)).
 3. **Clear-sky irradiance and weather:** the Bird model provides the immediate clear-sky baseline ([Bird & Hulstrom](https://doi.org/10.2172/6510849)). Background refinement samples the route at approximately 10 km or 15-minute intervals and obtains 15-minute DNI/direct/diffuse/shortwave radiation plus hourly cloud cover from the [Open-Meteo Forecast API](https://open-meteo.com/en/docs). Overlapping route cells share requests. Forecast values are interpolated to segment pass times. Forecasts are predictions rather than observations and may miss smoke, fog, rapid cloud changes and street-scale microclimate.
-4. **Occlusion and uncertainty:** a sun ray is tested against 2.5D OSM buildings, tunnels and SRTM terrain profiles. A v3 scene confirms shade only when the obstruction remains under the lower height/elevation bound. `building:levels` uses 3.2 m/storey with a 3.0–4.5 m sensitivity envelope; missing heights use 6 m with a 3–12 m envelope. `min_height` and `building:min_level` preserve the open space below floating building parts. Terrain uses a ±10 m relative vertical-error test derived from the NASADEM/SRTM 90% guidance. DEM elevation also supplies the pressure correction used by SPA/Bird when a nearby sample exists. A marginal result is marked uncertain and receives no shade credit. These envelopes are sensitivity bounds, not statistical confidence intervals. Missing buildings, way-only preprocessing of complex multipolygon relations, trees and finite horizontal resolution remain limitations ([NASADEM guide](https://lpdaac.usgs.gov/documents/592/NASADEM_User_Guide_V1.pdf), [Usui](https://doi.org/10.1177/23998083221116117), [GeoClimate](https://doi.org/10.5194/gmd-15-7505-2022)).
+4. **Occlusion and uncertainty:** a sun ray is tested against 2.5D OSM buildings, tunnels and SRTM terrain profiles. A v3 scene confirms shade only when the obstruction remains under the lower height/elevation bound. `building:levels` uses 3.2 m/storey with a 3.0–4.5 m sensitivity envelope; missing heights use 6 m with a 3–12 m envelope. `min_height` and `building:min_level` preserve the open space below floating building parts. Terrain uses a ±10 m sensitivity test informed by NASADEM/SRTM 90% guidance; that confidence level is not established for the mixed-source Skadi elevations added in the Korea refresh. DEM elevation also supplies the pressure correction used by SPA/Bird when a nearby sample exists. A marginal result is marked uncertain and receives no shade credit. These envelopes are sensitivity bounds, not statistical confidence intervals. Missing buildings, way-only preprocessing of complex multipolygon relations, trees and finite horizontal resolution remain limitations ([NASADEM guide](https://lpdaac.usgs.gov/documents/592/NASADEM_User_Guide_V1.pdf), [Usui](https://doi.org/10.1177/23998083221116117), [GeoClimate](https://doi.org/10.5194/gmd-15-7505-2022)).
 5. **Direct-sun duration and energy integration:** a segment contributes to expected direct-sun duration when the sun is above the horizon, forecast or Bird DNI is at least 120 W/m², and scene data does not confirm occlusion. Missing or uncertain occlusion is conservatively counted as exposed:
 
 $$T_{sun}=\sum_i \mathbf{1}[\alpha_i>0\land DNI_i\ge120\land O_i\ne1]\Delta t_i.$$
