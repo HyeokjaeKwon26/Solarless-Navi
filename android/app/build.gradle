@@ -5,6 +5,9 @@ def configuredVersionName = project.findProperty('appVersionName')
 def appRelease = new groovy.json.JsonSlurper().parse(rootProject.file('../app-release.json'))
 
 android {
+    testOptions {
+        unitTests.all { systemProperty 'navigation.units.fixtures', rootProject.file('../tests/fixtures/navigation-units.json').absolutePath }
+    }
     namespace "com.solaris.nav"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {

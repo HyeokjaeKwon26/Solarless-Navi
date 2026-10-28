@@ -1,0 +1,15 @@
+[
+  {"system":"metric","meters":0,"display":"0 m","en":"0 meters","ko":"0미터"},
+  {"system":"metric","meters":90,"display":"90 m","en":"90 meters","ko":"90미터"},
+  {"system":"metric","meters":295,"display":"295 m","en":"300 meters","ko":"300미터"},
+  {"system":"metric","meters":1000,"display":"1.0 km","en":"1.0 kilometers","ko":"1.0킬로미터"},
+  {"system":"metric","meters":2400,"display":"2.4 km","en":"2.4 kilometers","ko":"2.4킬로미터"},
+  {"system":"imperial","meters":0,"display":"0 ft","en":"0 feet","ko":"0피트"},
+  {"system":"imperial","meters":30.48,"display":"100 ft","en":"100 feet","ko":"100피트"},
+  {"system":"imperial","meters":90,"display":"300 ft","en":"300 feet","ko":"300피트"},
+  {"system":"imperial","meters":160,"display":"520 ft","en":"520 feet","ko":"520피트"},
+  {"system":"imperial","meters":160.9344,"display":"0.1 mi","en":"0.1 miles","ko":"0.1마일"},
+  {"system":"imperial","meters":295,"display":"0.2 mi","en":"0.2 miles","ko":"0.2마일"},
+  {"system":"imperial","meters":1609.344,"display":"1.0 mi","en":"1.0 miles","ko":"1.0마일"},
+  {"system":"imperial","meters":2400,"display":"1.5 mi","en":"1.5 miles","ko":"1.5마일"}
+]

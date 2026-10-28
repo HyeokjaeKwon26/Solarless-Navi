@@ -20,6 +20,7 @@ window.TTSVoice = (function () {
     let turnProtectedUntil = 0;
     const spokenStages = new Map();
     let guidancePaused = false;
+    const spokenDistance = meters => window.NavigationUnits.distance(meters, { speech: true, language: currentLang });
 
     function resetGuidance() {
         guidancePaused = false;
@@ -250,8 +251,8 @@ window.TTSVoice = (function () {
 
         const isKorean = currentLang.startsWith('ko');
         const msg = isKorean ?
-            `⚠️ 200미터 앞 서쪽 도로 진입 시 강한 태양 정면 직사광선 발생! 햇빛 가리개를 미리 내려주세요.` :
-            `⚠️ Strong direct sun glare ahead in 200 meters! Please lower your sun visor in advance.`;
+            `⚠️ ${spokenDistance(200)} 앞 서쪽 도로 진입 시 강한 태양 정면 직사광선 발생! 햇빛 가리개를 미리 내려주세요.` :
+            `⚠️ Strong direct sun glare ahead in ${spokenDistance(200)}! Please lower your sun visor in advance.`;
 
         speak(msg, true, 'glare');
     }
@@ -275,17 +276,17 @@ window.TTSVoice = (function () {
             if (bucket === "now") {
                 msg = isKorean ? `잠시 후 역광 우회 도로 진입입니다. 직사광선 주의하세요.` : `Entering glare avoidance route now. Watch out for direct sunlight.`;
             } else if (bucket === "near") {
-                msg = isKorean ? `100미터 앞 역광 위험 구간입니다. 햇빛 가리개를 내려주세요.` : `Heavy sun glare in 100 meters. Please lower your sun visor.`;
+                msg = isKorean ? `${spokenDistance(100)} 앞 역광 위험 구간입니다. 햇빛 가리개를 내려주세요.` : `Heavy sun glare in ${spokenDistance(100)}. Please lower your sun visor.`;
             } else {
-                msg = isKorean ? `300미터 앞 서쪽 역광 우회 도로로 진입합니다.` : `In 300 meters, enter the glare avoidance route.`;
+                msg = isKorean ? `${spokenDistance(300)} 앞 서쪽 역광 우회 도로로 진입합니다.` : `In ${spokenDistance(300)}, enter the glare avoidance route.`;
             }
         } else {
             if (bucket === "now") {
                 msg = isKorean ? `잠시 후 직진 주행입니다.` : `Continue straight ahead now.`;
             } else if (bucket === "near") {
-                msg = isKorean ? `100미터 앞 쾌적한 그늘 도로로 진행합니다.` : `In 100 meters, continue on shaded route.`;
+                msg = isKorean ? `${spokenDistance(100)} 앞 쾌적한 그늘 도로로 진행합니다.` : `In ${spokenDistance(100)}, continue on shaded route.`;
             } else {
-                msg = isKorean ? `300미터 앞 안전 주행 구간입니다.` : `In 300 meters, clear and safe road segment.`;
+                msg = isKorean ? `${spokenDistance(300)} 앞 안전 주행 구간입니다.` : `In ${spokenDistance(300)}, clear and safe road segment.`;
             }
         }
 
@@ -424,7 +425,7 @@ window.TTSVoice = (function () {
             turn += isKo ? `, ${maneuver.exit}번째 출구` : `, take exit ${maneuver.exit}`;
         }
         const road = window.NavigationGuidance.roadLabel(maneuver, isKo);
-        const dist = `${Math.max(10, Math.round(distanceMeters / 10) * 10)}m`;
+        const dist = spokenDistance(distanceMeters);
         const action = road ? (isKo ? `${road} 방면 ${turn}` : `${turn} toward ${road}`) : turn;
         let message = isKo
             ? (stage === 3 ? `곧 ${action}입니다.` : stage === 2 ? `잠시 후 ${action}입니다.` : `${dist} 앞에서 ${action}입니다.`)
@@ -432,14 +433,14 @@ window.TTSVoice = (function () {
         const following = maneuver.following;
         if (stage >= 2 && following && following.distanceAfter <= 180) {
             const nextTurn = getManeuverText(following.type, following.modifier);
-            message += isKo ? ` 이어서 ${Math.round(following.distanceAfter)}m 후 ${nextTurn}입니다.`
-                : ` Then in ${Math.round(following.distanceAfter)}m, ${nextTurn}.`;
+            message += isKo ? ` 이어서 ${spokenDistance(following.distanceAfter)} 후 ${nextTurn}입니다.`
+                : ` Then in ${spokenDistance(following.distanceAfter)}, ${nextTurn}.`;
         }
         speak(message, true, null, 2);
     }
 
     return {
-        resetGuidance, pauseGuidance,
+        resetGuidance, pauseGuidance, refreshUnits: stopSpeech,
         setLanguage: setLanguage,
         toggleMute: toggleMute,
         speak: speak,

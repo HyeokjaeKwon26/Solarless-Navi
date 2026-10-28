@@ -307,6 +307,14 @@
                         <h3 id="drive-options-title"><i class="fa-solid fa-gear"></i> 주행 & 화면 옵션</h3>
                     </div>
                     <div class="card-body">
+                        <div class="navigation-units-setting">
+                            <label for="navigation-units" id="navigation-units-label">거리·속도 단위</label>
+                            <select id="navigation-units">
+                                <option value="auto">현재 위치에 따라 자동</option>
+                                <option value="metric">km / m · km/h</option>
+                                <option value="imperial">mi / ft · mph</option>
+                            </select>
+                        </div>
                         <div class="option-row">
                             <div class="option-label-group">
                                 <span class="option-title" id="auto-dark-title">🕶️ 야간/터널 자동 다크모드</span>
@@ -505,7 +513,7 @@
                             </section>
                             <section class="settings-section" aria-labelledby="offline-section-title">
                                 <h4 id="offline-section-title">오프라인 도로</h4>
-                                <button type="button" id="btn-road-pack" class="nav-btn"><i class="fa-solid fa-download" aria-hidden="true"></i><span id="road-save-label">주변 도로 저장 (약 3km)</span></button>
+                                <button type="button" id="btn-road-pack" class="nav-btn"><i class="fa-solid fa-download" aria-hidden="true"></i><span id="road-save-label">주변 도로 저장</span></button>
                                 <button type="button" id="btn-road-pack-clear" class="nav-btn secondary"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span id="road-delete-label">저장 도로 삭제</span></button>
                                 <small id="road-pack-status" role="status"></small>
                                 <small id="road-pack-help">7일 유효 · 저장 지역에서만 재탐색 · 지도 타일 미포함</small>
@@ -548,7 +556,7 @@
                 <div class="mobile-turn-banner" id="mobile-turn-banner">
                     <div class="banner-icon" id="banner-turn-icon"><i class="fa-solid fa-arrow-turn-up"></i></div>
                     <div class="banner-info">
-                        <div class="turn-dist" id="banner-dist">--m 앞</div>
+                        <div class="turn-dist" id="banner-dist">-- 앞</div>
                         <div class="turn-desc" id="banner-desc"></div>
                         <div id="banner-lanes" hidden></div>
                     </div>
@@ -719,6 +727,7 @@
     <script src="js/road-pack.js"></script>
     <script src="js/native-navigation.js"></script>
     <script src="js/drive-archive.js"></script>
+    <script src="js/navigation-units.js"></script>
     <script src="js/tts-voice.js"></script>
     <script src="js/offline-map.js"></script>
     <script src="js/pip-controller.js"></script>

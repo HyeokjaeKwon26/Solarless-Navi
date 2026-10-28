@@ -187,6 +187,71 @@ async function changeDestination(page, name) {
     await selectDestination(page, name);
 }
 
+for (const country of ['us', 'gb', 'kr']) test(`navigation units stay consistent across speed, routes, turns and preferences in ${country}`, async ({page}) => {
+    const state = await fixtures(page, {brokenMap:true});
+    await page.route('**/reverse?**', route => route.fulfill({json:{display_name:'Unit fixture road',address:{country_code:country}}}));
+    await page.route('https://overpass-api.de/api/interpreter?**', route => route.fulfill({json:{elements:[{type:'way',id:1,tags:{highway:'primary',maxspeed:'30 mph'},geometry:[{lat:42.36,lon:-71.07},{lat:42.37,lon:-71.065}]}]}}));
+    await page.goto('./');
+    await expect(page.locator('#origin-input')).toHaveValue(/Unit fixture road/);
+    const imperial = country !== 'kr';
+    await expect(page.locator('#speed-unit-val')).toHaveText(imperial ? 'mph' : 'km/h');
+    await selectDestination(page,'Alpha');
+    for (const id of ['eta-fastest','eta-glare','eta-shade']) await expect(page.locator('#'+id)).toHaveText(imperial ? '⏱️ 5 min (1.5 mi)' : '⏱️ 5 min (2.4 km)');
+    await page.locator('#btn-map-start-nav').click();
+    await establishReliableGuidance(page);
+    await expect(page.locator('#speed-val')).toHaveText(imperial ? '27' : '43');
+    await expect(page.locator(country === 'us' ? '#limit-val-us' : '#limit-val-kr')).toHaveText(imperial ? '30' : '48');
+    await expect(page.locator('#banner-dist')).toHaveText(imperial ? /In [\d.]+ (mi|ft)/ : /In [\d.]+ (km|m)/);
+    await expect(page.locator('#sum-dist')).toHaveText(imperial ? / mi$/ : / km$/);
+    const rawRemaining = await page.locator('#sum-dist').getAttribute('data-distance-meters');
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#navigation-units').selectOption(imperial ? 'metric' : 'imperial');
+    await expect(page.locator('#speed-unit-val')).toHaveText(imperial ? 'km/h' : 'mph');
+    await expect(page.locator('#speed-val')).toHaveText(imperial ? '43' : '27');
+    await expect(page.locator('#sum-dist')).toHaveText(imperial ? / km$/ : / mi$/);
+    await expect(page.locator('#sum-dist')).toHaveAttribute('data-distance-meters',rawRemaining);
+    await expect(page.locator('#road-save-label')).toContainText(imperial ? '3.0 km' : '1.9 mi');
+    await page.locator('#btn-toggle-lang').click();
+    await expect(page.locator('#navigation-units-label')).toHaveText('거리·속도 단위');
+    await expect(page.locator('#speed-unit-val')).toHaveText(imperial ? 'km/h' : 'mph');
+    await expect(page.locator('#eta-fastest')).toContainText('5분');
+    await page.setViewportSize({width:320,height:740});
+    const box=await page.locator('#navigation-units').boundingBox();
+    expect(box.width).toBeGreaterThan(200);expect(box.x+box.width).toBeLessThanOrEqual(320);
+    await page.screenshot({path:test.info().outputPath(`units-${country}.png`)});
+    await page.reload();
+    await expect(page.locator('#navigation-units')).toHaveValue(imperial ? 'metric' : 'imperial');
+    await expect(page.locator('#speed-unit-val')).toHaveText(imperial ? 'km/h' : 'mph');
+    expect(state.errors).toEqual([]);
+});
+
+test('delayed country correction updates speed number and all units without another GPS tick', async ({page}) => {
+    const state=await fixtures(page,{brokenMap:true});
+    let release; const pending=new Promise(resolve=>release=resolve);
+    await page.route('**/reverse?**',async route=>{await pending;await route.fulfill({json:{display_name:'Corrected country',address:{country_code:'kr'}}});});
+    await page.route('https://overpass-api.de/api/interpreter?**',route=>route.fulfill({json:{elements:[]}}));
+    await page.goto('./');
+    await selectDestination(page,'Alpha');
+    await page.locator('#btn-map-start-nav').click();
+    await establishReliableGuidance(page);
+    await expect(page.locator('#speed-val')).toHaveText('27');
+    await expect(page.locator('#speed-unit-val')).toHaveText('mph');
+    await page.evaluate(()=>{
+        window.unitFrames=[];
+        new MutationObserver(()=>window.unitFrames.push([document.getElementById('speed-val').textContent,document.getElementById('speed-unit-val').textContent])).observe(document.getElementById('speedometer-bottom-left'),{subtree:true,childList:true,characterData:true});
+    });
+    release();
+    await expect(page.locator('#speed-unit-val')).toHaveText('km/h');
+    await expect(page.locator('#speed-val')).toHaveText('43');
+    await expect(page.locator('#eta-fastest')).toContainText('2.4 km');
+    await expect(page.locator('#sum-dist')).toHaveText(/ km$/);
+    await expect(page.locator('#banner-dist')).toHaveText(/In [\d.]+ (km|m)/);
+    const frames=await page.evaluate(()=>window.unitFrames);
+    expect(frames.length).toBeGreaterThan(0);
+    for(const [value,unit] of frames) expect([value,unit]).toEqual(unit === 'mph' ? ['27','mph'] : ['43','km/h']);
+    expect(state.errors).toEqual([]);
+});
+
 async function observePreviewMap(page) {
     await page.route('**/js/leaflet.js', async route => {
         const response = await route.fetch();
@@ -224,7 +289,7 @@ for (const originKind of ['stale GPS','selected address','coarse GPS']) {
             start=places.Bravo;
         }else if(originKind==='stale GPS') await page.waitForTimeout(2200);
         await selectDestination(page,'Alpha');
-        await expect(page.locator('#eta-fastest')).toContainText('5m');
+        await expect(page.locator('#eta-fastest')).toContainText('5 min');
         await expect.poll(async()=> (await previewGeometry(page,start,places.Alpha)).paths).toBeGreaterThan(0);
         const preview=await previewGeometry(page,start,places.Alpha);
         for(const point of preview.endpoints){

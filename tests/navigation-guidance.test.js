@@ -102,11 +102,31 @@ function voice(native = null) {
         speechSynthesis: { cancel() {}, resume() {}, getVoices: () => [], speak: u => spoken.push(u.text) } };
     context.window = context;
     if (native) context.Capacitor = { Plugins: { TextToSpeech: native } };
-    vm.runInNewContext(fs.readFileSync(require.resolve('../js/tts-voice.js'), 'utf8'), context);
-    return { api: context.TTSVoice, spoken, advance: ms => { now += ms; } };
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(require.resolve('../js/navigation-units.js'), 'utf8'), context);
+    vm.runInContext(fs.readFileSync(require.resolve('../js/tts-voice.js'), 'utf8'), context);
+    return { api: context.TTSVoice, units: context.NavigationUnits, spoken, advance: ms => { now += ms; } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const turn = { sequence: 1, type: 'turn', modifier: 'right', location: [1, 2], name: 'Main', exits: '7' };
+
+test('turn and hazard speech use the selected units independently of voice language', async () => {
+    const v = voice();
+    v.units.setCountry('US');
+    v.api.announceTurnManeuver(turn, 295, 60); await flush();
+    assert.match(v.spoken.at(-1), /0.2 miles/);
+    v.api.setLanguage('ko-KR'); v.advance(7000);
+    v.api.announceTurnManeuver({...turn,sequence:2},295,60); await flush();
+    assert.match(v.spoken.at(-1), /0.2마일/);
+    v.api.setLanguage('en-US'); v.advance(7000);
+    v.api.announceTurnManeuver({...turn,sequence:3,following:{type:'turn',modifier:'left',distanceAfter:90}},40,40); await flush();
+    assert.match(v.spoken.at(-1), /Then in 300 feet/);
+    v.advance(7000); v.api.announceNavHazard(100,90,0.8,'New Road'); await flush();
+    assert.match(v.spoken.at(-1), /330 feet/);
+    v.units.setPreference('metric'); v.advance(7000);
+    v.api.announceTurnManeuver({...turn,sequence:4},295,60); await flush();
+    assert.match(v.spoken.at(-1), /300 meters/);
+});
 
 test('highway turn preview starts earlier than city guidance', async () => {
     const v = voice();
@@ -133,7 +153,7 @@ test('critical turn suppresses a same-tick glare utterance and describes the fol
     v.api.speak('Glare warning', true);
     await flush();
     assert.equal(v.spoken.length, 1);
-    assert.match(v.spoken[0], /Then in 90m/);
+    assert.match(v.spoken[0], /Then in 90 meters/);
     v.advance(6100); await v.api.speak('Glare warning', true);
     assert.equal(v.spoken.length, 2);
 });

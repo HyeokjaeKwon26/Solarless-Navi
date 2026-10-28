@@ -864,6 +864,9 @@ body.pip-mode .map-attribution {
 .route-legend-card p { font-size: 12px; line-height: 1.6; color: var(--text-secondary); margin-bottom: 14px; }
 .route-preview-status { background: rgba(15, 23, 42, .94); border: 1px solid #64748b; border-radius: 8px; padding: 6px 10px; font-size: 11px; line-height: 1.4; color: #cbd5e1; }
 .route-preview-status[hidden], body.pip-mode #route-legend-modal { display: none; }
+.navigation-units-setting { display: grid; gap: 8px; margin-bottom: 18px; }
+.navigation-units-setting label { font-weight: 700; }
+.navigation-units-setting select { width: 100%; min-width: 0; min-height: 44px; padding: 10px; color: #e2e8f0; background: #0f172a; border: 1px solid #38bdf8; border-radius: 10px; font: inherit; }
 
 .map-floating-btn.saver-btn { border-color: #a78bfa; color: #a78bfa; }
 .map-floating-btn.saver-btn.active { background: #7c3aed; color: #fff; box-shadow: 0 0 15px rgba(124, 58, 237, 0.7); }

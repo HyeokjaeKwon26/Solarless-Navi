@@ -16,6 +16,7 @@ final class NativeGuidance {
     private JSONArray turns = new JSONArray();
     private int[] phases = new int[0];
     private String language = "en-US";
+    private String unitSystem = "metric";
     private boolean muted, background, uncertain;
     private long lastVoice, revision, lastLocationAt;
     private final java.util.concurrent.ExecutorService io = Executors.newSingleThreadExecutor();
@@ -53,6 +54,7 @@ final class NativeGuidance {
         turns = candidateTurns; phases = new int[turns.length()];
         lastLocationAt = 0; uncertain = false;
         language = snapshot.optString("language", "en-US");
+        unitSystem = "imperial".equals(snapshot.optString("unitSystem")) ? "imperial" : "metric";
     }
     synchronized void configure(JSONObject snapshot) throws JSONException {
         long incoming = snapshot.optLong("revision");
@@ -112,7 +114,7 @@ final class NativeGuidance {
             int phase = NavigationProgress.phase(distance, speed);
             if (phase <= phases[i] || now - lastVoice < 2500) return;
             boolean ko = language.startsWith("ko");
-            String text = (phase == 1 ? (Math.round(distance / 10) * 10) + (ko ? "미터 앞에서 " : " meters ahead, ") : (ko ? "잠시 후 " : "Shortly, ")) + turn.optString("text");
+            String text = (phase == 1 ? GuidanceUnits.spokenDistance(distance, unitSystem, language) + (ko ? " 앞에서 " : " ahead, ") : (ko ? "잠시 후 " : "Shortly, ")) + turn.optString("text");
             if (NavigationSpeech.get(context).speak(text, language, true)) {
                 phases[i] = phase; lastVoice = now;
                 try { DriveJournal.get(context).append("voice", new JSONObject().put("text", text).put("source", "native-background").put("timestamp", now)); } catch (JSONException ignored) { }

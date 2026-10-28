@@ -110,6 +110,7 @@ test('parallel-road ambiguity refuses offline start and competing road suspends 
 });
 test('native route generations prevent a late result from suppressing resync after clear',async()=>{
     const calls=[],pending=[];const window={Capacitor:{Plugins:{Pip:{setGuidanceRoute:r=>{calls.push(r.route.revision);return new Promise(resolve=>pending.push(resolve));},clearGuidanceRoute:r=>{calls.push(r.revision);return Promise.resolve();}}}},NavigationGuidance:{model:()=>({coordinates:points,maneuvers:[]})},TTSVoice:{getLanguage:()=> 'en-US',isMuted:()=>false}};
+    window.NavigationUnits={system:()=> 'metric'};
     vm.runInNewContext(fs.readFileSync('js/native-navigation.js','utf8'),{window,Date});const route={};
     window.NativeNavigation.sync(route);window.NativeNavigation.clear();window.NativeNavigation.sync(route);pending[0]();await Promise.resolve();await Promise.resolve();
     assert.ok(calls[0]<calls[1]&&calls[1]<calls[2]);assert.equal(calls.length,3);pending[1]();

@@ -112,7 +112,7 @@ window.I18n = (function () {
             roadBadgeHighway: "고속도로",
             roadBadgeToll: "유료",
             roadBadgeTollbooth: "요금소",
-            bannerDistPlaceholder: "--m 앞",
+            bannerDistPlaceholder: "-- 앞",
             titleUseGps: "내 GPS 위치로 재설정",
             arrivalTitle: "🏁 목적지 부근에 도착했습니다!",
             arrivalSub: "안전하게 목적지에 도달하여 안내를 마칩니다.",
@@ -230,7 +230,7 @@ window.I18n = (function () {
             sumDistLbl: "Distance left",
             sumGlareLbl: "Estimated Glare Risk",
             sumShadeLbl: "Estimated Shade Possibility",
-            etaPlaceholder: "⏱️ --m",
+            etaPlaceholder: "⏱️ -- min",
             mapStartNav: "Start Nav",
             mapStopNav: "Stop Nav",
             recenterToastTitle: "📍 Recenter Map",
@@ -259,7 +259,7 @@ window.I18n = (function () {
             roadBadgeHighway: "Highway",
             roadBadgeToll: "Toll",
             roadBadgeTollbooth: "Toll Booth",
-            bannerDistPlaceholder: "--m ahead",
+            bannerDistPlaceholder: "-- ahead",
             titleUseGps: "Reset to My GPS Location",
             arrivalTitle: "🏁 Arrived at Destination!",
             arrivalSub: "You have arrived safely. Guidance completed.",
@@ -351,13 +351,13 @@ window.I18n = (function () {
 
         const settingsText = currentLang.startsWith('ko') ? {
             'junction-auto-label': '교차로 자동 확대', 'app-update-section-title': '앱 업데이트', 'check-update-label': '업데이트 확인',
-            'offline-section-title': '오프라인 도로', 'road-save-label': '주변 도로 저장 (약 3km)', 'road-delete-label': '저장 도로 삭제',
+            'offline-section-title': '오프라인 도로', 'road-save-label': '주변 도로 저장', 'road-delete-label': '저장 도로 삭제',
             'road-pack-help': '7일 유효 · 저장 지역에서만 재탐색 · 지도 타일 미포함',
             'diagnostics-section-title': '주행 진단', 'drive-export-label': '기록 내보내기', 'drive-delete-label': '저장 기록 삭제',
             'drive-record-help': '선택 시 위치·시간을 기기에만 기록합니다. 외부 업로드는 없습니다.', 'btn-cancel-update': '다운로드 취소'
         } : {
             'junction-auto-label': 'Junction auto zoom', 'app-update-section-title': 'App update', 'check-update-label': 'Check for updates',
-            'offline-section-title': 'Offline roads', 'road-save-label': 'Save nearby roads (about 3 km)', 'road-delete-label': 'Delete road pack',
+            'offline-section-title': 'Offline roads', 'road-save-label': 'Save nearby roads', 'road-delete-label': 'Delete road pack',
             'road-pack-help': 'Valid for 7 days. Rerouting within saved roads only; map tiles are not included.',
             'diagnostics-section-title': 'Drive diagnostics', 'drive-export-label': 'Export recording', 'drive-delete-label': 'Delete recordings',
             'drive-record-help': 'Opt-in location and time recording on this device. No upload.', 'btn-cancel-update': 'Cancel download'

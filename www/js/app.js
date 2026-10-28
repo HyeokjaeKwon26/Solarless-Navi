@@ -483,7 +483,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentCountry = 'KR';
     let currentCountryCode = null;
-    let currentSpeedUnit = 'km/h';
+    let currentSpeedUnit = NavigationUnits.speedUnit();
+    let lastDisplaySpeedKmh = 0;
+    let lastTurnPresentation = { maneuver: null, glare: 0.05 };
     let currentSpeedLimit = null; // null if no road speed limit data exists
     let lastSpeedLimitFetchTime = 0;
     let lastRoadDataErrorNotice = 0;
@@ -737,6 +739,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         I18n.applyUiLanguage();
+        refreshUnitPresentation();
         TTSVoice.setLanguage(I18n.getLanguage()); // Sync TTS voice language with detected UI language on startup
         updateSunInfo();
         setupSolarRefreshTimer();
@@ -1106,7 +1109,51 @@ document.addEventListener('DOMContentLoaded', () => {
         if (toast) toast.classList.add('hidden');
     }
 
+    function setDistanceLabel(element, meters, long = false, prefix = '') {
+        if (!element) return;
+        element.dataset.distanceMeters = String(Math.max(0, Number(meters) || 0));
+        element.dataset.distanceLong = String(long);
+        element.dataset.distancePrefix = prefix;
+        element.textContent = prefix + NavigationUnits.distance(meters, { long });
+    }
+
+    function renderSpeedDisplay() {
+        // One synchronous render from the same raw sample and unit state.
+        // An asynchronous country result never changes the label alone.
+        currentSpeedUnit = NavigationUnits.speedUnit();
+        document.getElementById('speed-val').textContent = String(NavigationUnits.speed(lastDisplaySpeedKmh));
+        document.getElementById('speed-unit-val').textContent = currentSpeedUnit;
+        if (currentSpeedLimit !== null) {
+            for (const id of ['limit-val-us', 'limit-val-kr']) document.getElementById(id).textContent = String(NavigationUnits.speed(currentSpeedLimit));
+        }
+    }
+
+    function refreshUnitPresentation() {
+        const ko = I18n.getLanguage().startsWith('ko');
+        const selector = document.getElementById('navigation-units');
+        selector.value = NavigationUnits.getPreference();
+        document.getElementById('navigation-units-label').textContent = ko ? '거리·속도 단위' : 'Distance and speed units';
+        selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
+        renderSpeedDisplay();
+        document.querySelectorAll('[data-distance-meters]').forEach(element => setDistanceLabel(element, Number(element.dataset.distanceMeters), element.dataset.distanceLong === 'true', element.dataset.distancePrefix));
+        const summary = document.getElementById('sum-dist');
+        if (!summary.dataset.distanceMeters) summary.textContent = `-- ${NavigationUnits.system() === 'imperial' ? 'mi' : 'km'}`;
+        const radius = NavigationUnits.distance(3000);
+        document.getElementById('road-save-label').textContent = ko ? `주변 도로 저장 (약 ${radius})` : `Save nearby roads (about ${radius})`;
+        if (routeData) updateRouteOptionButtons(routeData);
+        if (isLiveNavActive) {
+            updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare);
+            NativeNavigation.invalidate();
+            if (!isFreeDriveMode && selectedRouteObj && !navigationRouteNeedsReliableOrigin) NativeNavigation.sync(selectedRouteObj);
+        }
+    }
+
     function setupFeatureListeners() {
+        NavigationUnits.onChange(() => {
+            TTSVoice.refreshUnits();
+            refreshUnitPresentation();
+        });
+        document.getElementById('navigation-units').addEventListener('change', event => NavigationUnits.setPreference(event.target.value));
         // Top Left Logo & Top Right Settings Button Listeners
         const btnHeaderHome = document.getElementById('btn-header-home');
         const btnMobileToggle = document.getElementById('mobile-toggle-panel');
@@ -1234,6 +1281,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 I18n.setLanguage(nextLang);
                 refreshRouteLegend();
                 TTSVoice.setLanguage(nextLang);
+                refreshUnitPresentation();
 
                 // Dynamically update solar info and buttons in new language
                 updateSunInfo();
@@ -1249,7 +1297,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 // Update Mobile Turn Banner Language if Active
-                updateTurnBannerText(null, 0.05);
+                updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare);
 
                 // Refresh Active Route Cards & Summary Text if Routes Exist
                 if (routeData) {
@@ -1335,6 +1383,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* TURN BANNER WITH MANEUVER + ESTIMATED GLARE POSSIBILITY OVERLAY */
     function updateTurnBannerText(nextManeuver, glareRisk) {
+        lastTurnPresentation = { maneuver: nextManeuver, glare: glareRisk };
         const banner = document.getElementById('mobile-turn-banner');
         if (!banner) return;
 
@@ -1360,8 +1409,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const following = nextManeuver && nextManeuver.distanceFromCar <= 400 && nextManeuver.following;
         followingElement.hidden = !following || following.distanceAfter > 180;
         followingElement.textContent = followingElement.hidden ? '' : (isKo
-            ? `이어서 ${Math.round(following.distanceAfter)}m 후 ${TTSVoice.getManeuverText(following.type, following.modifier)}`
-            : `Then in ${Math.round(following.distanceAfter)}m, ${TTSVoice.getManeuverText(following.type, following.modifier)}`);
+            ? `이어서 ${NavigationUnits.distance(following.distanceAfter)} 후 ${TTSVoice.getManeuverText(following.type, following.modifier)}`
+            : `Then in ${NavigationUnits.distance(following.distanceAfter)}, ${TTSVoice.getManeuverText(following.type, following.modifier)}`);
         laneElement.hidden = !lanes;
         laneElement.textContent = lanes ? (isKo
             ? `왼쪽부터 ${lanes.valid.join(', ')}번 차로 이용 · 총 ${lanes.total}차로`
@@ -1377,9 +1426,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (nextManeuver && nextManeuver.type !== 'arrive') {
             const dist = nextManeuver.distanceFromCar || 0;
-            const formattedDist = dist >= 1000
-                ? (dist / 1000).toFixed(1) + 'km'
-                : Math.round(dist) + 'm';
+            const formattedDist = NavigationUnits.distance(dist);
             const distPrefix = isKo ? `${formattedDist} 앞` : `In ${formattedDist}`;
 
             if (bannerDist) bannerDist.innerText = distPrefix;
@@ -1705,10 +1752,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (results && results.length > 0) {
             const nearest = results[0];
-            const distKm = nearest.distKm ? nearest.distKm.toFixed(1) : "0.5";
+            const distanceText = NavigationUnits.distance(Number.isFinite(nearest.distKm) ? nearest.distKm * 1000 : 500);
             const confirmMsg = isKo ?
-                `☕ 근처 그늘 쉼터 발견!\n\n장소: ${nearest.shortTitle || nearest.displayName}\n거리: 약 ${distKm}km\n\n이 그늘 쉼터를 경유지로 지정하시겠습니까?` :
-                `☕ Nearby Shaded Rest Area Found!\n\nPlace: ${nearest.shortTitle || nearest.displayName}\nDistance: ~${distKm}km\n\nSet this shaded spot as your waypoint?`;
+                `☕ 근처 그늘 쉼터 발견!\n\n장소: ${nearest.shortTitle || nearest.displayName}\n거리: 약 ${distanceText}\n\n이 그늘 쉼터를 경유지로 지정하시겠습니까?` :
+                `☕ Nearby Shaded Rest Area Found!\n\nPlace: ${nearest.shortTitle || nearest.displayName}\nDistance: ~${distanceText}\n\nSet this shaded spot as your waypoint?`;
 
             const confirmWaypoint = confirm(confirmMsg);
 
@@ -1718,7 +1765,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 TTSVoice.speak(isKo ? "근처 그늘 쉼터 경로를 계산합니다." : "Calculating a route to the nearby shaded rest area.");
             }
         } else {
-            alert(isKo ? "현재 위치 주변 2km 이내에 등록된 그늘 쉼터/주차장을 찾을 수 없습니다." : "No shaded rest spots found within 2km.");
+            alert(isKo ? `현재 위치 주변 ${NavigationUnits.distance(2000)} 이내에 등록된 그늘 쉼터/주차장을 찾을 수 없습니다.` : `No shaded rest spots found within ${NavigationUnits.distance(2000)}.`);
         }
     }
 
@@ -2576,7 +2623,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (status) {
             const ageSec = Math.max(0, Math.round((Date.now() - gpsLastFixAt) / 1000));
             status.title = radius > 0
-                ? `${gpsLastFixSource} · ±${Math.round(radius)}m · ${ageSec}s`
+                ? `${gpsLastFixSource} · ±${NavigationUnits.distance(radius)} · ${ageSec}s`
                 : `${gpsLastFixSource} · ${ageSec}s`;
         }
     }
@@ -2599,6 +2646,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const lat = Number(coords && coords.latitude);
         const lng = Number(coords && coords.longitude);
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('Invalid GPS fix');
+        NavigationUnits.setCountry(Geocoder.detectCountry(lat, lng, Geocoder.getCachedCountryCode(lat, lng)));
         const accuracy = Number(coords.accuracy);
         if (Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0) {
             currentHeading = Number(coords.heading);
@@ -2658,8 +2706,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     lastGpsUncertainNoticeAt = Date.now();
                     const isKo = I18n.getLanguage().startsWith('ko');
                     showApiNotice(isKo
-                        ? `GPS 정확도가 낮아(약 ±${Math.round(initialAccuracy)}m) 근사 위치에서 시작합니다. 더 정확한 신호가 들어오면 경로와 안내 위치를 자동 보정합니다.`
-                        : `GPS accuracy is low (about ±${Math.round(initialAccuracy)}m). Starting from an approximate position and refining guidance when a better fix arrives.`);
+                        ? `GPS 정확도가 낮아(약 ±${NavigationUnits.distance(initialAccuracy)}) 근사 위치에서 시작합니다. 더 정확한 신호가 들어오면 경로와 안내 위치를 자동 보정합니다.`
+                        : `GPS accuracy is low (about ±${NavigationUnits.distance(initialAccuracy)}). Starting from an approximate position and refining guidance when a better fix arrives.`);
                 }
                 const lat = currentStart.lat;
                 const lng = currentStart.lng;
@@ -2676,6 +2724,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 Promise.resolve().then(async () => {
                     let addr = '';
                     try { addr = await Geocoder.reverseGeocode(lat, lng); } catch (e) { /* GPS fix remains valid if address lookup fails. */ }
+                    if (currentStart?.lat === lat && currentStart?.lng === lng) NavigationUnits.setCountry(Geocoder.detectCountry(lat, lng, Geocoder.getCachedCountryCode(lat, lng)));
                     const input = document.getElementById('origin-input');
                     const myLocLabel = I18n.getLanguage().startsWith('ko') ? "🎯 내 위치" : "🎯 My Location";
                     if (input) input.value = `${myLocLabel}: ${addr}`;
@@ -3420,7 +3469,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const distanceEl = document.getElementById('sum-dist');
         const destinationEl = document.getElementById('sum-destination');
         if (arrivalEl) arrivalEl.innerText = formatArrivalTime(seconds);
-        if (distanceEl) distanceEl.innerText = `${(Math.max(0, Number(remainingMeters) || 0) / 1000).toFixed(1)} km`;
+        setDistanceLabel(distanceEl, remainingMeters, true);
         // Avoid the ambiguous single-letter "m", which is normally read as
         // metres in a driving HUD. Korean uses its full minute unit as well.
         if (durationEl) durationEl.innerText = window.RouteState && typeof RouteState.formatRemainingDuration === 'function'
@@ -3857,27 +3906,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const glrMin = Math.max(1, Math.round(glr.durationSec / 60));
         const shdMin = Math.max(1, Math.round(shd.durationSec / 60));
 
-        const fstKm = (fst.distanceMeters / 1000).toFixed(1);
-        const glrKm = (glr.distanceMeters / 1000).toFixed(1);
-        const shdKm = (shd.distanceMeters / 1000).toFixed(1);
-
-        const fstKmNum = parseFloat(fstKm);
-        const glrKmNum = parseFloat(glrKm);
-        const shdKmNum = parseFloat(shdKm);
-
-        function formatRouteDetourText(routeMin, routeKmStr, fstMin, fstKmStr) {
+        function formatRouteDetourText(routeMin, routeMeters, fstMin, fstMeters) {
             const diffMin = routeMin - fstMin;
-            const diffKmVal = (parseFloat(routeKmStr) - parseFloat(fstKmStr));
-            const diffKmStr = Math.abs(diffKmVal).toFixed(1);
-            const hasDistDiff = Math.abs(diffKmVal) >= 0.05;
+            const diffMeters = routeMeters - fstMeters;
+            const hasDistDiff = Math.abs(diffMeters) >= 50;
 
             if (diffMin > 0) {
-                return `+${diffMin}${isKo ? '분 우회' : 'min detour'}`;
+                return `+${diffMin}${isKo ? '분 우회' : ' min detour'}`;
             } else if (diffMin < 0) {
-                return `${diffMin}${isKo ? '분 단축' : 'min faster'}`;
+                return `${diffMin}${isKo ? '분 단축' : ' min faster'}`;
             } else {
                 if (hasDistDiff) {
-                    const sign = diffKmVal > 0 ? `+${diffKmStr}km` : `-${diffKmStr}km`;
+                    const sign = `${diffMeters > 0 ? '+' : '-'}${NavigationUnits.distance(Math.abs(diffMeters))}`;
                     return isKo ? `시간 동일 (${sign})` : `Same time (${sign})`;
                 } else {
                     return isKo ? '최단과 동일' : 'Same as fastest';
@@ -3922,7 +3962,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         // 1. Fastest Route (OSRM baseline: estimated glare and solar exposure)
-        document.getElementById('eta-fastest').innerText = `⏱️ ${fstMin}${isKo ? '분' : 'm'} (${fstKm}km)`;
+        document.getElementById('eta-fastest').innerText = `⏱️ ${fstMin}${isKo ? '분' : ' min'} (${NavigationUnits.distance(fst.distanceMeters, { long: true })})`;
         const fstDesc = document.getElementById('desc-fastest');
         if (fstDesc) {
             fstDesc.innerText = isKo
@@ -3944,8 +3984,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // 2. Glare-Free Route (estimated glare possibility and solar exposure)
         const glrDiffText = glr.id === fst.id
             ? (isKo ? '최단시간 경로와 동일 · 탐색한 후보 중 허용 우회시간 내 역광 감소 기준을 충족한 경로가 없습니다.' : 'Same as fastest · No explored alternative met the glare-reduction and detour limits.')
-            : formatRouteDetourText(glrMin, glrKmNum, fstMin, fstKmNum);
-        document.getElementById('eta-glare').innerText = `⏱️ ${glrMin}${isKo ? '분' : 'm'} (${glrKm}km)`;
+            : formatRouteDetourText(glrMin, glr.distanceMeters, fstMin, fst.distanceMeters);
+        document.getElementById('eta-glare').innerText = `⏱️ ${glrMin}${isKo ? '분' : ' min'} (${NavigationUnits.distance(glr.distanceMeters, { long: true })})`;
 
         const glrDesc = document.getElementById('desc-glare');
         if (glrDesc) {
@@ -3961,8 +4001,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // 3. Shade Route (estimated shade possibility and solar exposure)
         const shdDiffText = shd.id === fst.id
             ? (isKo ? '최단시간 경로와 동일 · 탐색한 후보 중 허용 우회시간 내 햇빛 노출 감소 기준을 충족한 경로가 없습니다.' : 'Same as fastest · No explored alternative met the sun-exposure and detour limits.')
-            : formatRouteDetourText(shdMin, shdKmNum, fstMin, fstKmNum);
-        document.getElementById('eta-shade').innerText = `⏱️ ${shdMin}${isKo ? '분' : 'm'} (${shdKm}km)`;
+            : formatRouteDetourText(shdMin, shd.distanceMeters, fstMin, fst.distanceMeters);
+        document.getElementById('eta-shade').innerText = `⏱️ ${shdMin}${isKo ? '분' : ' min'} (${NavigationUnits.distance(shd.distanceMeters, { long: true })})`;
 
         const shdDesc = document.getElementById('desc-shade');
         if (shdDesc) {
@@ -4223,7 +4263,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('sum-time').innerText = "--:--";
         document.getElementById('sum-destination').innerText = "--";
         document.getElementById('sum-duration').innerText = "--";
-        document.getElementById('sum-dist').innerText = "-- km";
+        delete document.getElementById('sum-dist').dataset.distanceMeters;
+        document.getElementById('sum-dist').innerText = `-- ${NavigationUnits.system() === 'imperial' ? 'mi' : 'km'}`;
         resetRouteOptionCards();
         setNavigationButtonsEnabled(false);
     }
@@ -4235,7 +4276,7 @@ document.addEventListener('DOMContentLoaded', () => {
             glare: isKo ? '목적지를 설정하면 계산합니다' : 'Set a destination to calculate',
             shade: isKo ? '목적지를 설정하면 계산합니다' : 'Set a destination to calculate'
         };
-        const etaPlaceholder = isKo ? '⏱️ --분' : '⏱️ --m';
+        const etaPlaceholder = isKo ? '⏱️ --분' : '⏱️ -- min';
         [['eta-fastest', etaPlaceholder], ['eta-glare', etaPlaceholder], ['eta-shade', etaPlaceholder]].forEach(([id, value]) => {
             const element = document.getElementById(id); if (element) element.innerText = value;
         });
@@ -4388,7 +4429,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const distTag = document.createElement('span');
                     distTag.className = 'dist-tag';
                     distTag.style.cssText = 'color:#fbbf24; font-size:11px; font-weight:700;';
-                    distTag.textContent = `📍 ${res.distKm < 1 ? Math.round(res.distKm * 1000) + 'm' : res.distKm.toFixed(1) + 'km'}`;
+                    setDistanceLabel(distTag, res.distKm * 1000, false, '📍 ');
                     titleRow.appendChild(distTag);
                 }
                 const address = document.createElement('div');
@@ -4619,7 +4660,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const stopBadgeUs = document.getElementById('us-stop-sign-badge');
         const valKr = document.getElementById('limit-val-kr');
         const valUs = document.getElementById('limit-val-us');
-        const unitVal = document.getElementById('speed-unit-val');
 
         // Reuse the reverse-geocoder ISO code for this quantized GPS cell.
         // The geocoder resolves and caches it when it is not available, while
@@ -4664,8 +4704,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Store speed limits internally in km/h; localize only the display.
-        currentSpeedUnit = roadData.unit || ((currentCountry === 'US' || currentCountry === 'GB') ? 'mph' : 'km/h');
-        if (unitVal) unitVal.innerText = currentSpeedUnit;
+        NavigationUnits.setCountry(currentCountry);
+        renderSpeedDisplay();
 
         // US STOP Sign Badge Display Control
         if (stopBadgeUs) {
@@ -4682,9 +4722,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : (Number.isFinite(Number(roadData.speedLimit)) ? Number(roadData.speedLimit) : null);
         if (normalizedLimitKmh !== null && normalizedLimitKmh > 0) {
             currentSpeedLimit = normalizedLimitKmh;
-            const displayLimit = currentSpeedUnit === 'mph'
-                ? Math.round(normalizedLimitKmh / 1.609344)
-                : Math.round(normalizedLimitKmh);
+            const displayLimit = NavigationUnits.speed(normalizedLimitKmh);
 
             if (currentCountry === 'US') {
                 // US MUTCD Rectangular White Sign
@@ -4752,8 +4790,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
         const kmh = getPositionSpeedKmh(pos);
-        const displaySpeed = currentSpeedUnit === 'mph' ? Math.round(kmh * 0.621371) : Math.round(kmh);
-        speedEl.innerText = displaySpeed;
+        lastDisplaySpeedKmh = kmh;
+        NavigationUnits.setCountry(Geocoder.detectCountry(lat, lng, Geocoder.getCachedCountryCode(lat, lng)));
+        renderSpeedDisplay();
         updateSpeedLimitDisplay(lat, lng);
         // Speed comparison remains in km/h regardless of the display unit.
         checkSpeedingHazard(kmh);
@@ -4764,9 +4803,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isKo = I18n.getLanguage().startsWith('ko');
         const now = Date.now();
         const unitText = currentSpeedUnit;
-        const displayLimit = currentSpeedLimit === null ? 0 : (currentSpeedUnit === 'mph'
-            ? Math.round(currentSpeedLimit * 0.621371)
-            : Math.round(currentSpeedLimit));
+        const displayLimit = currentSpeedLimit === null ? 0 : NavigationUnits.speed(currentSpeedLimit);
 
         // Both operands are normalized km/h. Conversion is presentation-only.
         if (currentSpeedLimit !== null && currentSpeedKmh > currentSpeedLimit) {
@@ -4798,7 +4835,6 @@ document.addEventListener('DOMContentLoaded', () => {
         TTSVoice.speak(isKo ? "목적지 부근에 도착했습니다. 안내를 종료합니다." : "You have arrived at your destination. Navigation guidance completed.", true, null, 3);
 
         const durTotalMin = Math.max(1, Math.round((Date.now() - (navStartTime || Date.now())) / 60000));
-        const distTotalKm = ((navStartDistanceMeters || 0) / 1000).toFixed(1);
 
         const destNameEl = document.getElementById('arrival-dest-name');
         if (destNameEl) destNameEl.innerText = destinationName || (isKo ? "목적지" : "Destination");
@@ -4807,7 +4843,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (timeValEl) timeValEl.innerText = `${durTotalMin} ${isKo ? '분' : 'min'}`;
 
         const distValEl = document.getElementById('arrival-val-dist');
-        if (distValEl) distValEl.innerText = `${distTotalKm} km`;
+        setDistanceLabel(distValEl, navStartDistanceMeters || 0, true);
 
         const modeValEl = document.getElementById('arrival-val-mode');
         if (modeValEl) {
