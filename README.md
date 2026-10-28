@@ -190,15 +190,15 @@ CSV, JSON과 SVG 그래프도 보고서와 함께 저장됩니다. 재현 명령
 
 | 권역 | 5 km 타일 | 참조 ZIP | 새 릴리스 ZIP | Release |
 |:--|--:|--:|--:|:--|
-| 미국 Northeast | 15,445 | 770 | 6 | [v3, multipolygon 추가 검토](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028) |
-| 미국 Midwest | 44,083 | 935 | 15 | [v3, multipolygon 추가 검토](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028) |
+| 미국 Northeast | 15,445 | 770 | 1 | [v3, 외곽 추가 검토](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028-rings-20261028) |
+| 미국 Midwest | 44,083 | 935 | 3 | [v3, 외곽 추가 검토](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028-rings-20261028) |
 | 미국 South | 48,034 | 1,044 | 27 | [v3, multipolygon 추가 검토](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028) |
 | 미국 West | 42,227 | 930 | 21 | [v3, multipolygon 추가 검토](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028) |
 | 대한민국 | 4,719 | 160 | 160 | [v3, OSM 2026-10-26](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-kr-hybrid-v3-osm-20261026-r2) |
 
 한국 데이터는 2026-10-26 21:24:46 UTC, 미국 네 권역은 2026-10-27 21:23:59 UTC까지의 OSM 추출본을 사용합니다. 기존 v3의 지형 격자를 보존하고 신규 타일과 새로 생성되거나 형상이 바뀐 건물의 지면 고도에는 Mapzen Terrain Tiles Skadi를 사용합니다. 출처와 비교 결과는 [한국과 기존 미국 점검 기록](docs/SCENE_DATA_AUDIT_2026-10-27.md)과 [미국 갱신 및 경로 비교](docs/US_SCENE_UPDATE_2026-10-27.md)에 기록합니다.
 
-미국 네 권역에는 안뜰을 보존한 건물 multipolygon 관계도 포함합니다. 새 manifest는 이번 릴리스와 이전 세 릴리스의 ZIP을 함께 참조하므로 네 릴리스를 모두 보존해야 합니다. 검증·제외 내역과 경로 비교는 [multipolygon 점검 기록](docs/US_MULTIPOLYGON_UPDATE_2026-10-28.md), [미적용 항목 재검토](docs/US_MULTIPOLYGON_RECHECK_2026-10-28.md), [미해결 항목 추가 검토](docs/US_MULTIPOLYGON_FOLLOWUP_2026-10-28.md)에 있습니다.
+미국 네 권역에는 안뜰을 보존한 건물 multipolygon 관계도 포함합니다. Northeast와 Midwest manifest는 이번 릴리스와 이전 네 릴리스, South와 West는 이번 릴리스와 이전 세 릴리스의 ZIP을 참조하므로 해당 릴리스를 모두 보존해야 합니다. 검증·제외 내역과 경로 비교는 [multipolygon 점검 기록](docs/US_MULTIPOLYGON_UPDATE_2026-10-28.md), [미적용 항목 재검토](docs/US_MULTIPOLYGON_RECHECK_2026-10-28.md), [미해결 항목 추가 검토](docs/US_MULTIPOLYGON_FOLLOWUP_2026-10-28.md) 및 [472개 후속 검토](docs/US_MULTIPOLYGON_REMAINING_472_2026-10-28.md)에 있습니다.
 
 공개 manifest와 Release 자산은 모두 schema v3입니다. v3는 건물 높이 출처와 민감도 범위, 지형의 상대 수직오차 범위를 보존하며 경계가 불확실한 차광에는 이득을 부여하지 않습니다.
 

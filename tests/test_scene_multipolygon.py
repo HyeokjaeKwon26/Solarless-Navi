@@ -25,9 +25,25 @@ select_spec.loader.exec_module(select)
 dedup_spec = importlib.util.spec_from_file_location('deduplicate_followup', FILE.parent / 'deduplicate-followup-relations.py')
 dedup = importlib.util.module_from_spec(dedup_spec)
 dedup_spec.loader.exec_module(dedup)
+remaining_spec = importlib.util.spec_from_file_location('remaining_multipolygon_rings', FILE.parent / 'audit-remaining-building-rings.py')
+remaining = importlib.util.module_from_spec(remaining_spec)
+remaining_spec.loader.exec_module(remaining)
 
 
 class MultipolygonAssemblyTest(unittest.TestCase):
+    def test_remaining_ring_audit_excludes_overlaps_and_shared_geometry(self):
+        a = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])
+        b = Polygon([(1, 0), (3, 0), (3, 2), (1, 2)])
+        c = Polygon([(4, 0), (5, 0), (5, 1), (4, 1)])
+        d = Polygon([(6, 0), (7, 0), (7, 1), (6, 1)])
+        e = Polygon([(8, 0), (9, 0), (9, 1), (8, 1)])
+        eligible, excluded = remaining.independent_rings([(1, a), (2, b), (3, c), (4, d), (5, e)], {3}, [d], lambda _: [])
+        self.assertEqual([ident for ident, _ in eligible], [5])
+        by_id = {row['wayId']: row['reasons'] for row in excluded}
+        self.assertIn('overlaps_another_outer_ring', by_id[1])
+        self.assertIn('shared_with_applied_relation', by_id[3])
+        self.assertIn('overlaps_existing_nested_child', by_id[4])
+
     def test_equal_geometry_with_equal_height_is_added_only_once(self):
         from shapely.geometry import MultiPolygon, mapping
         with tempfile.TemporaryDirectory() as tmp:

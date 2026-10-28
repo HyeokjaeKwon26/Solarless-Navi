@@ -10,16 +10,19 @@ const { unzipSync } = require('fflate');
 const [region, workspaceArg] = process.argv.slice(2);
 if (!region || !workspaceArg || !/^us-(northeast|midwest|south|west)$/.test(region)) throw new Error('Expected region and workspace');
 const workspace = path.resolve(workspaceArg);
-const followup = process.env.SCENE_OVERLAY_FOLLOWUP === 'true';
+const last = process.env.SCENE_OVERLAY_LAST === 'true';
+const followup = last || process.env.SCENE_OVERLAY_FOLLOWUP === 'true';
 const incremental = followup || process.env.SCENE_OVERLAY_INCREMENTAL === 'true';
-const audit = path.join(workspace, `${followup ? 'multipolygon-followup' : incremental ? 'multipolygon-recheck' : 'multipolygon'}-${region}`);
+const audit = path.join(workspace, `${last ? 'multipolygon-last' : followup ? 'multipolygon-followup' : incremental ? 'multipolygon-recheck' : 'multipolygon'}-${region}`);
 const output = path.join(audit, 'release'), old = path.join(workspace, `build-${region}`, 'release');
 const prior = path.join(workspace, `multipolygon-${region}`, 'release');
 const recheck = path.join(workspace, `multipolygon-recheck-${region}`, 'release');
+const followupDir = path.join(workspace, `multipolygon-followup-${region}`, 'release');
 const manifest = JSON.parse(fs.readFileSync(path.join(output, 'manifest.json')));
-const oldManifest = JSON.parse(fs.readFileSync(path.join(followup ? recheck : incremental ? prior : old, 'manifest.json')));
+const oldManifest = JSON.parse(fs.readFileSync(path.join(last ? followupDir : followup ? recheck : incremental ? prior : old, 'manifest.json')));
 const originalManifest = incremental ? JSON.parse(fs.readFileSync(path.join(old, 'manifest.json'))) : null;
 const previousManifest = followup ? JSON.parse(fs.readFileSync(path.join(prior, 'manifest.json'))) : null;
+const recheckManifest = last ? JSON.parse(fs.readFileSync(path.join(recheck, 'manifest.json'))) : null;
 const expected = new Map();
 for (const [key, tile] of Object.entries(manifest.tiles)) {
     const identity = `${tile.pack}:${tile.file}`;
@@ -30,10 +33,10 @@ const seen = new Set(), localNames = new Set(['manifest.json']);
 let count = 0, relationPieces = 0;
 for (const [key, pack] of Object.entries(manifest.packs)) {
     const parts = String(pack.path).split('/');
-    if (parts.length !== 2 || ![manifest.releaseTag, oldManifest.releaseTag, originalManifest?.releaseTag, previousManifest?.releaseTag].includes(parts[0]) || parts[1] !== path.basename(parts[1])) {
+    if (parts.length !== 2 || ![manifest.releaseTag, oldManifest.releaseTag, originalManifest?.releaseTag, previousManifest?.releaseTag, recheckManifest?.releaseTag].includes(parts[0]) || parts[1] !== path.basename(parts[1])) {
         throw new Error(`Unexpected pack path ${pack.path}`);
     }
-    const directory = parts[0] === manifest.releaseTag ? output : (followup && parts[0] === oldManifest.releaseTag ? recheck : (parts[0] === previousManifest?.releaseTag || (!followup && incremental && parts[0] === oldManifest.releaseTag)) ? prior : old);
+    const directory = parts[0] === manifest.releaseTag ? output : (last && parts[0] === oldManifest.releaseTag ? followupDir : (parts[0] === recheckManifest?.releaseTag || (!last && followup && parts[0] === oldManifest.releaseTag)) ? recheck : (parts[0] === previousManifest?.releaseTag || (!followup && incremental && parts[0] === oldManifest.releaseTag)) ? prior : old);
     if (directory === output) localNames.add(parts[1]);
     const bytes = fs.readFileSync(path.join(directory, parts[1]));
     if (bytes.length !== pack.bytes || crypto.createHash('sha256').update(bytes).digest('hex') !== pack.sha256 || bytes.length > manifest.maxPackBytes) {

@@ -12,24 +12,26 @@ const { unzipSync, zipSync } = require('fflate');
 const [region, workspaceArg] = process.argv.slice(2);
 if (!region || !workspaceArg || !/^us-(northeast|midwest|south|west)$/.test(region)) throw new Error('Expected region and workspace');
 const workspace = path.resolve(workspaceArg);
-const followup = process.env.SCENE_OVERLAY_FOLLOWUP === 'true';
+const last = process.env.SCENE_OVERLAY_LAST === 'true';
+const followup = last || process.env.SCENE_OVERLAY_FOLLOWUP === 'true';
 const incremental = followup || process.env.SCENE_OVERLAY_INCREMENTAL === 'true';
-const auditDir = path.join(workspace, `${followup ? 'multipolygon-followup' : incremental ? 'multipolygon-recheck' : 'multipolygon'}-${region}`);
+const auditDir = path.join(workspace, `${last ? 'multipolygon-last' : followup ? 'multipolygon-followup' : incremental ? 'multipolygon-recheck' : 'multipolygon'}-${region}`);
 const oldDir = path.join(workspace, `build-${region}`, 'release');
 const priorDir = path.join(workspace, `multipolygon-${region}`, 'release');
 const recheckDir = path.join(workspace, `multipolygon-recheck-${region}`, 'release');
+const followupDir = path.join(workspace, `multipolygon-followup-${region}`, 'release');
 const changedDir = path.join(auditDir, 'changed-tiles');
 const output = path.join(auditDir, 'release');
 const baseline = JSON.parse(fs.readFileSync(path.join('data', 'scene', region, 'manifest.json')));
 const overlay = JSON.parse(fs.readFileSync(path.join(auditDir, 'overlay-audit.json')));
 const assembly = JSON.parse(fs.readFileSync(path.join(auditDir, 'assembly-audit.json')));
 const prep = JSON.parse(fs.readFileSync(path.join(auditDir, 'scene-preparation-audit.json')));
-const tag = `scene-${region}-hybrid-v3-osm-20261027-multipolygon${incremental ? '-recheck-20261028' : ''}${followup ? '-followup-20261028' : ''}`;
+const tag = `scene-${region}-hybrid-v3-osm-20261027-multipolygon${incremental ? '-recheck-20261028' : ''}${followup ? '-followup-20261028' : ''}${last ? '-rings-20261028' : ''}`;
 const baseTag = baseline.releaseTag;
 const originalTag = incremental ? baseline.packaging?.baselineReleaseTag : null;
 if (incremental && (!baseline.sourceMetadata?.multipolygon || !originalTag)) throw new Error('Missing multipolygon baseline provenance');
 const baselineDirs = new Map();
-if (incremental) for (const dir of [oldDir, priorDir, ...(followup ? [recheckDir] : [])]) {
+if (incremental) for (const dir of [oldDir, priorDir, ...(followup ? [recheckDir] : []), ...(last ? [followupDir] : [])]) {
     const meta = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json')));
     baselineDirs.set(meta.releaseTag, dir);
 }
@@ -173,7 +175,10 @@ const values = Object.values(packs), sizes = values.map(value => value.bytes);
 const manifest = { ...baseline, releaseTag: tag,
     baseUrl: 'https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download',
     generatedAt: new Date().toISOString(),
-    sourceMetadata: { ...baseline.sourceMetadata, multipolygon: followup
+    sourceMetadata: { ...baseline.sourceMetadata, multipolygon: last
+        ? { ...baseline.sourceMetadata.multipolygon, remainingRings: { baselineReleaseTag: baseTag,
+            method: 'validated disjoint closed outer rings from incomplete relations', assembly, prep, overlay } }
+        : followup
         ? { ...baseline.sourceMetadata.multipolygon, followup: { baselineReleaseTag: baseTag,
             method: 'add disjoint untagged components while retaining independently tagged outer ways', assembly, prep, overlay } }
         : incremental

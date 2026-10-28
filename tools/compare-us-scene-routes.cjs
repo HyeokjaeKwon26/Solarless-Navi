@@ -15,13 +15,17 @@ const requestedRegion = process.env.SCENE_COMPARISON_REGION || null;
 const multipolygonComparison = process.env.SCENE_COMPARISON_MULTIPOLYGON === 'true';
 const recheckComparison = process.env.SCENE_COMPARISON_RECHECK === 'true';
 const followupComparison = process.env.SCENE_COMPARISON_FOLLOWUP === 'true';
+const lastComparison = process.env.SCENE_COMPARISON_LAST === 'true';
 if (recheckComparison && !multipolygonComparison) throw new Error('Recheck comparison requires multipolygon mode');
 if (followupComparison && !recheckComparison) throw new Error('Followup comparison requires recheck mode');
+if (lastComparison && !followupComparison) throw new Error('Last comparison requires followup mode');
 if (requestedRegion && !allRegions.includes(requestedRegion)) throw new Error('Invalid comparison region');
 const regionIds = requestedRegion ? [requestedRegion] : allRegions;
 const manifests = {}, directories = {}, tags = {};
 for (const id of regionIds) {
-    const directory = followupComparison
+    const directory = lastComparison
+        ? (version === 'old' ? path.join(workspace, `multipolygon-followup-${id}`, 'release') : path.join(workspace, `multipolygon-last-${id}`, 'release'))
+        : followupComparison
         ? (version === 'old' ? path.join(workspace, `multipolygon-recheck-${id}`, 'release') : path.join(workspace, `multipolygon-followup-${id}`, 'release'))
         : recheckComparison
         ? (version === 'old' ? path.join(workspace, `multipolygon-${id}`, 'release') : path.join(workspace, `multipolygon-recheck-${id}`, 'release'))
@@ -43,6 +47,11 @@ for (const id of regionIds) {
             const recheckDir = path.join(workspace, `multipolygon-recheck-${id}`, 'release');
             const recheck = JSON.parse(fs.readFileSync(path.join(recheckDir, 'manifest.json')));
             directories[recheck.releaseTag] = recheckDir;
+            if (lastComparison) {
+                const followedDir = path.join(workspace, `multipolygon-followup-${id}`, 'release');
+                const followed = JSON.parse(fs.readFileSync(path.join(followedDir, 'manifest.json')));
+                directories[followed.releaseTag] = followedDir;
+            }
         }
     } else if (multipolygonComparison && version === 'new') {
         const previousDir = path.join(workspace, `build-${id}`, 'release');

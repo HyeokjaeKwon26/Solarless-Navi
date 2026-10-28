@@ -98,6 +98,21 @@ test('overlay package reuses immutable packs and publishes changed packs under t
         assert.equal(checkedFollowup.status, 0, checkedFollowup.stderr);
         assert.equal(JSON.parse(fs.readFileSync(path.join(followup, 'validation.json'))).relationPieces, 3);
         assert.equal(JSON.parse(fs.readFileSync(path.join(followup, 'release', 'manifest.json'))).packaging.baselineReleaseTags.length, 3);
+
+        fs.writeFileSync(path.join(data, 'manifest.json'), fs.readFileSync(path.join(followup, 'release', 'manifest.json')));
+        const last = path.join(root, `multipolygon-last-${region}`), lastTiles = path.join(last, 'changed-tiles');
+        fs.mkdirSync(lastTiles, { recursive: true });
+        changedTile.buildings.push({ id: 'relation/4/piece/0' });
+        fs.writeFileSync(path.join(lastTiles, '1_0.json'), JSON.stringify(changedTile));
+        fs.writeFileSync(path.join(last, 'overlay-audit.json'), JSON.stringify({ changedExistingTiles: 1, newTiles: 0 }));
+        for (const name of ['assembly-audit.json', 'scene-preparation-audit.json']) fs.writeFileSync(path.join(last, name), '{}');
+        const lastEnv = { ...process.env, SCENE_OVERLAY_LAST: 'true' };
+        const packagedLast = spawnSync(process.execPath, [script, region, root], { cwd: root, encoding: 'utf8', env: lastEnv });
+        assert.equal(packagedLast.status, 0, packagedLast.stderr);
+        const checkedLast = spawnSync(process.execPath, [validator, region, root], { cwd: root, encoding: 'utf8', env: lastEnv });
+        assert.equal(checkedLast.status, 0, checkedLast.stderr);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(last, 'validation.json'))).relationPieces, 4);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(last, 'release', 'manifest.json'))).packaging.baselineReleaseTags.length, 4);
     } finally {
         assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep));
         fs.rmSync(root, { recursive: true, force: true });

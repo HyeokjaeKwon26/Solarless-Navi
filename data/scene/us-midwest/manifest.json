@@ -1,7 +1,7 @@
 {
   "schema": 3,
   "region": "US Midwest",
-  "releaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
+  "releaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028-rings-20261028",
   "baseUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download",
   "tileSizeM": 5000,
   "tilePaddingMeters": 4500,
@@ -145,6 +145,34 @@
           "missingHgtFiles": [],
           "voidHgtFiles": []
         }
+      },
+      "remainingRings": {
+        "baselineReleaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
+        "method": "validated disjoint closed outer rings from incomplete relations",
+        "assembly": {
+          "method": "independent valid outer rings from malformed relation or non-overlapping outer members beside already-applied child",
+          "reviewed": 89,
+          "selected": 4
+        },
+        "prep": {
+          "relations": 4,
+          "pieces": 10,
+          "replaced_way_references": 0,
+          "rejected": 0
+        },
+        "overlay": {
+          "region": "us-midwest",
+          "candidates": 4,
+          "appliedRelations": 4,
+          "pieces": 10,
+          "removedWays": 0,
+          "changedExistingTiles": 3,
+          "newTiles": 0,
+          "blockedRelations": 0,
+          "holesSupported": true,
+          "missingHgtFiles": [],
+          "voidHgtFiles": []
+        }
       }
     }
   },
@@ -154,7 +182,7 @@
   "osmPbfSha256": "a2de95c1612d5c06bb3a911af336a930e483a1122eea5390414fc3c2eb64b7ec",
   "demDataset": "Original v3 SRTM grids for existing tiles; Mapzen Terrain Tiles Skadi for new tiles and new or changed building ground",
   "demDatasetVersion": "v3 grids preserved; Mapzen Skadi fetched 2026-10-28 UTC",
-  "generatedAt": "2026-10-28T05:42:32.447Z",
+  "generatedAt": "2026-10-28T05:54:58.532Z",
   "schemaVersion": 3,
   "packWidth": null,
   "maxPackBytes": 10485760,
@@ -209,10 +237,11 @@
     "preserveDenseGroups": true,
     "maxAdaptivePackSpanTiles": 8,
     "maxReleaseAssets": 1000,
-    "baselineReleaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
-    "reusedBaselinePacks": 920,
-    "newlyPublishedPacks": 15,
+    "baselineReleaseTag": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
+    "reusedBaselinePacks": 932,
+    "newlyPublishedPacks": 3,
     "baselineReleaseTags": [
+      "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
       "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
       "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon",
       "scene-us-midwest-hybrid-v3-osm-20261027"
@@ -221,8 +250,8 @@
   "stats": {
     "tileCount": 44083,
     "packCount": 935,
-    "releaseAssetCount": 16,
-    "totalBytes": 1395753374,
+    "releaseAssetCount": 4,
+    "totalBytes": 1395754356,
     "minPackBytes": 9200,
     "maxPackBytes": 10484563
   },
@@ -2945,9 +2974,9 @@
       }
     },
     "-266_-16--257_31-814284496b": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--266_-16--257_31-814284496b.zip",
-      "bytes": 4987071,
-      "sha256": "626f703e0b27f391a3daeae24d0e20fbb3a94eef80cb9ae5b42d7ba05e00ad56",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028-rings-20261028/scene-us-midwest--266_-16--257_31-814284496b.zip",
+      "bytes": 4987122,
+      "sha256": "ee2c252cd13f269d0b1f4f2bdf260e3c5a4a9d63ea159f55503a462699315a79",
       "tiles": 254,
       "density": "multipolygon-updated",
       "bounds": {
@@ -3829,9 +3858,9 @@
       }
     },
     "-229_8--209_63-5f466a6142": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--229_8--209_63-5f466a6142.zip",
-      "bytes": 6451879,
-      "sha256": "3eba77c92ac50a955e22e7a781bd5c1c5ed230bdcacbd79f2cfcb3a90521ddc3",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028-rings-20261028/scene-us-midwest--229_8--209_63-5f466a6142.zip",
+      "bytes": 6452616,
+      "sha256": "e8fe53bb53f4728d6bd7265a884cde4fb4e90c9a74a2fab54531730e1da6c218",
       "tiles": 278,
       "density": "multipolygon-updated",
       "bounds": {
@@ -10134,9 +10163,9 @@
       }
     },
     "-82_42--81_43-5a321df558": {
-      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon/scene-us-midwest--82_42--81_43-5a321df558.zip",
-      "bytes": 1764162,
-      "sha256": "c6f8c716eb1d6c5931d64a3762364730c101a165b279ec3739b35be59f3bf34d",
+      "path": "scene-us-midwest-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028-rings-20261028/scene-us-midwest--82_42--81_43-5a321df558.zip",
+      "bytes": 1764356,
+      "sha256": "ef2780ed2cc18e374a473352674bbf84b34e2bcbfee0d60f12b97d97becd7739",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -188717,5 +188746,5 @@
       "file": "-95_-2.json"
     }
   },
-  "manifestHash": "58d1e96f86dc45d5278cfaf73c48f2bc6d471b4b985fa25b261d07f53da0a6d6"
+  "manifestHash": "967f418507e4fc28c7d5e21389a3416cb52ed3f0feb971637b924517fde77128"
 }

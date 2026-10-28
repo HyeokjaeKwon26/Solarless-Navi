@@ -1,7 +1,7 @@
 {
   "schema": 3,
   "region": "US Northeast",
-  "releaseTag": "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
+  "releaseTag": "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028-rings-20261028",
   "baseUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download",
   "tileSizeM": 5000,
   "tilePaddingMeters": 4500,
@@ -148,6 +148,34 @@
           "missingHgtFiles": [],
           "voidHgtFiles": []
         }
+      },
+      "remainingRings": {
+        "baselineReleaseTag": "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
+        "method": "validated disjoint closed outer rings from incomplete relations",
+        "assembly": {
+          "method": "independent valid outer rings from malformed relation or non-overlapping outer members beside already-applied child",
+          "reviewed": 66,
+          "selected": 1
+        },
+        "prep": {
+          "relations": 1,
+          "pieces": 1,
+          "replaced_way_references": 0,
+          "rejected": 0
+        },
+        "overlay": {
+          "region": "us-northeast",
+          "candidates": 1,
+          "appliedRelations": 1,
+          "pieces": 1,
+          "removedWays": 0,
+          "changedExistingTiles": 1,
+          "newTiles": 0,
+          "blockedRelations": 0,
+          "holesSupported": true,
+          "missingHgtFiles": [],
+          "voidHgtFiles": []
+        }
       }
     }
   },
@@ -157,7 +185,7 @@
   "osmPbfSha256": "4b253ef4cc7d85e3dc265146c09c08c0cf829c6ebaa344166e1216e51dc7dd8c",
   "demDataset": "Original v3 SRTM grids for existing tiles; Mapzen Terrain Tiles Skadi for new tiles and new or changed building ground",
   "demDatasetVersion": "v3 grids preserved; Mapzen Skadi fetched 2026-10-28 UTC",
-  "generatedAt": "2026-10-28T05:46:47.415Z",
+  "generatedAt": "2026-10-28T05:54:55.906Z",
   "schemaVersion": 3,
   "packWidth": null,
   "maxPackBytes": 10485760,
@@ -212,10 +240,11 @@
     "preserveDenseGroups": true,
     "maxAdaptivePackSpanTiles": 8,
     "maxReleaseAssets": 1000,
-    "baselineReleaseTag": "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
-    "reusedBaselinePacks": 764,
-    "newlyPublishedPacks": 6,
+    "baselineReleaseTag": "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
+    "reusedBaselinePacks": 769,
+    "newlyPublishedPacks": 1,
     "baselineReleaseTags": [
+      "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028",
       "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028",
       "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon",
       "scene-us-northeast-hybrid-v3-osm-20261027"
@@ -224,8 +253,8 @@
   "stats": {
     "tileCount": 15445,
     "packCount": 770,
-    "releaseAssetCount": 7,
-    "totalBytes": 1040009193,
+    "releaseAssetCount": 2,
+    "totalBytes": 1040009530,
     "minPackBytes": 11524,
     "maxPackBytes": 7833330
   },
@@ -3910,9 +3939,9 @@
       }
     },
     "108_56-109_57-d76a383f51": {
-      "path": "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon/scene-us-northeast-108_56-109_57-d76a383f51.zip",
-      "bytes": 977662,
-      "sha256": "5a65f478ec6598f090bed39faafd8702cd4044ac97e4e7532d3081a938d63684",
+      "path": "scene-us-northeast-hybrid-v3-osm-20261027-multipolygon-recheck-20261028-followup-20261028-rings-20261028/scene-us-northeast-108_56-109_57-d76a383f51.zip",
+      "bytes": 977999,
+      "sha256": "0d9f5d59597eb8175bc2dee4c03cb36c8472316de0eb90275ace8253374c147f",
       "tiles": 4,
       "density": "multipolygon-updated",
       "bounds": {
@@ -72023,5 +72052,5 @@
       "file": "233_177.json"
     }
   },
-  "manifestHash": "34a9f4bdd9e99ae44f261df7a5239f53556d5fb07c24341dbca66a20743e8d81"
+  "manifestHash": "6c54dad952befd4dd30b653253a9b72eba1a38987f1478de8c6810a41d5fcdc4"
 }
