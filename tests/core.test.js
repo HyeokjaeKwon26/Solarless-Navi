@@ -3176,9 +3176,11 @@ test('South Korea precomputed scene coverage is registered and packaged within r
     assert.equal(manifest.region, 'South Korea');
     assert.equal(manifest.schema, 3);
     assert.equal(manifest.dataVersion, 'hybrid-scene-v3');
-    assert.equal(manifest.releaseTag, 'scene-kr-hybrid-v3');
-    assert.equal(manifest.stats.tileCount, 3961);
-    assert.equal(manifest.stats.packCount, 158);
+    assert.equal(manifest.releaseTag, 'scene-kr-hybrid-v3-osm-20261026-r2');
+    assert.equal(manifest.osmExtractTimestamp, '2026-10-26T21:24:46Z');
+    assert.equal(manifest.uncertaintyModel.terrain.confidenceLevel, null);
+    assert.equal(manifest.stats.tileCount, 4719);
+    assert.equal(manifest.stats.packCount, 160);
     assert.ok(manifest.stats.releaseAssetCount <= 900);
     assert.ok(manifest.stats.maxPackBytes < 10 * 1024 * 1024);
     assert.deepEqual(manifest.grid, { latOrigin: 32, lngOrigin: 124, cosLat: 0.8090169943749475 });
