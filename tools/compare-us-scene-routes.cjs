@@ -12,22 +12,34 @@ if (!['old', 'new'].includes(version) || !workspaceArg || !outputArg) throw new 
 const workspace = path.resolve(workspaceArg), output = path.resolve(outputArg);
 const allRegions = ['us-northeast', 'us-midwest', 'us-south', 'us-west'];
 const requestedRegion = process.env.SCENE_COMPARISON_REGION || null;
+const multipolygonComparison = process.env.SCENE_COMPARISON_MULTIPOLYGON === 'true';
 if (requestedRegion && !allRegions.includes(requestedRegion)) throw new Error('Invalid comparison region');
 const regionIds = requestedRegion ? [requestedRegion] : allRegions;
 const manifests = {}, directories = {}, tags = {};
 for (const id of regionIds) {
-    const directory = version === 'old' ? path.join(workspace, id) : path.join(workspace, `build-${id}`, 'release');
-    const manifestPath = version === 'old' ? path.join(root, 'data', 'scene', id, 'manifest.json') : path.join(directory, 'manifest.json');
+    const directory = multipolygonComparison
+        ? (version === 'old' ? path.join(workspace, `build-${id}`, 'release') : path.join(workspace, `multipolygon-${id}`, 'release'))
+        : (version === 'old' ? path.join(workspace, id) : path.join(workspace, `build-${id}`, 'release'));
+    const manifestPath = multipolygonComparison || version === 'new' ? path.join(directory, 'manifest.json')
+        : path.join(root, 'data', 'scene', id, 'manifest.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath));
     manifests[id] = manifestPath; directories[manifest.releaseTag] = directory; tags[id] = manifest.releaseTag;
+    if (multipolygonComparison && version === 'new') {
+        const previousDir = path.join(workspace, `build-${id}`, 'release');
+        const previous = JSON.parse(fs.readFileSync(path.join(previousDir, 'manifest.json')));
+        directories[previous.releaseTag] = previousDir;
+    }
 }
 
 globalThis.window = globalThis;
 globalThis.self = globalThis;
-globalThis.fflate = require('fflate');
+const runtimeRoot = process.env.SCENE_COMPARISON_RUNTIME_ROOT ? path.resolve(process.env.SCENE_COMPARISON_RUNTIME_ROOT) : null;
+const fflatePath = runtimeRoot ? path.join(runtimeRoot, 'fflate.cjs') : require.resolve('fflate');
+const spaPath = runtimeRoot ? path.join(runtimeRoot, 'spa.cjs') : path.join(root, 'node_modules', 'nrel-spa', 'lib', 'spa.cjs');
+globalThis.fflate = require(fflatePath);
 globalThis.Worker = undefined;
 globalThis.DebugLogger = { log() {} };
-globalThis.NrelSpaCore = require(path.join(root, 'node_modules', 'nrel-spa', 'lib', 'spa.cjs'));
+globalThis.NrelSpaCore = require(spaPath);
 globalThis.SolarPhysics = require(path.join(codeRoot, 'js', 'solar-physics.js'));
 globalThis.SunCalc = require(path.join(codeRoot, 'js', 'suncalc.js'));
 globalThis.SceneShadow = require(path.join(codeRoot, 'js', 'scene-shadow.js'));
@@ -74,8 +86,8 @@ const hashFile = file => crypto.createHash('sha256').update(fs.readFileSync(file
 const codeHashes = Object.fromEntries(['scene-shadow.js', 'shadow-router.js', 'solar-physics.js', 'suncalc.js']
     .map(file => [file, hashFile(path.join(codeRoot, 'js', file))]));
 const runtimeHashes = {
-    spa: hashFile(path.join(root, 'node_modules', 'nrel-spa', 'lib', 'spa.cjs')),
-    fflate: hashFile(require.resolve('fflate')),
+    spa: hashFile(spaPath),
+    fflate: hashFile(fflatePath),
     node: process.version
 };
 if (cache.candidateStrategy !== 'app-direct-plus-via-v1') throw new Error('Unexpected archived candidate strategy');

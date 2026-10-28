@@ -188,15 +188,17 @@ CSV, JSON과 SVG 그래프도 보고서와 함께 저장됩니다. 재현 명령
 
 미국과 한국 경로에서는 필요한 5 km 타일만 GitHub Release에서 받아 기기에 캐시합니다. 경로가 권역 경계를 지나면 여러 manifest를 병합합니다. ZIP 전체를 객체로 유지하지 않고 필요한 JSON 항목만 선택적으로 해제·파싱합니다.
 
-| 권역 | 5 km 타일 | ZIP 자산 | Release |
-|:--|--:|--:|:--|
-| 미국 Northeast | 15,445 | 770 | [v3, OSM 2026-10-27](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v3-osm-20261027) |
-| 미국 Midwest | 44,074 | 899 | [v3, OSM 2026-10-27](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v3-osm-20261027) |
-| 미국 South | 48,025 | 999 | [v3, OSM 2026-10-27](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v3-osm-20261027) |
-| 미국 West | 42,218 | 899 | [v3, OSM 2026-10-27](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v3-osm-20261027) |
-| 대한민국 | 4,719 | 160 | [v3, OSM 2026-10-26](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-kr-hybrid-v3-osm-20261026-r2) |
+| 권역 | 5 km 타일 | 참조 ZIP | 새 릴리스 ZIP | Release |
+|:--|--:|--:|--:|:--|
+| 미국 Northeast | 15,445 | 770 | 686 | [v3, multipolygon](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v3-osm-20261027-multipolygon) |
+| 미국 Midwest | 44,083 | 935 | 613 | [v3, multipolygon](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v3-osm-20261027-multipolygon) |
+| 미국 South | 48,034 | 1,044 | 999 | [v3, multipolygon](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v3-osm-20261027-multipolygon) |
+| 미국 West | 42,227 | 930 | 725 | [v3, multipolygon](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v3-osm-20261027-multipolygon) |
+| 대한민국 | 4,719 | 160 | 160 | [v3, OSM 2026-10-26](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-kr-hybrid-v3-osm-20261026-r2) |
 
 한국 데이터는 2026-10-26 21:24:46 UTC, 미국 네 권역은 2026-10-27 21:23:59 UTC까지의 OSM 추출본을 사용합니다. 기존 v3의 지형 격자를 보존하고 신규 타일과 새로 생성되거나 형상이 바뀐 건물의 지면 고도에는 Mapzen Terrain Tiles Skadi를 사용합니다. 출처와 비교 결과는 [한국과 기존 미국 점검 기록](docs/SCENE_DATA_AUDIT_2026-10-27.md)과 [미국 갱신 및 경로 비교](docs/US_SCENE_UPDATE_2026-10-27.md)에 기록합니다.
+
+미국 네 권역에는 안뜰을 보존한 건물 multipolygon 관계도 포함합니다. 새 manifest는 변경된 ZIP과 함께 2026-10-27 갱신 릴리스의 변경되지 않은 ZIP을 참조하므로 두 릴리스를 함께 보존해야 합니다. 검증·제외 내역과 경로 비교는 [multipolygon 점검 기록](docs/US_MULTIPOLYGON_UPDATE_2026-10-28.md)에 있습니다.
 
 공개 manifest와 Release 자산은 모두 schema v3입니다. v3는 건물 높이 출처와 민감도 범위, 지형의 상대 수직오차 범위를 보존하며 경계가 불확실한 차광에는 이득을 부여하지 않습니다.
 

@@ -1,0 +1,4 @@
+# Offline OSM multipolygon audit and geometry processing; not app runtime dependencies.
+osmium==4.3.2
+shapely==2.1.2
+numpy==2.5.4

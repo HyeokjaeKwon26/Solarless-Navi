@@ -13,6 +13,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const parseOSM = require('osm-pbf-parser');
@@ -828,7 +829,11 @@ async function main() {
     await writeTiles();
 }
 
-main().catch(error => {
-    console.error(error && error.stack || error);
-    process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    main().catch(error => {
+        console.error(error && error.stack || error);
+        process.exitCode = 1;
+    });
+}
+
+export { parseHeightModel, normalizeMinHeightEnvelope };

@@ -102,6 +102,9 @@ function indexRelease(region, oldDir, dbFile) {
     try {
         eachOldTile(manifest, oldDir, tile => {
             for (const b of tile.buildings || []) {
+                if (String(b.id || '').startsWith('relation/')) {
+                    throw new Error('Baseline contains multipolygon relation pieces; use a relation-aware refresh to avoid silently dropping them');
+                }
                 const result = building.run(objectId(b.id), footprintHash(b.polygon), b.ground == null ? null : Number(b.ground));
                 addedBuildings += Number(result.changes);
             }
