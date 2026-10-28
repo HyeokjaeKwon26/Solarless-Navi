@@ -653,7 +653,7 @@ async function speechSettingsFixture(page,{missing=false,delayed=false}={}) {
         window.Capacitor={Plugins:{Pip:{
             getSpeechSettings:async()=>{window.speechReads++;return get();},
             setSpeechSettings:async({settings})=>{if(window.speechSaveFailure)throw Error('SAVE_FAILED');localStorage.setItem('native-speech-fixture',JSON.stringify(settings));return get();},
-            stopFocusedSpeech:async()=>{},speakFocused:async request=>{window.speechRequests.push({...request,saved:get().settings});return {accepted:true};}
+            stopFocusedSpeech:async()=>{},speakFocused:async request=>{window.speechRequests.push({...request,saved:get().settings,planned:NavigationGuidance.voicePlan(request.segments,request.lang,get().settings.unifiedVoice)});return {accepted:true};}
         }}};
     },{missing,delayed});
     return state;
@@ -671,8 +671,9 @@ test('voice settings persist separately by language and previews use the saved n
     await page.locator('#btn-preview-en').click();await expect.poll(()=>page.evaluate(()=>window.speechRequests.length)).toBe(2);
     const requests=await page.evaluate(()=>window.speechRequests);
     expect(requests.map(r=>r.lang)).toEqual(['ko-KR','en-US']);
-    for(const r of requests)expect(r.saved).toEqual({koVoice:'engine:ko1',enVoice:'engine:en2',rate:.8,pitch:1.2});
-    expect(requests[0].segments.every(s=>s.lang==='ko-KR')).toBe(true);
+    for(const r of requests)expect(r.saved).toEqual({koVoice:'engine:ko1',enVoice:'engine:en2',rate:.8,pitch:1.2,unifiedVoice:true});
+    expect(requests[0].planned.every(s=>s.lang==='ko-KR')).toBe(true);
+    expect(requests[0].planned[0].text).toContain('Harvard Avenue');
     await page.locator('#btn-toggle-lang').click();await expect(page.locator('#speech-settings-title')).toHaveText('안내 목소리');
     await expect(page.locator('#speech-voice-en')).toHaveValue('engine:en2');
     await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#speech-voice-ko')).toBeEnabled();
@@ -680,6 +681,31 @@ test('voice settings persist separately by language and previews use the saved n
     await expect(page.locator('#speech-rate-value')).toHaveText('0.80×');await expect(page.locator('#speech-pitch-value')).toHaveText('1.20×');
     await page.locator('#btn-reset-voices').click();await expect(page.locator('#speech-rate-value')).toHaveText('1.00×');
     await expect(page.locator('#speech-voice-ko')).toHaveValue('');await expect(page.locator('#speech-voice-en')).toHaveValue('');expect(state.errors).toEqual([]);
+});
+
+test('voice nicknames, tone notes and unified mixed guidance persist without exposing raw codes in choices',async({page})=>{
+    const state=await speechSettingsFixture(page);await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await page.evaluate(()=>{speechCatalogue[0]={...speechCatalogue[0],name:'ko-kr-x-ism-local',quality:400,latency:200};speechCatalogue[1]={...speechCatalogue[1],name:'en-us-x-iob-local',quality:400,latency:200};});
+    await page.locator('#btn-refresh-voices').click();await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await expect(page.locator('#speech-voice-ko option[value="engine:ko1"]')).toContainText('Garam');
+    await expect(page.locator('#speech-voice-en option[value="engine:en1"]')).toContainText('Alex');
+    await expect(page.locator('#speech-voice-ko')).not.toContainText('ko-kr-x-ism');
+    await page.locator('#speech-voice-ko').selectOption('engine:ko1');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await expect(page.locator('#speech-details-ko')).toContainText('High');await expect(page.locator('#speech-details-ko')).toContainText('Fast');
+    await page.locator('#speech-note-ko').fill('Low male <test>');await page.locator('#speech-note-ko').dispatchEvent('change');
+    await expect(page.locator('#speech-voice-ko option:checked')).toContainText('Low male <test>');
+    await page.locator('#speech-voice-en').selectOption('engine:en1');await expect(page.locator('#speech-voice-en')).toBeEnabled();
+    await page.locator('#btn-preview-ko').click();await expect.poll(()=>page.evaluate(()=>speechRequests.length)).toBe(1);
+    expect(await page.evaluate(()=>speechRequests[0].planned.map(p=>p.lang))).toEqual(['ko-KR']);
+    await page.locator('#speech-mode').selectOption('separate');await expect(page.locator('#speech-mode')).toBeEnabled();
+    await page.locator('#btn-preview-ko').click();await expect.poll(()=>page.evaluate(()=>speechRequests.length)).toBe(2);
+    expect(await page.evaluate(()=>speechRequests[1].planned.map(p=>p.lang))).toEqual(['ko-KR','en-US','ko-KR']);
+    await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#speech-mode')).toHaveValue('separate');
+    await expect(page.locator('#speech-note-ko')).toHaveValue('Low male <test>');
+    await page.locator('#speech-mode').selectOption('unified');await expect(page.locator('#speech-mode')).toBeEnabled();
+    await page.locator('#btn-preview-ko').click();await expect.poll(()=>page.evaluate(()=>speechRequests.length)).toBe(1);
+    expect(await page.evaluate(()=>speechRequests[0].planned.length)).toBe(1);expect(state.errors).toEqual([]);
 });
 
 test('missing voices and failed saves are explicit and refresh restores native truth',async({page})=>{
@@ -699,7 +725,7 @@ test('voice settings fit narrow and landscape screens and mute prevents previews
     await expect(page.locator('#speech-voice-ko')).toBeEnabled();
     for(const size of [{width:320,height:740},{width:640,height:320}]){
         await page.setViewportSize(size);
-        for(const id of ['speech-voice-ko','speech-voice-en','speech-rate','speech-pitch','btn-preview-ko','btn-preview-en','btn-reset-voices','btn-refresh-voices']){
+        for(const id of ['speech-mode','speech-voice-ko','speech-voice-en','speech-note-ko','speech-note-en','speech-rate','speech-pitch','btn-preview-ko','btn-preview-en','btn-reset-voices','btn-refresh-voices']){
             const control=page.locator('#'+id);await control.scrollIntoViewIfNeeded();const box=await control.boundingBox();
             expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(size.width+1);expect(box.height).toBeGreaterThanOrEqual(44);
         }

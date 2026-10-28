@@ -3,12 +3,13 @@
     else root.VoiceSettings=factory(root);
 })(typeof window!=='undefined'?window:globalThis,function(root){
     'use strict';
-    const defaults={koVoice:'',enVoice:'',rate:1,pitch:1};
+    const defaults={koVoice:'',enVoice:'',rate:1,pitch:1,unifiedVoice:true};
     const bound=(value,min,max)=>typeof value==='number'&&Number.isFinite(value)?Math.max(min,Math.min(max,value)):1;
-    function normalize(value={}){return {koVoice:typeof value?.koVoice==='string'&&value.koVoice.length<=1024?value.koVoice:'',enVoice:typeof value?.enVoice==='string'&&value.enVoice.length<=1024?value.enVoice:'',rate:bound(value?.rate,.5,1.5),pitch:bound(value?.pitch,.75,1.5)};}
+    function normalize(value={}){return {koVoice:typeof value?.koVoice==='string'&&value.koVoice.length<=1024?value.koVoice:'',enVoice:typeof value?.enVoice==='string'&&value.enVoice.length<=1024?value.enVoice:'',rate:bound(value?.rate,.5,1.5),pitch:bound(value?.pitch,.75,1.5),unifiedVoice:value?.unifiedVoice!==false};}
     const matches=(lang,voice)=>String(voice.lang||'').toLowerCase().split(/[-_]/)[0]===lang.split('-')[0];
     function selected(config,language,voices){const id=language.startsWith('ko')?config.koVoice:config.enVoice;return voices.find(v=>v.id===id&&matches(language,v))||null;}
     let config={...defaults},catalog=[],ready=false,busy=false,initialized=false,canPreview=()=>true;
+    let notes=Object.create(null);
     const native=()=>root?.Capacitor?.Plugins?.Pip?.getSpeechSettings?root.Capacitor.Plugins.Pip:null;
     const ko=()=>root.I18n?.getLanguage().startsWith('ko');
     const label=(a,b)=>ko()?a:b;
@@ -22,22 +23,37 @@
         if(!initialized)return;
         const text={
             'speech-settings-title':label('안내 목소리','Guidance voices'),
-            'speech-ko-label':label('한국어 목소리','Korean voice'),'speech-en-label':label('영어 목소리 · 영어 도로명','English voice · English road names'),
+            'speech-ko-label':config.unifiedVoice?label('한국어 안내 · 영문 도로명 포함','Korean guidance · includes English road names'):label('한국어 목소리','Korean voice'),
+            'speech-en-label':config.unifiedVoice?label('영어 안내 목소리','English guidance voice'):label('영어 목소리 · 영어 도로명','English voice · English road names'),
+            'speech-mode-label':label('한영 혼합 안내','Mixed-language guidance'),
+            'speech-mode-help':config.unifiedVoice
+                ?label('선택한 안내 목소리로 문장 전체를 읽습니다. 영어 발음은 해당 음성 엔진에 따라 달라집니다.','Reads the whole instruction with the selected guidance voice. English pronunciation depends on that voice engine.')
+                :label('한국어와 영어를 각각 선택한 목소리로 읽습니다. 도로명에서 음색이 바뀔 수 있습니다.','Uses the selected Korean and English voices separately. The tone can change at road names.'),
             'btn-preview-ko':label('한국어 미리 듣기','Preview Korean'),'btn-preview-en':label('영어 미리 듣기','Preview English'),
             'speech-rate-label':label('말하기 속도 · 두 언어 공통','Speech rate · both languages'),
             'speech-pitch-label':label('음높이 · 두 언어 공통','Pitch · both languages'),
             'btn-reset-voices':label('음성 설정 초기화','Reset voice settings'),'btn-refresh-voices':label('목소리 목록 새로고침','Refresh voices'),
-            'speech-settings-help':label('폰의 음성 엔진에 있는 목소리입니다. 인터넷 필요 표시를 확인하세요. Android 앱에서는 PiP·화면 꺼짐에도 설정이 유지됩니다. 엔진을 바꿨다면 앱을 다시 켜 주세요.','Uses your phone’s speech engine. Check the Internet label. The Android app keeps these settings in PiP and with the screen off. Restart the app after changing engines.')
+            'speech-settings-help':label('가람·Alex 등은 구분용 별칭입니다. 성별·음색은 미리 듣기로 확인하고 메모해 두세요. 품질·응답은 엔진 제공 등급입니다. 인터넷용은 연결이 필요합니다. Android에서는 PiP·화면 꺼짐에도 설정을 유지합니다. 엔진 변경 후 앱을 다시 켜 주세요.','Garam, Alex and similar names are app nicknames. Preview each voice and note its tone. Quality and response are engine-reported ratings. Online voices need a connection. Android keeps settings in PiP and with the screen off. Restart after changing engines.')
         };
         for(const [id,value] of Object.entries(text))el(id).textContent=value;
+        el('speech-mode').value=config.unifiedVoice?'unified':'separate';
+        el('speech-mode').options[0].textContent=label('한 목소리로 통일 (기본)','One voice throughout (default)');
+        el('speech-mode').options[1].textContent=label('언어별 목소리 · 발음 우선','Separate voices · language pronunciation');
         for(const language of ['ko','en']){
             const selector=el('speech-voice-'+language),id=config[language+'Voice'];selector.replaceChildren();
             const option=(value,text)=>{const o=root.document.createElement('option');o.value=value;o.textContent=text;selector.appendChild(o);};
-            option('',label('언어 기본 음성','Language default'));
+            option('',label('시스템 기본','System default'));
             const choices=catalog.filter(v=>matches(language,v));
-            for(const voice of choices)option(voice.id,`${voice.name} (${voice.lang}) · ${voice.networkRequired?label('인터넷 필요','Internet'):label('기기 음성','On device')}`);
+            for(const voice of choices)option(voice.id,root.VoiceCatalog.label(voice,ko()?'ko':'en')+(notes[voice.id]?` · ${notes[voice.id].slice(0,32)}`:''));
             if(id&&!choices.some(v=>v.id===id))option(id,label('사용 불가 · 기본 음성으로 대체','Unavailable · using language default'));
             selector.value=id;
+            const voice=choices.find(v=>v.id===id);
+            el('speech-details-'+language).textContent=root.VoiceCatalog.details(voice,ko()?'ko':'en');
+            el('speech-original-label-'+language).textContent=label('원래 음성 이름 보기','Show original voice name');
+            el('speech-original-'+language).textContent=voice?`${voice.name} · ${voice.id}`:label('시스템 기본 또는 사용 불가','System default or unavailable');
+            el('speech-note-label-'+language).textContent=label('내 음색 메모 · 이 기기에 저장','My tone note · saved on this device');
+            const note=el('speech-note-'+language);note.value=notes[id]||'';note.disabled=!voice;
+            note.placeholder=label('예: 낮은 남성, 밝은 여성 (듣고 입력)','Example: low male, bright female (after listening)');
         }
         for(const name of ['rate','pitch']){el('speech-'+name).value=config[name];el('speech-'+name+'-value').textContent=Number(config[name]).toFixed(2)+'×';}
         controls();
@@ -68,6 +84,7 @@
             const normalized=normalize(next),plugin=native();
             if(plugin)accept(await deadline(plugin.setSpeechSettings({settings:normalized})));
             else{root.localStorage.setItem('solarless_web_speech_settings',JSON.stringify(normalized));config=normalized;}
+            root.TTSVoice?.resetGuidance();
             render();status(summary());
         }catch{ready=false;render();status(label('설정을 저장하지 못했습니다. 목록을 새로고침해 실제 설정을 확인하세요.','Could not save. Refresh voices to read the saved settings.'));}
         finally{busy=false;controls();}
@@ -81,9 +98,18 @@
     }
     function init(options={}){
         if(initialized)return;initialized=true;canPreview=options.canPreview||canPreview;
+        try{const stored=JSON.parse(root.localStorage.getItem('solarless_voice_notes')||'{}');for(const [id,note] of Object.entries(stored||{}).slice(0,200))if(typeof note==='string')notes[id]=note.slice(0,80);}catch{}
+        el('speech-mode').addEventListener('change',e=>save({...config,unifiedVoice:e.target.value==='unified'}));
         for(const language of ['ko','en']){
             el('speech-voice-'+language).addEventListener('change',e=>save({...config,[language+'Voice']:e.target.value}));
             el('btn-preview-'+language).addEventListener('click',()=>preview(language==='ko'?'ko-KR':'en-US'));
+            el('speech-note-'+language).addEventListener('change',e=>{
+                const id=config[language+'Voice'];if(!id)return;
+                const next=Object.assign(Object.create(null),notes,{[id]:e.target.value.trim().slice(0,80)});
+                if(Object.keys(next).length>200)delete next[Object.keys(next)[0]];
+                try{root.localStorage.setItem('solarless_voice_notes',JSON.stringify(next));notes=next;render();status(label('음색 메모를 저장했습니다.','Tone note saved.'));}
+                catch{status(label('메모를 저장하지 못했습니다.','Could not save the note.'));}
+            });
         }
         for(const name of ['rate','pitch']){
             el('speech-'+name).addEventListener('input',e=>el('speech-'+name+'-value').textContent=Number(e.target.value).toFixed(2)+'×');

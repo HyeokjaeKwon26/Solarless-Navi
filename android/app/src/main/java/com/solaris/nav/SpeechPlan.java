@@ -32,4 +32,11 @@ final class SpeechPlan {
         }
         return out;
     }
+    static List<Part> utterances(String text, String language, JSONArray segments, boolean unifiedVoice) {
+        List<Part> plan = parts(text, language, segments);
+        if (!unifiedVoice || plan.isEmpty()) return plan;
+        StringBuilder joined = new StringBuilder();
+        for (Part part : plan) joined.append(part.text);
+        return Collections.singletonList(new Part(joined.toString(), language));
+    }
 }

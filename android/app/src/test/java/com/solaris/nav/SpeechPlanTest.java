@@ -6,6 +6,24 @@ import static org.junit.Assert.*;
 import java.util.List;
 
 public class SpeechPlanTest {
+    @Test public void mixedGuidanceUsesOneSelectedVoiceByDefaultAndSeparateVoicesOnlyOnRequest() throws Exception {
+        JSONArray input = new JSONArray("[{\"text\":\"잠시 후 \",\"lang\":\"ko-KR\"},{\"text\":\"Harvard Avenue\",\"lang\":\"en-US\"},{\"text\":\"에서 우회전\",\"lang\":\"ko-KR\"}]");
+        SpeechPreferences config = new SpeechPreferences(new JSONObject("{\"koVoice\":\"selected-ko\",\"enVoice\":\"selected-en\"}"));
+        List<SpeechPlan.Part> unified = SpeechPlan.utterances("fallback", "ko-KR", input, config.unifiedVoice);
+        assertEquals(1, unified.size());assertEquals("잠시 후 Harvard Avenue에서 우회전",unified.get(0).text);
+        assertEquals("selected-ko",config.forLanguage(unified.get(0).language));
+        List<SpeechPlan.Part> separate = SpeechPlan.utterances("fallback", "ko-KR", input, false);
+        assertEquals(3,separate.size());assertEquals("selected-en",config.forLanguage(separate.get(1).language));
+    }
+    @Test public void persistedModeAppliesToBackgroundPrefixAndOldSnapshots() throws Exception {
+        JSONObject turn=new JSONObject("{\"text\":\"Harvard Ave.에서 우회전\",\"segments\":[{\"text\":\"Harvard Avenue\",\"lang\":\"en-US\"},{\"text\":\"에서 우회전\",\"lang\":\"ko-KR\"}]}");
+        JSONArray background=SpeechPlan.prepend("300미터 앞 ","ko-KR",turn);
+        SpeechPreferences saved=new SpeechPreferences(new JSONObject(new SpeechPreferences(null).json().toString()));
+        List<SpeechPlan.Part> plan=SpeechPlan.utterances(turn.getString("text"),"ko-KR",background,saved.unifiedVoice);
+        assertEquals(1,plan.size());assertEquals("300미터 앞 Harvard Avenue에서 우회전",plan.get(0).text);assertEquals("ko-KR",plan.get(0).language);
+        assertEquals("legacy",SpeechPlan.utterances("legacy","ko-KR",null,true).get(0).text);
+        assertTrue(SpeechPlan.utterances("","ko-KR",null,true).isEmpty());
+    }
     @Test public void preservesLanguagesAndOrder() throws Exception {
         JSONArray input = new JSONArray("[{\"text\":\"잠시 후 \",\"lang\":\"ko-KR\"},{\"text\":\"Lee Street\",\"lang\":\"en-US\"},{\"text\":\"에서 우회전\",\"lang\":\"ko-KR\"}]");
         List<SpeechPlan.Part> parts = SpeechPlan.parts("fallback", "ko-KR", input);

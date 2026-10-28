@@ -9,6 +9,7 @@ public class SpeechPreferencesTest {
     @Test public void defaultsAndBoundariesAreFinite() throws Exception {
         SpeechPreferences defaults = new SpeechPreferences(null);
         assertEquals(1f, defaults.rate, 0); assertEquals(1f, defaults.pitch, 0);
+        assertTrue(defaults.unifiedVoice);
         SpeechPreferences limits = new SpeechPreferences(new JSONObject("{\"rate\":20,\"pitch\":-4}"));
         assertEquals(1.5f, limits.rate, 0); assertEquals(.75f, limits.pitch, 0);
         SpeechPreferences invalid = new SpeechPreferences(new JSONObject("{\"rate\":\"Infinity\",\"pitch\":\"NaN\"}"));
@@ -21,6 +22,10 @@ public class SpeechPreferencesTest {
         assertEquals(original.enVoice, restored.forLanguage("en-US"));
         assertEquals(original.enVoice, restored.forLanguage("en-GB"));
         assertEquals(original.rate, restored.rate, 0); assertEquals(original.pitch, restored.pitch, 0);
+        assertTrue(restored.unifiedVoice);
+        SpeechPreferences separate = new SpeechPreferences(new JSONObject("{\"unifiedVoice\":false}"));
+        assertFalse(new SpeechPreferences(separate.json()).unifiedVoice);
+        assertTrue(new SpeechPreferences(new JSONObject("{\"unifiedVoice\":\"false\"}")).unifiedVoice);
     }
     @Test public void selectionIsStableAcrossReorderingAndNeverCrossesLanguagesOrEngines() {
         SpeechPreferences.Choice ko = new SpeechPreferences.Choice("engineA:voice1", "ko-KR");

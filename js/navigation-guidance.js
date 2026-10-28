@@ -195,5 +195,8 @@
             return out;
         }, []);
     }
-    return { model, match, confirmMatch, next, thresholds, complexTurn, laneArrows, shortRoad, roadLabel, validSession, shouldConserve, spokenRoad, speechSegments };
+    function voicePlan(segments, language, unifiedVoice = true) {
+        return unifiedVoice === false || !segments.length ? segments : [{text:segments.map(part=>part.text).join(''),lang:language}];
+    }
+    return { model, match, confirmMatch, next, thresholds, complexTurn, laneArrows, shortRoad, roadLabel, validSession, shouldConserve, spokenRoad, speechSegments, voicePlan };
 });

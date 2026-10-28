@@ -83,7 +83,8 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         JSONArray available = new JSONArray();
         for (Voice voice : list) {
             JSObject item = new JSObject(); item.put("id", voiceId(voice)); item.put("name", voice.getName());
-            item.put("lang", voice.getLocale().toLanguageTag()); item.put("networkRequired", voice.isNetworkConnectionRequired()); available.put(item);
+            item.put("lang", voice.getLocale().toLanguageTag()); item.put("networkRequired", voice.isNetworkConnectionRequired());
+            item.put("quality", voice.getQuality()); item.put("latency", voice.getLatency()); available.put(item);
         }
         JSObject result = new JSObject(); result.put("ready", ready); result.put("engine", engine);
         result.put("settings", value.json()); result.put("voices", available); return result;
@@ -101,6 +102,10 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
             preferences.edit().putString("settings", previous.json().toString()).apply();
             throw new IllegalStateException("VOICE_SAVE_FAILED");
         }
+        // Stop queued parts from the previous selection before the next fix
+        // repeats guidance using the newly persisted settings, also in PiP.
+        stop();
+        NativeGuidance.repeatAfterInterruption();
         return speechSettings();
     }
     boolean speak(String text, String language) { return speak(text, language, false); }
@@ -121,12 +126,12 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { deniedUntil = System.currentTimeMillis() + 2000; return false; }
         int available = tts.setLanguage(Locale.forLanguageTag(language));
         if (available == TextToSpeech.LANG_MISSING_DATA || available == TextToSpeech.LANG_NOT_SUPPORTED) { release(); return false; }
-        List<SpeechPlan.Part> parts = SpeechPlan.parts(text, language, segments);
+        SpeechPreferences config = settings();
+        List<SpeechPlan.Part> parts = SpeechPlan.utterances(text, language, segments, config.unifiedVoice);
         if (parts.isEmpty()) { release(); return false; }
         backgroundOwner = fromBackground;
         currentGroup = "nav-" + (++sequence) + "-";
         currentId = currentGroup + (parts.size() - 1);
-        SpeechPreferences config = settings();
         List<Voice> availableVoices = voices();
         tts.setSpeechRate(config.rate); tts.setPitch(config.pitch);
         // Each speak() captures the current language/voice in its request. Keep

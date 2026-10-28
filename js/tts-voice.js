@@ -187,7 +187,7 @@ window.TTSVoice = (function () {
         const stopped = stopSpeech();
         const generation = speechGeneration;
         const language = options.language || currentLang;
-        const segments = window.NavigationGuidance.speechSegments(text, language, roadNames);
+        let segments = window.NavigationGuidance.speechSegments(text, language, roadNames);
         const preferences = window.VoiceSettings?.get() || {rate:1,pitch:1,koVoice:'',enVoice:''};
         await stopped;
         if (generation !== speechGeneration || isMuted || interruptionActive) return false;
@@ -207,6 +207,9 @@ window.TTSVoice = (function () {
             } catch (e) { spokenStages.clear(); return false; }
         }
 
+        // The focused Android owner reads persisted settings itself, including
+        // screen-off guidance. Browser/legacy fallback applies the same plan.
+        segments = window.NavigationGuidance.voicePlan(segments, language, preferences.unifiedVoice);
         // 1. Native Android Capacitor TextToSpeech Plugin
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech) {
             let completed = 0;
@@ -449,8 +452,8 @@ window.TTSVoice = (function () {
     }
     function previewLanguage(language) {
         const lang=language==='ko-KR'?'ko-KR':'en-US';
-        const text=lang==='ko-KR'?'잠시 후 우회전하세요. 목적지까지 안전하게 안내하겠습니다.':'Shortly, turn right onto Lee Street. Then continue toward Harvard Avenue.';
-        return speak(text,true,null,0,[],{language:lang});
+        const text=lang==='ko-KR'?'잠시 후 Harvard Ave.에서 우회전하세요. 목적지까지 안내하겠습니다.':'Shortly, turn right onto Lee Street. Then continue toward Harvard Avenue.';
+        return speak(text,true,null,0,['Harvard Ave.'],{language:lang});
     }
 
     return {

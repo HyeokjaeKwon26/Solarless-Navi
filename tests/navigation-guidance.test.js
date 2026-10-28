@@ -98,6 +98,7 @@ function voice(native = null) {
     let now = 100000;
     const spoken = [];
     const context = { navigator: { language: 'en-US' }, console, NavigationGuidance: guidance,
+        VoiceSettings:{get:()=>({rate:1,pitch:1,koVoice:'',enVoice:'',unifiedVoice:false})},
         Date: { now: () => now }, SpeechSynthesisUtterance: function (text) { this.text = text; },
         speechSynthesis: { cancel() {}, resume() {}, getVoices: () => [], speak: u => spoken.push(u.text) } };
     context.window = context;

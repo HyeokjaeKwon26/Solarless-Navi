@@ -341,15 +341,24 @@
                                 <option value="imperial">mi / ft · mph</option>
                             </select>
                         </div>
-                        <button type="button" class="nav-btn secondary" id="btn-preview-voice">안내 음성 미리 듣기 (도로명은 영어)</button>
+                        <button type="button" class="nav-btn secondary" id="btn-preview-voice">한영 혼합 안내 미리 듣기</button>
                         <section class="settings-section speech-settings" aria-labelledby="speech-settings-title">
                             <h4 id="speech-settings-title">안내 목소리</h4>
                             <fieldset id="speech-settings-controls" disabled>
+                                <label for="speech-mode" id="speech-mode-label">한영 혼합 안내</label>
+                                <select id="speech-mode"><option value="unified">한 목소리로 통일</option><option value="separate">언어별 목소리</option></select>
+                                <small id="speech-mode-help"></small>
                                 <label for="speech-voice-ko" id="speech-ko-label">한국어 목소리</label>
                                 <select id="speech-voice-ko"></select>
+                                <small id="speech-details-ko"></small>
+                                <details><summary id="speech-original-label-ko">원래 음성 이름</summary><small id="speech-original-ko"></small></details>
+                                <label for="speech-note-ko" id="speech-note-label-ko">내 음색 메모</label><input type="text" maxlength="80" id="speech-note-ko">
                                 <button type="button" class="nav-btn secondary" id="btn-preview-ko">한국어 미리 듣기</button>
                                 <label for="speech-voice-en" id="speech-en-label">영어 목소리</label>
                                 <select id="speech-voice-en"></select>
+                                <small id="speech-details-en"></small>
+                                <details><summary id="speech-original-label-en">원래 음성 이름</summary><small id="speech-original-en"></small></details>
+                                <label for="speech-note-en" id="speech-note-label-en">내 음색 메모</label><input type="text" maxlength="80" id="speech-note-en">
                                 <button type="button" class="nav-btn secondary" id="btn-preview-en">영어 미리 듣기</button>
                                 <label for="speech-rate" id="speech-rate-label">말하기 속도</label><output id="speech-rate-value" for="speech-rate">1.00×</output>
                                 <input type="range" id="speech-rate" min="0.5" max="1.5" step="0.05" value="1">
@@ -836,6 +845,7 @@
     <script src="js/drive-archive.js"></script>
     <script src="js/navigation-units.js"></script>
     <script src="js/tts-voice.js"></script>
+    <script src="js/voice-catalog.js"></script>
     <script src="js/voice-settings.js"></script>
     <script src="js/destination-review.js"></script>
     <script src="js/offline-map.js"></script>

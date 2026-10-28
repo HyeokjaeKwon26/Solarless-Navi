@@ -1306,7 +1306,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('offline-area-label').textContent=ko?'선택 저장 영역 · APK에 미포함':'Optional saved area · not bundled in APK';
         document.getElementById('offline-simpler-label').textContent=ko?'오프라인에서 회전·연결도로가 적은 경로 선호':'Prefer fewer turns and service roads offline';
         document.getElementById('btn-close-journey-detail').textContent = ko ? '닫기' : 'Close';
-        document.getElementById('btn-preview-voice').textContent = ko ? '안내 음성 미리 듣기 (도로명은 영어)' : 'Preview guidance voice';
+        document.getElementById('btn-preview-voice').textContent = ko ? '한영 혼합 안내 미리 듣기' : 'Preview mixed-language guidance';
         VoiceSettings.render();
         selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
         renderSpeedDisplay();

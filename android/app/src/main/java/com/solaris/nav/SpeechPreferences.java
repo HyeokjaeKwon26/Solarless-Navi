@@ -8,12 +8,14 @@ import org.json.JSONException;
 final class SpeechPreferences {
     final String koVoice, enVoice;
     final float rate, pitch;
+    final boolean unifiedVoice;
     SpeechPreferences(JSONObject value) {
         JSONObject data = value == null ? new JSONObject() : value;
         koVoice = id(data.optString("koVoice", ""));
         enVoice = id(data.optString("enVoice", ""));
         rate = bounded(data.optDouble("rate", 1), .5f, 1.5f);
         pitch = bounded(data.optDouble("pitch", 1), .75f, 1.5f);
+        unifiedVoice = !Boolean.FALSE.equals(data.opt("unifiedVoice"));
     }
     private static String id(String value) { return value.length() <= 1024 ? value : ""; }
     private static float bounded(double value, float min, float max) {
@@ -34,7 +36,7 @@ final class SpeechPreferences {
     }
     JSONObject json() {
         JSONObject value = new JSONObject();
-        try { value.put("koVoice", koVoice).put("enVoice", enVoice).put("rate", (double)rate).put("pitch", (double)pitch); }
+        try { value.put("koVoice", koVoice).put("enVoice", enVoice).put("rate", (double)rate).put("pitch", (double)pitch).put("unifiedVoice", unifiedVoice); }
         catch (JSONException ignored) { }
         return value;
     }

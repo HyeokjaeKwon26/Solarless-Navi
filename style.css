@@ -1340,6 +1340,8 @@ body.battery-saver-active .route-summary-floating {
 .speech-settings fieldset { min-width:0; border:0; padding:0; margin:0; }
 .speech-settings label, .speech-settings small { display:block; margin:10px 0 6px; line-height:1.5; overflow-wrap:anywhere; }
 .speech-settings select { width:100%; min-width:0; max-width:100%; min-height:44px; padding:8px; color:#e2e8f0; background:#17263c; border:1px solid #38bdf8; border-radius:8px; }
+.speech-settings input[type="text"] { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:44px; padding:8px; color:#e2e8f0; background:#17263c; border:1px solid #64748b; border-radius:8px; }
+.speech-settings summary { cursor:pointer; min-height:44px; display:flex; align-items:center; color:#94a3b8; text-decoration:underline; }
 .speech-settings input[type="range"] { display:block; width:100%; min-height:44px; background:transparent; accent-color:#38bdf8; }
 .speech-settings input[type="range"]::-webkit-slider-runnable-track { height:6px; border-radius:3px; background:#475569; }
 .speech-settings input[type="range"]::-webkit-slider-thumb { margin-top:-7px; width:20px; height:20px; background:#38bdf8; }
