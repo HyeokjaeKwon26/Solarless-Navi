@@ -461,6 +461,18 @@ test('driving focus keeps three journey totals visible and exposes analysis sepa
         expect(rect.x).toBeGreaterThanOrEqual(0);expect(rect.x+rect.width).toBeLessThanOrEqual(320);
     }
     await page.screenshot({path:test.info().outputPath('driving-focus-320.png')});
+    for (const language of ['en','ko']) {
+        if(language==='ko') await page.locator('#btn-toggle-lang').click();
+        for (const [width,height] of [[640,320],[320,740]]) {
+            await page.setViewportSize({width,height});
+            const boxes=await page.locator('#sum-time,#sum-duration,#sum-dist').evaluateAll(els=>els.map(el=>{
+                const r=el.getBoundingClientRect();return {left:r.left,right:r.right};
+            }));
+            for(const box of boxes){expect(box.left).toBeGreaterThanOrEqual(0);expect(box.right).toBeLessThanOrEqual(width);}
+            for(let i=1;i<boxes.length;i++)expect(boxes[i-1].right).toBeLessThanOrEqual(boxes[i].left);
+        }
+    }
+    await page.locator('#btn-toggle-lang').click();
     await page.locator('#mobile-toggle-panel').click();
     await expect(page.locator('#desc-glare')).toBeHidden();
     await page.locator('#btn-route-analysis').click();
