@@ -442,9 +442,113 @@ async function establishReliableGuidance(page) {
     // Supply live fixes until its forward replacement and first turn are ready.
     await expect.poll(async () => {
         await page.evaluate(() => window.testGps.emit({ latitude: 42.36005, accuracy: 5 }));
-        return page.locator('#banner-lanes').textContent();
+        return page.locator('#banner-lanes').evaluate(el => !el.hidden && document.getElementById('guidance-health')?.hidden ? el.textContent : 'Waiting for accepted GPS');
     }, { timeout: 15000, intervals: [500] }).toContain('Use lane 2, 3 from left');
 }
+
+test('driving focus keeps three journey totals visible and exposes analysis separately on a small phone', async ({page}) => {
+    const state=await fixtures(page,{brokenMap:true});
+    await page.setViewportSize({width:320,height:740});
+    await page.goto('./');
+    await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-map-start-nav').click();
+    await establishReliableGuidance(page);
+    await expect(page.locator('body')).toHaveClass(/driving-focus/);
+    for(const id of ['sum-time','sum-duration','sum-dist']) {
+        await expect(page.locator('#'+id)).toBeVisible();
+        const rect=await page.locator('#'+id).boundingBox();
+        expect(rect.x).toBeGreaterThanOrEqual(0);expect(rect.x+rect.width).toBeLessThanOrEqual(320);
+    }
+    await page.screenshot({path:test.info().outputPath('driving-focus-320.png')});
+    await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#desc-glare')).toBeHidden();
+    await page.locator('#btn-route-analysis').click();
+    await expect(page.locator('#journey-detail-body')).toContainText('Model prediction');
+    await page.evaluate(()=>window.dispatchEvent(new PopStateEvent('popstate')));
+    await expect(page.locator('#journey-detail-modal')).toBeHidden();
+    await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);
+    await page.locator('#driving-focus-label').click();
+    await expect(page.locator('#toggle-driving-focus')).not.toBeChecked();
+    await expect(page.locator('body')).not.toHaveClass(/driving-focus/);
+    await expect(page.locator('#desc-glare')).toBeVisible();
+    expect(await page.evaluate(()=>localStorage.getItem('solarless_driving_focus'))).toBe('false');
+    expect(state.errors).toEqual([]);
+});
+
+test('restart shows saved dashed preview during route outage and clears it after a verified route',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});
+    let unavailable=true;
+    await page.route('**/route/v1/driving/**',route=>unavailable?route.fulfill({status:503,json:{code:'NoRoute'}}):route.fallback());
+    await page.addInitScript(()=>localStorage.setItem('solarless_active_navigation_session',JSON.stringify({
+        end:{lat:42.37,lng:-71.065,source:'user-pin'},name:'Saved Alpha',mode:'fastest',savedAt:Date.now(),
+        preview:{version:1,savedAt:Date.now(),end:{lat:42.37,lng:-71.065},coordinates:[[-71.07,42.36],[-71.065,42.37]]}
+    })));
+    await page.goto('./');
+    await expect(page.locator('#cached-preview-status')).toBeVisible();
+    await expect(page.locator('#cached-preview-status')).toContainText('new verified route');
+    await expect(page.locator('path[stroke-dasharray="8,8"]')).toHaveCount(1);
+    await expect(page.locator('#btn-map-start-nav')).toBeDisabled();
+    await expect(page.locator('#route-summary-box')).toHaveAttribute('aria-busy','false',{timeout:20000});
+    await expect(page.locator('#cached-preview-status')).toBeVisible();
+    unavailable=false;
+    await page.reload();
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled({timeout:15000});
+    await expect(page.locator('#cached-preview-status')).toBeHidden();
+    await expect(page.locator('path[stroke-dasharray="8,8"]')).toHaveCount(0);
+    expect(state.errors).toEqual([]);
+});
+
+test('drive report and export include recorded journey events without claiming measured solar benefits',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});
+    await page.goto('./');
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-drive-record').click();
+    await page.locator('#btn-open-search-modal').click();
+    await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-map-start-nav').click();
+    await establishReliableGuidance(page);
+    await page.locator('#mobile-toggle-panel').click();
+    await expect.poll(async()=>{
+        await page.evaluate(()=>window.testGps.emit({accuracy:5}));
+        return page.evaluate(async()=>JSON.parse(await DriveArchive.exportRecording({samples:[]})).events.some(e=>e.type==='match'));
+    },{intervals:[500]}).toBe(true);
+    await page.locator('#btn-drive-report').click();
+    await expect(page.locator('#journey-detail-body')).toContainText('Completed trips: 0');
+    await expect(page.locator('#journey-detail-body')).toContainText('actual benefit is unmeasured');
+    await page.locator('#btn-close-journey-detail').click();
+    const saved=await page.evaluate(async()=>JSON.parse(await DriveArchive.exportRecording({samples:[]})));
+    expect(saved.events.some(e=>e.type==='trip-start'&&e.data.predictedDurationSec>0)).toBe(true);
+    expect(saved.events.some(e=>e.type==='match')).toBe(true);
+    const pending=page.waitForEvent('download');await page.locator('#btn-drive-export').click();
+    const download=await pending;
+    const exported=JSON.parse(require('node:fs').readFileSync(await download.path(),'utf8'));
+    expect(exported.review.solarPredictions.length).toBe(1);
+    expect(exported.review.fieldSolarBenefit).toBeNull();
+    expect(exported.review.samples).toBeGreaterThan(0);
+    expect(state.errors).toEqual([]);
+});
+
+test('GPS recovery pauses turns until two consistent new fixes and preference changes cannot revive old guidance',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});
+    await page.goto('./');await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-map-start-nav').click();await establishReliableGuidance(page);
+    await expect(page.locator('#route-summary-box')).toHaveAttribute('aria-busy','false');
+    await page.evaluate(()=>{
+        const original=Date.now;window.testTimeOffset=20000;Date.now=()=>original()+window.testTimeOffset;
+        window.testGps.emit({latitude:42.3601,accuracy:5});
+    });
+    await expect(page.locator('#banner-desc')).toContainText('Checking road position');
+    await expect(page.locator('#banner-lanes')).toBeHidden();
+    await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#navigation-units').selectOption('metric');
+    await expect(page.locator('#banner-desc')).toContainText('Checking road position');
+    await page.evaluate(()=>{window.testTimeOffset+=1000;window.testGps.emit({latitude:42.36015,accuracy:5});});
+    await expect(page.locator('#banner-desc')).toContainText('Fixture Road');
+    expect(state.errors).toEqual([]);
+});
 
 test('diagnostic opt-in survives reload, exports persisted events and deletes them', async ({ page }) => {
     const state = await fixtures(page, { brokenMap: true });

@@ -19,7 +19,8 @@
                 if (previous) report.maxAcceptedGapMs = Math.max(report.maxAcceptedGapMs, sample.timestamp - previous.timestamp);
                 previous = sample;
                 if (sample.routeId !== undefined && sample.routeId !== offRoute.routeId) offRoute = {};
-                offRoute = { ...rules.evaluateOffRoute(offRoute, sample), routeId: sample.routeId };
+                offRoute = { ...rules.evaluateOffRoute(offRoute, {...sample,
+                    uncertain: sample.uncertain === true || ['ambiguous','nearby-road-conflict','reacquiring'].includes(sample.snapReason)}), routeId: sample.routeId };
                 if (offRoute.shouldReroute) {
                     report.rerouteRequests++;
                     if (typeof sample.expectedOffRoute === 'boolean') {
@@ -60,5 +61,47 @@
                 samples: samples.map(sample => ({ ...sample })) }; }
         };
     }
-    return { replay, createRecorder };
+    function review(recording) {
+        const events = (recording.events || []).slice().sort((a,b) => a.recordedAt - b.recordedAt);
+        const matches = new Map(events.filter(e => e.type === 'match' && e.data).map(e => [e.data.timestamp, e.data]));
+        const samples = (recording.samples || []).map(sample => ({ ...sample, ...matches.get(sample.timestamp) })).sort((a,b) => a.timestamp-b.timestamp);
+        const labelled = samples.filter(sample => typeof sample.snapped === 'boolean');
+        const nativeTimes = events.filter(e => e.type === 'native-location' && Number.isFinite(e.data?.timestamp)).map(e => e.data.timestamp).sort((a,b)=>a-b);
+        const report = { samples: samples.length, matched: labelled.filter(sample => sample.snapped).length,
+            uncertain: labelled.filter(sample => !sample.snapped).length, unlabelled: samples.length-labelled.length,
+            nativeSamples: nativeTimes.length, maxNativeGpsGapSec: 0,
+            maxGpsGapSec: 0, rerouteLatencySec: [], failedReroutes: 0, cancelledReroutes: 0, etaErrorsSec: [], solarPredictions: [], fieldSolarBenefit: null };
+        for (let i=1;i<nativeTimes.length;i++) report.maxNativeGpsGapSec=Math.max(report.maxNativeGpsGapSec,(nativeTimes[i]-nativeTimes[i-1])/1000);
+        for (let i=1;i<samples.length;i++) if (Number.isFinite(samples[i].timestamp) && Number.isFinite(samples[i-1].timestamp)) report.maxGpsGapSec=Math.max(report.maxGpsGapSec,(samples[i].timestamp-samples[i-1].timestamp)/1000);
+        const requests=new Map(), trips=new Map(), redirected=new Set();
+        for (const event of events) {
+            const data=event.data || {};
+            if (!Number.isFinite(event.recordedAt)) continue;
+            // A stopped/restarted recording cannot measure an entire journey.
+            if (event.type==='recording-stop' || event.type==='recording-start') trips.clear();
+            if (event.type==='reroute-start') requests.set(data.id,event.recordedAt);
+            if (event.type==='reroute-ready' && requests.has(data.id)) {
+                const seconds=(event.recordedAt-requests.get(data.id))/1000;
+                if (seconds>=0) report.rerouteLatencySec.push(seconds);
+                requests.delete(data.id);
+            }
+            if (event.type==='reroute-failed') { report.failedReroutes++; requests.delete(data.id); }
+            if (event.type==='reroute-cancelled') { report.cancelledReroutes++; requests.delete(data.id); }
+            if (event.type==='trip-start') {
+                trips.set(data.id,{...data,at:event.recordedAt});
+                if(data.solar) report.solarPredictions.push({tripId:data.id,...data.solar,predictionOnly:true});
+            }
+            if (event.type==='trip-redirect') redirected.add(data.id);
+            if (event.type==='trip-end' && data.arrived && trips.has(data.id) && !redirected.has(data.id)) {
+                const trip=trips.get(data.id), elapsed=(event.recordedAt-trip.at)/1000;
+                if (Number.isFinite(trip.predictedDurationSec) && trip.predictedDurationSec>0 && elapsed>=0) report.etaErrorsSec.push(elapsed-trip.predictedDurationSec);
+                trips.delete(data.id);
+            }
+            if (event.type==='trip-end') trips.delete(data.id);
+        }
+        report.meanAbsoluteEtaErrorSec=report.etaErrorsSec.length?report.etaErrorsSec.reduce((sum,n)=>sum+Math.abs(n),0)/report.etaErrorsSec.length:null;
+        report.pendingReroutes=requests.size;
+        return report;
+    }
+    return { replay, createRecorder, review };
 });

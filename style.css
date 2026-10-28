@@ -1318,3 +1318,12 @@ body.battery-saver-active .route-summary-floating {
 #traffic-fastest { display: block; max-width: 100%; white-space: normal; color: #fbbf24; background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.4); }
 .mode-sub-row:has(#traffic-fastest) { flex-wrap: wrap; }
 .mode-sub-row:has(#traffic-fastest) .mode-desc { flex-basis: 100%; }
+/* Keep the three driving totals stable instead of paging them away. */
+.driving-focus #route-summary-box .summary-stats-wrapper { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); min-width: 0; width: 100%; gap: 6px; }
+.driving-focus #route-summary-box .summary-stat { display: flex; opacity: 1; animation: none; min-width: 0; }
+.driving-focus #route-summary-box .summary-stat:has(#sum-destination), .driving-focus #route-summary-box .summary-divider { display: none; }
+.driving-focus .mode-desc { display: none; }
+.driving-focus #banner-dist { font-weight: 800; }
+#journey-detail-modal { z-index: 11500; }
+#journey-detail-body { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.6; margin: 14px 0; }
+#cached-preview-status { border-color: #fbbf24; }

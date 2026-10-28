@@ -39,6 +39,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentEnd = null;
     let destinationName = "";
     let pendingFavoriteRequest = null;
+    let cachedPreview = null, cachedPreviewLayer = null;
+    let drivingFocus = true;
+    try { drivingFocus = localStorage.getItem('solarless_driving_focus') !== 'false'; } catch (e) {}
     const SAVED_ROUTE_MODE_KEY = 'solarless_last_route_mode';
     const ACTIVE_NAVIGATION_SESSION_KEY = 'solarless_active_navigation_session';
     const AUTO_FREE_DRIVE_ENABLED_KEY = 'solarless_auto_free_drive_enabled';
@@ -207,6 +210,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-drive-export').addEventListener('click', async () => {
         let json;
         try { json = await DriveArchive.exportRecording(driveRecorder.export()); } catch (e) { showApiNotice('기록 읽기 실패 / Could not read recording'); return; }
+        const recording = JSON.parse(json);
+        recording.review = DriveQuality.review(recording);
+        json = JSON.stringify(recording);
         const nativePlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Pip;
         if (window.Capacitor && window.Capacitor.isNativePlatform() && nativePlugin) {
             try { await nativePlugin.saveDriveRecording({ json }); }
@@ -285,11 +291,72 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let lastSessionCheckpointAt = 0;
+    function refreshDrivingFocus() {
+        document.body.classList.toggle('driving-focus', drivingFocus && isLiveNavActive && !isFreeDriveMode);
+        document.getElementById('toggle-driving-focus').checked = drivingFocus;
+        if (isLiveNavActive && !isFreeDriveMode) ensureRouteSummaryCycling();
+    }
+    function clearCachedPreview() {
+        if (cachedPreviewLayer && map) map.removeLayer(cachedPreviewLayer);
+        cachedPreviewLayer = null;
+        document.getElementById('cached-preview-status').hidden = true;
+    }
+    function showCachedPreview() {
+        clearCachedPreview();
+        if (isLiveNavActive || !map || !JourneyPolicy.validPreview(cachedPreview, currentEnd, Date.now())) return;
+        cachedPreviewLayer = L.polyline(cachedPreview.coordinates.map(p => [p[1],p[0]]), {color:'#94a3b8',weight:6,dashArray:'8,8'}).addTo(map);
+        map.invalidateSize(); map.fitBounds(cachedPreviewLayer.getBounds(), {padding:[60,130],maxZoom:16,animate:false});
+        const notice = document.getElementById('cached-preview-status');
+        notice.hidden = false;
+        notice.textContent = I18n.getLanguage().startsWith('ko') ? '저장된 경로 미리보기 · 새 경로 확인 전 안내 시작 불가 · 지도 타일은 저장되지 않습니다' : 'Saved route preview · guidance waits for a new verified route · map tiles not saved';
+        setNavigationButtonsEnabled(false);
+    }
+    let journeyDetailTrigger = null;
+    function showJourneyDetail(title, body) {
+        journeyDetailTrigger = document.activeElement;
+        document.getElementById('journey-detail-title').textContent = title;
+        document.getElementById('journey-detail-body').textContent = body;
+        document.getElementById('journey-detail-modal').classList.remove('hidden');
+        document.getElementById('btn-close-journey-detail').focus();
+    }
+    document.getElementById('btn-close-journey-detail').addEventListener('click', () => {
+        document.getElementById('journey-detail-modal').classList.add('hidden');
+        journeyDetailTrigger?.focus();
+    });
+    document.getElementById('journey-detail-modal').addEventListener('keydown', event => {
+        if (event.key === 'Escape') document.getElementById('btn-close-journey-detail').click();
+        if (event.key === 'Tab') { event.preventDefault(); document.getElementById('btn-close-journey-detail').focus(); }
+    });
+    document.getElementById('btn-route-analysis').addEventListener('click', () => {
+        const ko = I18n.getLanguage().startsWith('ko');
+        const comparison = JourneyPolicy.solarTradeoff(routeData?.routes?.fastest, selectedRouteObj);
+        const details = selectedRouteObj && document.getElementById(currentMode === 'shade' ? 'desc-shade' : currentMode === 'fastest' ? 'desc-fastest' : 'desc-glare').textContent;
+        let text = details || (ko ? '경로를 먼저 계산해 주세요.' : 'Calculate a route first.');
+        if (comparison) {
+            text += '\n\n' + (ko ? `기준 경로 대비 시간 차이: ${(comparison.extraSeconds/60).toFixed(1)}분` : `Travel time difference: ${(comparison.extraSeconds/60).toFixed(1)} min`);
+            text += '\n' + (comparison.comparable ? (ko ? `직사광선 노출 추정 감소: ${(comparison.sunlitSecondsSaved/60).toFixed(1)}분` : `Predicted direct-sun time saved: ${(comparison.sunlitSecondsSaved/60).toFixed(1)} min`) : (ko ? '분석 조건이 달라 햇빛 감소량을 비교하지 않습니다.' : 'Analysis conditions differ; sun reduction is not compared.'));
+            if (comparison.uncertainRatio !== null) text += '\n' + (ko ? `차광 판단 불확실 비율: ${Math.round(comparison.uncertainRatio*100)}%` : `Uncertain occlusion: ${Math.round(comparison.uncertainRatio*100)}%`);
+            text += '\n' + (ko ? '계산상 예상값입니다. 실제 주행 중 햇빛 감소 효과는 측정되지 않았습니다.' : 'Model prediction. Actual sunlight reduction during driving has not been measured.');
+        }
+        showJourneyDetail(ko ? '경로 분석' : 'Route analysis', text);
+    });
+    document.getElementById('btn-drive-report').addEventListener('click', async () => {
+        const ko = I18n.getLanguage().startsWith('ko');
+        try {
+            const report = DriveQuality.review(JSON.parse(await DriveArchive.exportRecording(driveRecorder.export())));
+            const latency = report.rerouteLatencySec.length ? (report.rerouteLatencySec.reduce((a,b)=>a+b,0)/report.rerouteLatencySec.length).toFixed(1) : '—';
+            const eta = report.meanAbsoluteEtaErrorSec === null ? '—' : (report.meanAbsoluteEtaErrorSec/60).toFixed(1);
+            showJourneyDetail(ko ? '주행 품질 요약' : 'Drive quality summary', ko
+                ? `화면 위치 기록 ${report.samples}개\n도로 매칭 ${report.matched} · 불확실 ${report.uncertain} · 미분류 ${report.unlabelled}\n화면 GPS 최대 간격 ${report.maxGpsGapSec.toFixed(1)}초\nAndroid 위치 기록 ${report.nativeSamples}개 · 최대 간격 ${report.maxNativeGpsGapSec.toFixed(1)}초\n재탐색 성공 ${report.rerouteLatencySec.length}회 · 평균 ${latency}초 · 실패 ${report.failedReroutes}회\n완료 주행 ${report.etaErrorsSec.length}회 · 도착시간 평균 절대 오차 ${eta}분\n\n기록을 켠 구간만 집계합니다. 정답 도로 라벨이 없어 도로 선택 정확도를 뜻하지 않습니다. 햇빛 회피는 예상값이며 실제 효과는 미측정입니다.`
+                : `Foreground GPS samples: ${report.samples}\nRoad matches: ${report.matched} · uncertain: ${report.uncertain} · unclassified: ${report.unlabelled}\nLongest foreground GPS gap: ${report.maxGpsGapSec.toFixed(1)} s\nAndroid GPS samples: ${report.nativeSamples} · longest gap: ${report.maxNativeGpsGapSec.toFixed(1)} s\nSuccessful reroutes: ${report.rerouteLatencySec.length} · average: ${latency} s · failed: ${report.failedReroutes}\nCompleted trips: ${report.etaErrorsSec.length} · mean absolute ETA error: ${eta} min\n\nOnly recorded periods are counted. Without labelled road truth, this is not road-selection accuracy. Sun avoidance is predicted; actual benefit is unmeasured.`);
+        } catch (e) { showJourneyDetail(ko ? '기록 읽기 실패' : 'Recording unavailable', ko ? '다시 시도해 주세요.' : 'Please try again.'); }
+    });
     function saveActiveNavigationSession() {
         if (!currentEnd) return;
         try {
             localStorage.setItem(ACTIVE_NAVIGATION_SESSION_KEY, JSON.stringify({
-                end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng) },
+                end: { lat: Number(currentEnd.lat), lng: Number(currentEnd.lng), source: currentEnd.source },
+                preview: JourneyPolicy.previewSnapshot(selectedRouteObj, currentEnd, Date.now()),
                 name: destinationName,
                 mode: currentMode,
                 tollFree: isTollFreeOnly,
@@ -367,6 +434,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function clearActiveNavigationSession() {
+        cachedPreview = null; clearCachedPreview();
         try { localStorage.removeItem(ACTIVE_NAVIGATION_SESSION_KEY); } catch (e) {}
     }
 
@@ -389,6 +457,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         currentEnd = { lat: Number(saved.end.lat), lng: Number(saved.end.lng) };
+        if (saved.end.source === 'user-pin') currentEnd.source = 'user-pin';
+        cachedPreview = saved.preview;
         destinationName = String(saved.name || (isKo ? '이전 목적지' : 'Previous destination'));
         if (['glareFree', 'fastest', 'shade'].includes(saved.mode)) currentMode = saved.mode;
         isTollFreeOnly = saved.tollFree === true;
@@ -397,6 +467,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateModeButtonsHighlight();
         const destinationInput = document.getElementById('destination-input');
         if (destinationInput) destinationInput.value = destinationName;
+        showCachedPreview();
         startNavigationFlow();
     }
 
@@ -416,16 +487,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const previous = navigationRouteProgress;
         const key = `${lastGpsTimestamp}|${lat}|${lng}|${heading}`;
         if (previous.fixKey === key) return previous.result;
-        const candidate = NavigationGuidance.match(route, { lat, lng, heading,
+        const fix = { lat, lng, heading,
             speedKmh: lastNavigationSpeedKmh, accuracy: lastProcessedNavigationAccuracy,
-            timestamp: lastGpsTimestamp || Date.now() }, previous.snap);
+            timestamp: lastGpsTimestamp || Date.now() };
+        let candidate = NavigationGuidance.match(route, fix, previous.snap);
         if (candidate.isSnapped && window.RoadPack?.graph?.conflictingRoad([lng, lat], heading, candidate.distMeters)) {
             Object.assign(candidate, { isSnapped: false, lat, lng, reason: 'nearby-road-conflict' });
         }
+        const confirmed = NavigationGuidance.confirmMatch(candidate, fix, previous);
+        candidate = confirmed.result;
         // Keep raw route distance independent of continuity/heading rejection.
         candidate.rawDistanceMeters = candidate.isSnapped ? candidate.distMeters :
             ShadowRouter.distanceToRoute(lat, lng, route.analyzed.coordinates);
-        navigationRouteProgress = { ...previous, fixKey: key, result: candidate };
+        navigationRouteProgress = { ...previous, fixKey: key, result: candidate, pending: confirmed.pending, recovering: confirmed.recovering };
         if (candidate.isSnapped) Object.assign(navigationRouteProgress, {
             value: candidate.segmentIndex + candidate.t, segmentIndex: candidate.segmentIndex,
             t: candidate.t, snap: candidate
@@ -1137,6 +1211,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const selector = document.getElementById('navigation-units');
         selector.value = NavigationUnits.getPreference();
         document.getElementById('navigation-units-label').textContent = ko ? '거리·속도 단위' : 'Distance and speed units';
+        document.getElementById('driving-focus-label').textContent = ko ? '주행 집중 화면' : 'Focused driving display';
+        document.getElementById('btn-route-analysis').textContent = ko ? '경로 분석 보기' : 'View route analysis';
+        document.getElementById('btn-drive-report').textContent = ko ? '주행 품질 요약' : 'Drive quality summary';
+        document.getElementById('btn-close-journey-detail').textContent = ko ? '닫기' : 'Close';
         document.getElementById('btn-preview-voice').textContent = ko ? '안내 음성 미리 듣기 (도로명은 영어)' : 'Preview guidance voice';
         selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
         renderSpeedDisplay();
@@ -1154,6 +1232,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setupFeatureListeners() {
+        refreshDrivingFocus();
+        document.getElementById('toggle-driving-focus').addEventListener('change', event => {
+            drivingFocus = event.target.checked;
+            try { localStorage.setItem('solarless_driving_focus', String(drivingFocus)); } catch (e) {}
+            refreshDrivingFocus();
+        });
         NavigationUnits.onChange(() => {
             TTSVoice.refreshUnits();
             refreshUnitPresentation();
@@ -1417,7 +1501,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // A preference refresh must not revive a previously paused turn.
         if (presentationOnly && isLiveNavActive && !isFreeDriveMode &&
             (!lastReliableFixAt || Date.now() - lastReliableFixAt > 10000 || offRouteEvidence.confirmed ||
-                (navigationRouteProgress.snap && !navigationRouteProgress.snap.isSnapped))) return;
+                (navigationRouteProgress.result && !navigationRouteProgress.result.isSnapped))) return;
         lastTurnPresentation = { maneuver: nextManeuver, glare: glareRisk };
         const banner = document.getElementById('mobile-turn-banner');
         if (!banner) return;
@@ -2091,7 +2175,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const userIsEditing = Date.now() - lastDestinationEditingAt < AUTO_FREE_DRIVE_EDITING_GRACE_MS;
             const sidebar = document.getElementById('sidebar-panel');
             const blockingModal = document.querySelector(
-                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden), #destination-review-modal:not(.hidden)'
+                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden), #destination-review-modal:not(.hidden), #journey-detail-modal:not(.hidden)'
             );
             if (userIsEditing || (sidebar && sidebar.classList.contains('active')) || blockingModal) {
                 autoFreeDriveMotionState = {};
@@ -2286,6 +2370,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             if (!isLiveNavActive) return;
+            if (map) map.invalidateSize({pan:false});
             await applyNativeLastLocationOnResume();
             restartWebGpsWatchAfterInterruption();
             enableKeepAwake();
@@ -2515,6 +2600,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleHardwareBackButton() {
         const isKo = I18n.getLanguage().startsWith('ko');
+        if (!document.getElementById('journey-detail-modal').classList.contains('hidden')) {
+            document.getElementById('btn-close-journey-detail').click(); return;
+        }
         if (DestinationReview.isOpen()) { DestinationReview.cancel(); return; }
         if (!document.getElementById('update-modal').classList.contains('hidden')) {
             document.getElementById('btn-close-update-modal').click();
@@ -2574,6 +2662,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const fullDisableUis = [
+            'journey-detail-modal',
             'destination-review-modal',
             'start-search-modal',
             'about-app-modal',
@@ -3522,6 +3611,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function ensureRouteSummaryCycling() {
+        if (drivingFocus) { stopRouteSummaryCycling(); return; }
         showRouteSummaryPage(routeSummaryCycleIndex);
         if (routeSummaryCycleTimer !== null) return;
         routeSummaryCycleTimer = setInterval(() => {
@@ -3673,6 +3763,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const routeStartedAt = Date.now();
+        const rerouteRecordId = `${routeStartedAt}-${requestGeneration}`;
+        let rerouteRecorded = false;
+        if (isMidDrive) DriveArchive.record('reroute-start', {id:rerouteRecordId,reason:rerouteReason});
         try {
             const nextRouteData = await ShadowRouter.fetchAndAnalyzeRoutes(
                 requestStart,
@@ -3772,13 +3865,17 @@ document.addEventListener('DOMContentLoaded', () => {
                             // verified OSRM result. This is the point where it
                             // is safe to remove the old remaining polyline.
                             liveRerouteCommitted = true;
+                            DriveArchive.record('reroute-ready', {id:rerouteRecordId});
+                            rerouteRecorded = true;
                             if (rerouteReason === 'destination-change') {
+                                DriveArchive.record('trip-redirect', {id:navigationSessionStartedAt});
                                 if (liveDestinationWatchdog !== null) {
                                     clearTimeout(liveDestinationWatchdog);
                                     liveDestinationWatchdog = null;
                                 }
                                 liveDestinationBackup = null;
                                 isFreeDriveMode = false;
+                                refreshDrivingFocus();
                                 setFreeDriveUi(false);
                                 ensureRouteSummaryCycling();
                                 saveActiveNavigationSession();
@@ -3848,6 +3945,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (window.DebugLogger) window.DebugLogger.log('route-enrichment-complete', { elapsedMs: Date.now() - routeStartedAt, routeCount: routeData.routes && routeData.routes.all ? routeData.routes.all.length : 0 });
         } catch (e) {
             if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
+            if (isMidDrive && !rerouteRecorded) {
+                DriveArchive.record('reroute-failed', {id:rerouteRecordId}); rerouteRecorded = true;
+            }
             routingUnavailable = true;
             const hadPreviousRoute = !!(routeData && selectedRouteObj);
             pendingRouteRequestKey = null;
@@ -3858,6 +3958,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 routeData = null;
                 selectedRouteObj = null;
                 clearRouteFromMap(true);
+                showCachedPreview();
                 setNavigationButtonsEnabled(false);
             } else {
                 // Keep the last verified OSRM route visible, but it is tied to
@@ -3872,6 +3973,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (window.DebugLogger) window.DebugLogger.log('route-enrichment-failure', { message: String(e && e.message || e), keptPreviousRoute: hadPreviousRoute });
             return;
         } finally {
+            if (isMidDrive && !rerouteRecorded) DriveArchive.record('reroute-cancelled', {id:rerouteRecordId});
             if (liveDestinationWatchdog !== null) clearTimeout(liveDestinationWatchdog);
             if (rerouteReason === 'precision-refresh') precisionReroutePending = false;
             if (rerouteReason === 'gps-origin-refinement') gpsOriginReroutePending = false;
@@ -4143,6 +4245,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderMapMarkersAndPolyline(selectedRouteObj, isLiveDrive = false) {
         if (!selectedRouteObj || !selectedRouteObj.analyzed || !selectedRouteObj.analyzed.coordinates) return;
+        clearCachedPreview();
 
         if (activeRoutePolylineGroup) {
             activeRoutePolylineGroup.clearLayers();
@@ -4238,6 +4341,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* CLEAR ALL MAP POLYLINES, DESTINATION MARKERS, & BANNER WHEN GUIDANCE ENDS */
     function clearRouteFromMap(keepDestination = false) {
+        clearCachedPreview();
+        if (!keepDestination) cachedPreview = null;
         if (routeAbortController) {
             routeAbortController.abort();
             routeAbortController = null;
@@ -4839,10 +4944,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
+        DriveArchive.record('trip-end', {id:navigationSessionStartedAt,arrived:true});
         navigationSessionArrived = true;
         clearActiveNavigationSession();
         stopGpsWatch();
         isLiveNavActive = false;
+        refreshDrivingFocus();
         stopRouteSummaryCycling();
         setLiveNavigationMapMode(false);
         if (window.PipController) window.PipController.setNavigationActive(false);
@@ -4916,9 +5023,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isLiveNavActive) {
             const wasFreeDrive = isFreeDriveMode;
+            DriveArchive.record('trip-end', {id:navigationSessionStartedAt,arrived:false});
             stopGpsWatch();
             isLiveNavActive = false;
             isFreeDriveMode = false;
+            refreshDrivingFocus();
             stopRouteSummaryCycling();
             setLiveNavigationMapMode(false);
             setFreeDriveUi(false);
@@ -4988,6 +5097,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isLiveNavActive = true;
         updateRoutePreviewStatus();
         isFreeDriveMode = requestedFreeDrive;
+        refreshDrivingFocus();
         if (isFreeDriveMode) NativeNavigation.clear(true);
         setFreeDriveUi(isFreeDriveMode);
         if (!isFreeDriveMode) ensureRouteSummaryCycling();
@@ -5020,6 +5130,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const navStartTime = Date.now();
         const navStartDistanceMeters = selectedRouteObj ? (selectedRouteObj.distanceMeters || 0) : 0;
         navigationSessionStartedAt = navStartTime;
+        if (!isFreeDriveMode) DriveArchive.record('trip-start', {id:navStartTime,predictedDurationSec:selectedRouteObj?.durationSec,
+            solar:JourneyPolicy.solarTradeoff(routeData?.routes?.fastest, selectedRouteObj)});
         lastReliableFixAt = 0;
         routingUnavailable = false;
         navigationSessionStartDistanceMeters = navStartDistanceMeters;
@@ -5297,6 +5409,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 offRouteEvidence = RouteState.evaluateOffRoute(offRouteEvidence, {
                     timestamp: now, distanceMeters: offRouteDist, accuracy: incomingAccuracy,
                     oppositeDirection: navigationSnap && navigationSnap.reason === 'opposite-direction',
+                    uncertain: navigationSnap && ['ambiguous', 'nearby-road-conflict', 'reacquiring'].includes(navigationSnap.reason),
                     online: navigator.onLine !== false || !!RoadPack.graph, pending: !!pendingRouteRequestKey || !!routeAbortController
                 });
                 if (offRouteEvidence.shouldReroute) {

@@ -17,6 +17,7 @@
         return active;
     }
     async function setActive(value) {
+        if (!value && active) await record('recording-stop', {});
         if (plugin()?.setDriveRecording) await plugin().setDriveRecording({ active: value });
         else root.localStorage.setItem('solarless_recording_active', String(value));
         active = value;
@@ -25,7 +26,7 @@
     function record(type, data) {
         if (!active) return;
         if (plugin()?.recordDriveEvent) {
-            plugin().recordDriveEvent({ type, data }).catch(() => {}); return;
+            return plugin().recordDriveEvent({ type, data }).then(() => true, () => false);
         }
         if (!db) return;
         const event = { type, data, recordedAt: Date.now(), sequence: ++sequence, slot: type === "route" ? 5000 + sequence % 8 : sequence % 5000 };

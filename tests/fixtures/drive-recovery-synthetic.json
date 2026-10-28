@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "type": "solarless-drive-quality",
+  "synthetic": true,
+  "samples": [],
+  "events": [
+    {"type":"route","recordedAt":1000,"data":{"coordinates":[[0,0],[0.01,0]],"maneuvers":[]}},
+    {"type":"native-location","recordedAt":10000,"data":{"timestamp":10000,"lat":0,"lng":0.001,"accuracy68":3,"heading":90,"speedMps":10}},
+    {"type":"reroute-start","recordedAt":19000,"data":{"id":"r1"}},
+    {"type":"reroute-ready","recordedAt":20000,"data":{"id":"r1"}},
+    {"type":"native-location","recordedAt":30000,"data":{"timestamp":30000,"lat":0,"lng":0.008,"accuracy68":3,"heading":90,"speedMps":10}},
+    {"type":"native-location","recordedAt":31000,"data":{"timestamp":31000,"lat":0,"lng":0.0081,"accuracy68":3,"heading":90,"speedMps":10}},
+    {"type":"native-location","recordedAt":32000,"data":{"timestamp":32000,"lat":0.005,"lng":0.0081,"accuracy68":50,"heading":90,"speedMps":10}}
+  ]
+}

@@ -12,6 +12,7 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/shadow-router.js'), 
 const annotations = new Map((recording.events || []).filter(e => e.type === 'match').map(e => [e.data.timestamp, e.data]));
 const samples = recording.samples.map(s => ({ ...s, ...(annotations.get(s.timestamp) || {}) }));
 const report = replay(samples, sandbox.window.ShadowRouter.calculateDistanceMeters);
+report.journeyReview = require('../js/drive-quality.js').review(recording);
 const nativeSamples = (recording.events || []).filter(e => e.type === 'native-location').map(e => ({
     ...e.data, receivedAt: e.recordedAt, accuracy: e.data.accuracy68 > 0 ? e.data.accuracy68 * 1.62 : Infinity,
     reportedSpeedKmh: e.data.speedMps >= 0 ? e.data.speedMps * 3.6 : null
@@ -22,16 +23,19 @@ report.nativeFixQuality = replay(nativeSamples, sandbox.window.ShadowRouter.calc
 delete report.nativeFixQuality.decisions;
 const guidance = require('../js/navigation-guidance.js');
 const routeEvents = (recording.events || []).filter(e => e.type === 'route' && e.data.coordinates?.length >= 2).sort((a,b) => a.recordedAt-b.recordedAt);
-let routeIndex=-1, previous=null;
+let routeIndex=-1, previous={};
 report.nativeRouteReplay = { matched:0, uncertain:0, missingRoute:0 };
 for (const sample of nativeSamples) {
-    while(routeIndex+1<routeEvents.length && routeEvents[routeIndex+1].recordedAt<=sample.receivedAt) { routeIndex++; previous=null; }
+    while(routeIndex+1<routeEvents.length && routeEvents[routeIndex+1].recordedAt<=sample.receivedAt) { routeIndex++; previous={}; }
     if(routeIndex<0) {report.nativeRouteReplay.missingRoute++;continue;}
     const data=routeEvents[routeIndex].data;
     if(!data._route) data._route={analyzed:{coordinates:data.coordinates},maneuvers:data.maneuvers||[],distanceMeters:data.distanceMeters};
     if(sample.accuracy>35||sample.receivedAt-sample.timestamp>10000) {report.nativeRouteReplay.uncertain++;continue;}
-    const snap=guidance.match(data._route,{...sample,speedKmh:sample.reportedSpeedKmh,heading:sample.heading>=0?sample.heading:NaN},previous);
-    if(snap.isSnapped){report.nativeRouteReplay.matched++;previous=snap;}else report.nativeRouteReplay.uncertain++;
+    const fix={...sample,speedKmh:sample.reportedSpeedKmh,heading:sample.heading>=0?sample.heading:NaN};
+    const confirmed=guidance.confirmMatch(guidance.match(data._route,fix,previous.snap),fix,previous);
+    const snap=confirmed.result;
+    previous={...previous,...confirmed};
+    if(snap.isSnapped){report.nativeRouteReplay.matched++;previous.snap=snap;}else report.nativeRouteReplay.uncertain++;
 }
 report.dropped = recording.dropped || 0;
 report.retention = recording.retention || 'memory';

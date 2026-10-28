@@ -210,6 +210,11 @@
                 </div>
             </div>
 
+            <div class="start-search-overlay hidden" id="journey-detail-modal" role="dialog" aria-modal="true" aria-labelledby="journey-detail-title">
+                <div class="start-search-card"><h2 id="journey-detail-title"></h2><p id="journey-detail-body"></p>
+                    <button type="button" class="nav-btn" id="btn-close-journey-detail">닫기 / Close</button>
+                </div>
+            </div>
             <div class="start-search-overlay hidden" id="route-legend-modal" role="dialog" aria-modal="true" aria-labelledby="route-legend-title">
                 <div class="start-search-card route-legend-card">
                     <h2 id="route-legend-title">경로 색상 범례</h2>
@@ -330,6 +335,9 @@
                             </select>
                         </div>
                         <button type="button" class="nav-btn secondary" id="btn-preview-voice">안내 음성 미리 듣기 (도로명은 영어)</button>
+                        <div class="option-row"><label for="toggle-driving-focus" id="driving-focus-label">주행 집중 화면</label>
+                            <label class="toggle-switch"><input type="checkbox" id="toggle-driving-focus" checked><span class="slider"></span></label>
+                        </div>
                         <div class="option-row">
                             <div class="option-label-group">
                                 <span class="option-title" id="auto-dark-title">🕶️ 야간/터널 자동 다크모드</span>
@@ -431,6 +439,7 @@
                         <span class="estimate-note" id="estimate-note">실험용 추정값</span>
                     </div>
                     <div class="card-body">
+                        <button type="button" class="nav-btn secondary" id="btn-route-analysis">경로 분석 보기</button>
                         <div class="mode-options">
                             <!-- 1. Fastest Route Option -->
                             <button class="mode-btn" data-mode="fastest">
@@ -540,6 +549,7 @@
                                 <h4 id="diagnostics-section-title">주행 진단</h4>
                                 <button type="button" id="btn-drive-record" class="nav-btn" data-recording="false"><i class="fa-solid fa-circle-dot" aria-hidden="true"></i><span id="drive-record-label">주행 기록 시작</span></button>
                                 <button type="button" id="btn-drive-export" class="nav-btn"><i class="fa-solid fa-file-export" aria-hidden="true"></i><span id="drive-export-label">기록 내보내기</span></button>
+                                <button type="button" id="btn-drive-report" class="nav-btn secondary">주행 품질 요약</button>
                                 <button type="button" id="btn-drive-clear" class="nav-btn secondary"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span id="drive-delete-label">저장 기록 삭제</span></button>
                                 <small id="drive-record-help">선택 시 위치·시간을 기기에만 기록합니다. 외부 업로드는 없습니다.</small>
                             </section>
@@ -601,6 +611,7 @@
                 </div>
                 <div class="map-bottom-overlay-stack" id="map-bottom-overlay-stack" aria-live="polite">
                     <div id="route-preview-status" class="route-preview-status" role="status" hidden></div>
+                    <div id="cached-preview-status" class="route-preview-status" role="status" hidden></div>
                     <div class="map-attribution" id="map-attribution" aria-label="Map attribution">
                         <span id="map-attribution-text"><a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> · © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer">OpenMapTiles</a> · Data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a></span>
                     </div>

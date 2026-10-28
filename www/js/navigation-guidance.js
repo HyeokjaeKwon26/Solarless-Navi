@@ -55,6 +55,10 @@
         return result;
     }
     function match(route, fix, previous = null) {
+        if (![fix.lng, fix.lat, fix.timestamp].every(Number.isFinite) || Math.abs(fix.lng) > 180 || Math.abs(fix.lat) > 90 ||
+            (fix.accuracy !== undefined && (!Number.isFinite(fix.accuracy) || fix.accuracy <= 0 || fix.accuracy > 35))) {
+            return { lat: fix.lat, lng: fix.lng, timestamp: fix.timestamp, isSnapped: false, reason: 'inaccurate', remainingMeters: Infinity };
+        }
         const data = model(route), point = [fix.lng, fix.lat];
         const speed = Math.max(0, Number(fix.speedKmh) || 0) / 3.6;
         const accuracy = clamp(Number(fix.accuracy) || 10, 3, 35);
@@ -82,7 +86,8 @@
         }
         candidates.sort((a, b) => a.score - b.score);
         const best = candidates[0];
-        const ambiguous = best && candidates.some(c => Math.abs(c.progressMeters - best.progressMeters) > 60 && c.score - best.score < 8);
+        const margin = Math.max(8, accuracy * 0.6);
+        const ambiguous = best && candidates.some(c => Math.abs(c.progressMeters - best.progressMeters) > 60 && c.score - best.score < margin);
         const accepted = best && best.distance <= Math.min(40, Math.max(18, accuracy * 1.5)) && !ambiguous;
         const raw = { lat: fix.lat, lng: fix.lng, heading: fix.heading || 0, isSnapped: false,
             distMeters: nearest, segmentIndex: -1, t: 0, remainingMeters: Infinity,
@@ -92,6 +97,21 @@
             isSnapped: true, distMeters: best.distance, segmentIndex: best.segmentIndex, t: best.t,
             progressMeters: best.progressMeters, remainingMeters: data.total - best.progressMeters,
             timestamp: fix.timestamp, reason: 'matched' };
+    }
+    function confirmMatch(candidate, fix, previous = {}) {
+        const recovering = previous.recovering === true || previous.snap && fix.timestamp - previous.snap.timestamp > 15000 ||
+            ['ambiguous', 'nearby-road-conflict', 'reacquiring'].includes(previous.result?.reason);
+        if (!candidate.isSnapped) return { result: candidate, pending: null,
+            recovering: !!recovering || ['ambiguous','nearby-road-conflict'].includes(candidate.reason) };
+        if (!recovering) return { result: candidate, pending: null, recovering: false };
+        const pending = previous.pending;
+        const elapsed = pending ? fix.timestamp - pending.timestamp : 0;
+        const allowance = Math.max(45, Math.max(0, fix.speedKmh || 0) / 3.6 * elapsed / 1000 * 1.8 + Math.max(3, fix.accuracy || 10) * 2);
+        if (pending && elapsed > 0 && elapsed <= 5000 && candidate.progressMeters >= pending.progressMeters - 20 && candidate.progressMeters <= pending.progressMeters + allowance) {
+            return { result: candidate, pending: null, recovering: false };
+        }
+        return { recovering: true, pending: pending && elapsed <= 0 ? pending : candidate,
+            result: { ...candidate, lat: fix.lat, lng: fix.lng, isSnapped: false, reason: 'reacquiring', remainingMeters: Infinity } };
     }
     function next(route, snap) {
         if (!snap || !snap.isSnapped) return null;
@@ -153,5 +173,5 @@
             return out;
         }, []);
     }
-    return { model, match, next, thresholds, roadLabel, validSession, shouldConserve, spokenRoad, speechSegments };
+    return { model, match, confirmMatch, next, thresholds, roadLabel, validSession, shouldConserve, spokenRoad, speechSegments };
 });

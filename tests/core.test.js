@@ -3067,7 +3067,7 @@ test('free drive starts without a destination and can transition into routed gui
     assert.ok(appSource.includes('if (!requestedFreeDrive && !currentEnd)'));
     assert.ok(appSource.includes('navigationRouteNeedsReliableOrigin = !isFreeDriveMode'));
     assert.ok(appSource.includes('freeDrive: true'));
-    assert.ok(appSource.includes('isFreeDriveMode = false;\n                                setFreeDriveUi(false);'));
+    assert.ok(appSource.includes('setFreeDriveUi(false);'));
     assert.ok(css.includes('body.free-drive-active .route-summary-floating .summary-stats-wrapper'));
     assert.ok(i18n.includes('freeDriveStart: "목적지 없이 자유 주행"'));
     assert.ok(i18n.includes('freeDriveStart: "Free drive without destination"'));

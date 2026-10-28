@@ -6,6 +6,9 @@ final class NavigationProgress {
     private final double[] meters;
     private double last = -1;
     private long lastAt;
+    private boolean uncertain;
+    private double pending = -1;
+    private long pendingAt;
     NavigationProgress(double[][] points) {
         this.points = points;
         meters = new double[points.length];
@@ -16,7 +19,7 @@ final class NavigationProgress {
         return Math.hypot((lon2 - lon1) * Math.cos(Math.toRadians((lat1 + lat2) / 2)), lat2 - lat1) * 111194.9266;
     }
     double match(double lon, double lat, double accuracy, double heading, double speed, long at, long now) {
-        if (!finite(lon) || !finite(lat) || !finite(accuracy) || accuracy <= 0 || accuracy > 35 || now - at > 10000 || at - now > 2000 || at <= lastAt) return Double.NaN;
+        if (!finite(lon) || !finite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90 || !finite(speed) || speed < 0 || !finite(accuracy) || accuracy <= 0 || accuracy > 35 || now - at > 10000 || at - now > 2000 || at <= lastAt || (pending >= 0 && at <= pendingAt)) return Double.NaN;
         boolean continuous = last >= 0 && at - lastAt <= 15000;
         double allowance = Math.max(45, speed * Math.max(0, at - lastAt) / 1000 * 1.8 + accuracy * 2);
         double best = Double.POSITIVE_INFINITY, progress = -1;
@@ -36,8 +39,18 @@ final class NavigationProgress {
             candidates.add(new double[]{p, score});
             if (score < best) { best = score; progress = p; }
         }
-        if (progress < 0) return Double.NaN;
-        for (double[] candidate : candidates) if (Math.abs(candidate[0] - progress) > 60 && candidate[1] - best < 8) return Double.NaN;
+        if (progress < 0) { pending = -1; return Double.NaN; }
+        for (double[] candidate : candidates) if (Math.abs(candidate[0] - progress) > 60 && candidate[1] - best < Math.max(8, accuracy * 0.6)) {
+            uncertain = true; pending = -1; return Double.NaN;
+        }
+        if (uncertain || (last >= 0 && at - lastAt > 15000)) {
+            long elapsed = at - pendingAt;
+            double recoveryAllowance = Math.max(45, speed * Math.max(0, elapsed) / 1000 * 1.8 + accuracy * 2);
+            if (!(pending >= 0 && elapsed > 0 && elapsed <= 5000 && progress >= pending - 20 && progress <= pending + recoveryAllowance)) {
+                pending = progress; pendingAt = at; return Double.NaN;
+            }
+        }
+        uncertain = false; pending = -1;
         last = progress; lastAt = at;
         return progress;
     }
