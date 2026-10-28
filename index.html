@@ -300,6 +300,7 @@
                         </div>
                     </div>
 
+                    <button type="button" class="nav-btn" id="btn-arrival-next" hidden>다음 구간 이어가기</button>
                     <button type="button" class="confirm-start-btn" id="btn-close-arrival-modal" style="background: linear-gradient(135deg, #10b981, #059669); margin-top: 14px;">
                         <i class="fa-solid fa-check"></i> <span id="arrival-btn-confirm-text">안내 종료 확인</span>
                     </button>
@@ -554,12 +555,22 @@
                             <button type="button" id="btn-arrival-preview" class="nav-btn secondary" disabled>도착 구간 미리보기 / Arrival preview</button>
                             <button type="button" id="btn-compare-routes" class="nav-btn secondary">대안 경로 비교</button>
                             <button type="button" id="btn-more-routes" class="nav-btn secondary">대안 경로 더 찾기</button>
+                            <section class="settings-section" aria-labelledby="route-preference-title">
+                                <h4 id="route-preference-title">경로 선택</h4>
+                                <label id="route-preference-label" for="route-preference">우선순위</label>
+                                <select id="route-preference"><option value="fastest">최단시간</option><option value="simple">회전·유턴 적게</option><option value="glareFree">역광 회피</option><option value="shade">그늘 우선</option></select>
+                                <label id="route-budget-label" for="route-budget">최단시간 대비 허용 우회</label>
+                                <select id="route-budget"><option value="0">0 min</option><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option></select>
+                                <small id="route-preference-status" role="status"></small>
+                            </section>
                             <section class="settings-section" aria-labelledby="trip-tools-title">
                                 <h4 id="trip-tools-title">경유 및 경로 주변</h4>
                                 <button type="button" id="btn-add-stop" class="nav-btn secondary">경유지 추가</button>
                                 <button type="button" id="btn-next-stop" class="nav-btn secondary" hidden>다음 목적지로</button>
                                 <button type="button" id="btn-clear-stops" class="nav-btn secondary" hidden>남은 경유 취소</button>
                                 <small id="trip-stops-status" role="status"></small>
+                                <div id="trip-order-list"></div>
+                                <button type="button" id="btn-trip-preview" class="nav-btn secondary">전체 여정 미리보기</button>
                                 <button type="button" id="btn-route-fuel" class="nav-btn secondary">경로 주변 주유소</button>
                                 <button type="button" id="btn-route-parking" class="nav-btn secondary">경로 주변 주차장</button>
                                 <div id="route-place-results" role="status"></div>
@@ -636,6 +647,11 @@
                 </div>
 
                 <div id="map"></div>
+                <section id="closure-offer" class="closure-offer hidden" aria-live="polite">
+                    <p id="closure-offer-text"></p>
+                    <button type="button" id="btn-closure-accept" class="nav-btn">우회 경로 사용</button>
+                    <button type="button" id="btn-closure-dismiss" class="nav-btn secondary">나중에</button>
+                </section>
                 <!--
                     Compact, navigation-only PiP surface. Android PiP keeps the
                     activity's WebView alive, so this HUD is deliberately kept
@@ -777,6 +793,15 @@
     </div>
 
     <!-- Scripts -->
+    <div id="trip-preview-modal" class="start-search-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="trip-preview-title">
+        <div class="start-search-card itinerary-card">
+            <h2 id="trip-preview-title">전체 여정</h2>
+            <p id="trip-preview-status" role="status"></p>
+            <div id="trip-preview-map" aria-label="Itinerary map"></div>
+            <ol id="trip-preview-legs"></ol>
+            <button type="button" id="btn-close-trip-preview" class="nav-btn secondary">닫기</button>
+        </div>
+    </div>
     <script src="js/leaflet.js"></script>
     <script src="js/maplibre-gl.js"></script>
     <script src="js/leaflet-maplibre-gl.js"></script>
@@ -804,6 +829,8 @@
     <script src="js/trip-tools.js"></script>
     <script src="js/route-detours.js"></script>
     <script src="js/eta-learning.js"></script>
+    <script src="js/journey-upgrades.js"></script>
+    <script src="js/journey-controls.js"></script>
     <script src="js/road-pack.js"></script>
     <script src="js/native-navigation.js"></script>
     <script src="js/drive-archive.js"></script>

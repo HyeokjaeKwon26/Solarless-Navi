@@ -1,6 +1,118 @@
 const { test, expect } = require('@playwright/test');
 const { version: mapVersion } = require('maplibre-gl/package.json');
 
+async function captureJourneyControls(page){
+    await page.route('**/js/journey-controls.js',async route=>{
+        const original=await route.fetch();
+        await route.fulfill({response:original,body:await original.text()+`\nconst originalJourneyCreate=JourneyControls.create; JourneyControls.create=api=>{window.journeyTestApi=api;return window.journeyTestController=originalJourneyCreate(api);};`});
+    });
+}
+async function installClosureFixture(page){
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({speed:0});return journeyTestApi.state().snapped;})).toBe(true);
+    await page.evaluate(async()=>{
+        const s=journeyTestApi.state(),coords=s.route.analyzed.coordinates;
+        const original=structuredClone(s.route.raw),candidate=structuredClone(s.route),now=Date.now();
+        const feeds=[{source:'test',newest:now,status:'fresh',events:[{id:1,name:'Fixture Road',names:['Fixture Road'],direction:'northbound',impact:'all-lanes-closed',closureVerified:true,verified:true,start:now-1000,end:now+300000,points:coords.slice(15,26)}]}];
+        const move=p=>{const t=(p[1]-coords[0][1])/(coords.at(-1)[1]-coords[0][1]);return [p[0]-.003*Math.sin(Math.PI*Math.max(0,Math.min(1,t))),p[1]];};
+        candidate.id='closure-detour';candidate.durationSec+=120;candidate.raw.duration=candidate.durationSec;
+        candidate.raw.geometry.coordinates=coords.map(move);
+        for(const step of candidate.raw.legs.flatMap(l=>l.steps)){step.geometry.coordinates=step.geometry.coordinates.map(move);step.maneuver.location=move(step.maneuver.location);}
+        candidate.analyzed=await ShadowRouter.analyzeRouteSegmentsAsync(candidate.raw.geometry.coordinates,new Date(),candidate.durationSec,candidate.raw.legs.flatMap(l=>l.steps));
+        candidate.routeSteps=candidate.raw.legs.flatMap(l=>l.steps);
+        window.closureFixture={feeds,traffic:PublicTraffic.evaluate(original,feeds),remaining:{duration:300,coordinates:coords,steps:original.legs.flatMap(l=>l.steps)},candidate};
+        if(!closureFixture.traffic.blocked||PublicTraffic.evaluate(candidate.raw,feeds).blocked)throw Error('Closure fixture must block only original road');
+        journeyTestApi.candidates=async()=>({routes:{fastest:candidate,glareFree:candidate,shade:candidate,all:[candidate]}});
+        PublicTraffic.load=async()=>feeds;
+    });
+}
+
+test('route preference and detour budget persist and remain usable on a narrow screen',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#route-preference').selectOption('simple');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#route-budget').selectOption('2');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.setViewportSize({width:320,height:740});await page.locator('#route-preference').scrollIntoViewIfNeeded();
+    const box=await page.locator('#route-preference').boundingBox();expect(box.x+box.width).toBeLessThanOrEqual(321);expect(box.height).toBeGreaterThanOrEqual(44);
+    await expect(page.locator('#route-preference-status')).toContainText('turns');
+    await page.screenshot({path:test.info().outputPath('route-preference-320.png')});
+    await page.reload();await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#route-preference')).toHaveValue('simple');await expect(page.locator('#route-budget')).toHaveValue('2');expect(state.errors).toEqual([]);
+});
+
+test('entire journey shows every leg and total, supports reordering, and refuses moving leg transition',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);
+    await page.route('https://router.project-osrm.org/**',async route=>{
+        const url=new URL(route.request().url());if(url.searchParams.get('alternatives')!=='false')return route.fallback();
+        const coordinates=url.pathname.split('/').at(-1).split(';').map(p=>p.split(',').map(Number));
+        await route.fulfill({json:{code:'Ok',waypoints:coordinates.map(location=>({location,distance:0})),routes:[{duration:120,distance:1000,geometry:{coordinates},legs:[{steps:[]}]}]}});
+    });
+    await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-add-stop').click();await selectDestination(page,'Bravo');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-trip-preview').click();
+    await expect(page.locator('#trip-preview-legs li')).toHaveCount(2);await expect(page.locator('#trip-preview-status')).toContainText('Total driving ~7 min');
+    await expect(page.locator('#trip-preview-map path.leaflet-interactive')).toHaveCount(2);
+    await page.screenshot({path:test.info().outputPath('entire-journey.png')});await page.locator('#btn-close-trip-preview').click();
+    await page.locator('#trip-order-list .trip-order-row').first().locator('button').last().click();
+    await expect(page.locator('#bar-dest-text')).toContainText('Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#btn-next-stop').click();await expect(page.locator('#bar-dest-text')).toContainText('Alpha');
+    expect((await page.evaluate(()=>TripTools.get())).current.name).toContain('Alpha');
+    await page.evaluate(()=>testGps.emit({speed:0}));await page.locator('#btn-next-stop').click();
+    await expect(page.locator('#bar-dest-text')).toContainText('Bravo');expect(await page.evaluate(()=>TripTools.get())).toBeNull();expect(state.errors).toEqual([]);
+});
+
+test('closure detour requires acceptance, commits through live guidance, and keeps destination',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();
+    await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
+    const before=await page.locator('#bar-dest-text').textContent();
+    await installClosureFixture(page);
+    await page.evaluate(async()=>{
+        window.originalClosureRoute=EtaLearning.routeKey(journeyTestApi.state().route);window.closureCommits=0;
+        const commit=journeyTestApi.commit;journeyTestApi.commit=data=>{closureCommits++;return commit(data);};
+        await journeyTestController.considerClosure(closureFixture.traffic,closureFixture.remaining);
+    });
+    await expect(page.locator('#closure-offer')).toBeVisible();await expect(page.locator('#closure-offer-text')).toContainText('+2 min');
+    expect(await page.evaluate(()=>closureCommits)).toBe(0);await page.locator('#btn-closure-accept').click();
+    await expect(page.locator('#closure-offer')).toBeHidden();expect(await page.evaluate(()=>closureCommits)).toBe(1);
+    expect(await page.locator('#bar-dest-text').textContent()).toBe(before);await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
+    expect(await page.evaluate(()=>EtaLearning.routeKey(journeyTestApi.state().route)!==originalClosureRoute)).toBe(true);expect(state.errors).toEqual([]);
+});
+
+test('closure proposal expires after movement and dismissal cancels delayed candidates',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
+    await installClosureFixture(page);
+    await page.evaluate(async()=>{
+        window.closureCommits=0;journeyTestApi.commit=async()=>{closureCommits++;};
+        await journeyTestController.considerClosure(closureFixture.traffic,closureFixture.remaining);
+        const get=journeyTestApi.state;journeyTestApi.state=()=>({...get(),start:{lat:43,lng:-71}});
+    });
+    await page.locator('#btn-closure-accept').click();await expect(page.locator('#closure-offer-text')).toContainText('expired');expect(await page.evaluate(()=>closureCommits)).toBe(0);
+    await page.locator('#btn-closure-dismiss').click();await page.evaluate(()=>journeyTestApi.stop());
+    await page.reload();await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({speed:0});return journeyTestApi.state().snapped;})).toBe(true);
+    await page.evaluate(()=>{
+        const data=journeyTestApi.state().data;
+        journeyTestApi.candidates=()=>new Promise(resolve=>{window.releaseClosure=()=>resolve(data);});
+        window.pendingClosure=journeyTestController.considerClosure({blocked:true,closures:[{source:'test',id:2,name:'Main'}]},{duration:300});
+    });
+    await expect(page.locator('#closure-offer')).toBeVisible();await page.locator('#btn-closure-dismiss').click();
+    await page.evaluate(()=>{releaseClosure();return pendingClosure;});await expect(page.locator('#closure-offer')).toBeHidden();expect(state.errors).toEqual([]);
+});
+
+test('closure approval is refused if the feed expires after showing a proposal',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
+    await installClosureFixture(page);
+    await page.evaluate(async()=>{
+        window.closureCommits=0;journeyTestApi.commit=async()=>{closureCommits++;};
+        await journeyTestController.considerClosure(closureFixture.traffic,closureFixture.remaining);
+    });
+    await expect(page.locator('#btn-closure-accept')).toBeVisible();
+    await page.evaluate(()=>{closureFixture.feeds[0].newest=Date.now()-11*60000;});
+    await page.locator('#btn-closure-accept').click();await expect(page.locator('#closure-offer-text')).toContainText('expired');expect(await page.evaluate(()=>closureCommits)).toBe(0);expect(state.errors).toEqual([]);
+});
+
 test('fresh start opens settings without free drive on narrow phones and actions share styling', async ({ page }) => {
     const state = await fixtures(page, {brokenMap:true});
     await page.goto('./');
@@ -224,6 +336,7 @@ test('manual stops keep the final destination and comparison controls fit a narr
         expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(321);expect(box.height).toBeGreaterThanOrEqual(44);
     }
     await page.screenshot({path:test.info().outputPath('trip-controls-320.png')});
+    await page.evaluate(()=>window.testGps.emit({speed:0}));
     await page.locator('#btn-next-stop').click();await expect(page.locator('#bar-dest-text')).toContainText('Alpha');
     expect(await page.evaluate(()=>TripTools.get())).toBeNull();expect(state.errors).toEqual([]);
 });

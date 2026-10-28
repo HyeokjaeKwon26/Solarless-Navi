@@ -1353,3 +1353,19 @@ body.battery-saver-active .route-summary-floating {
 #voice-search-language { max-width:110px; color:#e2e8f0; background:#17263c; border:1px solid #38bdf8; border-radius:8px; }
 #route-place-results .nav-btn { white-space:normal; text-align:left; width:100%; }
 .lane-chips span { white-space:nowrap; min-width:28px; }
+/* Route preferences and bounded itinerary/closure actions. */
+[aria-labelledby="route-preference-title"], .itinerary-card, .closure-offer, #trip-order-list { font-family:var(--font-main); }
+#route-preference, #route-budget { width:100%; min-height:44px; margin:8px 0 12px; padding:8px; border:1px solid #38bdf8; border-radius:10px; background:#17263b; color:#f1f5f9; font:inherit; }
+#route-preference-status, #trip-stops-status { display:block; overflow-wrap:anywhere; }
+.trip-order-row { display:flex; gap:8px; align-items:center; margin:8px 0; }
+.trip-order-row span { flex:1; min-width:0; overflow-wrap:anywhere; }
+.trip-order-row button { min-width:44px; width:44px; flex:0 0 44px; padding:8px; }
+.itinerary-card { width:min(94vw,640px); max-height:88dvh; overflow:auto; }
+#trip-preview-map { height:220px; min-height:140px; border-radius:10px; }
+#trip-preview-legs { padding-left:24px; overflow-wrap:anywhere; }
+#trip-preview-legs li { margin:10px 0; }
+.closure-offer { position:absolute; z-index:1100; left:12px; right:12px; top:170px; max-width:450px; margin:auto; padding:14px; border:2px solid #f59e0b; border-radius:14px; background:#17263b; color:#f8fafc; box-shadow:0 4px 20px #0008; max-height:45dvh; overflow:auto; }
+.closure-offer p { margin:0 0 8px; overflow-wrap:anywhere; }
+.closure-offer.hidden { display:none; }
+body.pip-mode #trip-preview-modal, body.pip-mode #closure-offer { display:none; }
+@media(max-height:500px){.closure-offer{top:90px;max-height:55dvh;} #trip-preview-map{height:150px;}}

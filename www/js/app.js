@@ -47,9 +47,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const AUTO_FREE_DRIVE_ENABLED_KEY = 'solarless_auto_free_drive_enabled';
     const ACTIVE_NAVIGATION_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
     let currentMode = 'glareFree';
+    let routeBudget = 5, journeyControls = null;
+    try { routeBudget = JourneyUpgrades.budget(localStorage.getItem('solarless_route_budget') ?? 5); } catch {}
     try {
         const savedMode = localStorage.getItem(SAVED_ROUTE_MODE_KEY);
-        if (savedMode && ['glareFree', 'fastest', 'shade'].includes(savedMode)) {
+        if (savedMode && ['glareFree', 'fastest', 'shade', 'simple'].includes(savedMode)) {
             currentMode = savedMode;
         }
     } catch (e) {
@@ -376,7 +378,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-route-analysis').addEventListener('click', () => {
         const ko = I18n.getLanguage().startsWith('ko');
         const comparison = JourneyPolicy.solarTradeoff(routeData?.routes?.fastest, selectedRouteObj);
-        const details = selectedRouteObj && document.getElementById(currentMode === 'shade' ? 'desc-shade' : currentMode === 'fastest' ? 'desc-fastest' : 'desc-glare').textContent;
+        const details = currentMode === 'simple'
+            ? (ko ? '허용 우회 시간 안의 후보를 회전·유턴·분기 점수로 비교합니다. 실제 도로 폭과 운전 난이도는 미확인입니다.' : 'Candidates within your time limit are compared by turns, U-turns and branches. Road width and actual driving difficulty are unverified.')
+            : selectedRouteObj && document.getElementById(currentMode === 'shade' ? 'desc-shade' : currentMode === 'fastest' ? 'desc-fastest' : 'desc-glare').textContent;
         let text = details || (ko ? '경로를 먼저 계산해 주세요.' : 'Calculate a route first.');
         if (comparison) {
             text += '\n\n' + (ko ? `기준 경로 대비 시간 차이: ${(comparison.extraSeconds/60).toFixed(1)}분` : `Travel time difference: ${(comparison.extraSeconds/60).toFixed(1)} min`);
@@ -529,7 +533,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentEnd.entranceConfirmed = saved.end.entranceConfirmed === true;
         cachedPreview = saved.preview;
         destinationName = String(saved.name || (isKo ? '이전 목적지' : 'Previous destination'));
-        if (['glareFree', 'fastest', 'shade'].includes(saved.mode)) currentMode = saved.mode;
+        if (['glareFree', 'fastest', 'shade', 'simple'].includes(saved.mode)) currentMode = saved.mode;
         isTollFreeOnly = saved.tollFree === true;
         const tollToggle = document.getElementById('toggle-toll-free');
         if (tollToggle) tollToggle.checked = isTollFreeOnly;
@@ -771,6 +775,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getRouteAnnouncementText(mode, isReroute = false) {
         const isKo = I18n.getLanguage().startsWith('ko');
+        if (mode === 'simple') return isKo ? '회전과 유턴이 적은 후보 경로로 안내합니다.' : 'Guidance uses a candidate with fewer turns and U-turns.';
         let targetRoute = null;
         if (routeData && routeData.routes) {
             targetRoute = routeData.routes[mode];
@@ -1295,6 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderEtaSettings();
         document.getElementById('btn-route-parking').textContent=ko?'경로 주변 주차장':'Parking along route';
         renderTripPlan();
+        journeyControls?.render();
         document.getElementById('btn-compare-routes').textContent=ko?'대안 경로 비교':'Compare alternatives';
         document.getElementById('btn-more-routes').textContent=ko?'대안 경로 더 찾기':'Find more alternatives';
         document.getElementById('offline-area-label').textContent=ko?'선택 저장 영역 · APK에 미포함':'Optional saved area · not bundled in APK';
@@ -2263,7 +2269,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const userIsEditing = Date.now() - lastDestinationEditingAt < AUTO_FREE_DRIVE_EDITING_GRACE_MS;
             const sidebar = document.getElementById('sidebar-panel');
             const blockingModal = document.querySelector(
-                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden), #destination-review-modal:not(.hidden), #journey-detail-modal:not(.hidden)'
+                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden), #destination-review-modal:not(.hidden), #journey-detail-modal:not(.hidden), #trip-preview-modal:not(.hidden)'
             );
             if (userIsEditing || (sidebar && sidebar.classList.contains('active')) || blockingModal) {
                 autoFreeDriveMotionState = {};
@@ -2638,6 +2644,8 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const feeds = navigator.onLine === false ? [] : await PublicTraffic.load(remaining.coordinates);
             const traffic = PublicTraffic.evaluate({ geometry: { coordinates: remaining.coordinates }, duration: remaining.duration, legs: [{ steps: remaining.steps || [] }] }, feeds);
+            if (selectedRouteObj !== route || !isLiveNavActive) return;
+            if (traffic.blocked) await journeyControls?.considerClosure(traffic, remaining);
             const raw = { geometry: { coordinates: remaining.coordinates }, durationSec: traffic.duration };
             let weatherProfile = null;
             if (navigator.onLine !== false && window.WeatherRadiation) {
@@ -2687,6 +2695,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleHardwareBackButton() {
+        if (!document.getElementById('trip-preview-modal').classList.contains('hidden')) { journeyControls?.closePreview(); return; }
         const isKo = I18n.getLanguage().startsWith('ko');
         if (!document.getElementById('journey-detail-modal').classList.contains('hidden')) {
             document.getElementById('btn-close-journey-detail').click(); return;
@@ -2750,6 +2759,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const fullDisableUis = [
+            'trip-preview-modal',
+            'closure-offer',
             'journey-detail-modal',
             'destination-review-modal',
             'start-search-modal',
@@ -2831,7 +2842,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('Invalid GPS fix');
         NavigationUnits.setCountry(Geocoder.detectCountry(lat, lng, Geocoder.getCachedCountryCode(lat, lng)));
         const accuracy = Number(coords.accuracy);
-        if (Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0) {
+        if (coords.heading !== null && coords.heading !== undefined && Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0) {
             currentHeading = Number(coords.heading);
             hasValidGpsHeading = true;
         }
@@ -3766,6 +3777,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function updateRoute(isMidDrive = false, routeOptions = {}) {
+        journeyControls?.invalidate();
         if (!currentEnd || !currentStart) {
             pendingRouteRequestKey = null;
             verifiedRouteRequestKey = null;
@@ -3874,7 +3886,12 @@ document.addEventListener('DOMContentLoaded', () => {
         let rerouteRecorded = false;
         if (isMidDrive) DriveArchive.record('reroute-start', {id:rerouteRecordId,reason:rerouteReason});
         try {
-            const nextRouteData = await ShadowRouter.fetchAndAnalyzeRoutes(
+            const fetchRouteData = routeOptions.precomputed ? async (_start, _end, _date, _toll, options) => {
+                const prepared = { ...routeOptions.precomputed, analysisPhase: 'heuristic-initial', enrichmentPending: false };
+                await options.onProgress(prepared);
+                return prepared;
+            } : ShadowRouter.fetchAndAnalyzeRoutes;
+            const nextRouteData = await fetchRouteData(
                 requestStart,
                 requestEnd,
                 dateObj,
@@ -3901,7 +3918,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     onProgress: async progress => {
                         if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
                         const progressRequestKey = requestKey;
-                        routeData = progress;
+                        routeData = JourneyUpgrades.apply(progress, routeBudget);
                         routingUnavailable = false;
                         routeData.calculatedAt = Date.now();
                         routeData.requestKey = progressRequestKey;
@@ -3922,6 +3939,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const refinedAnalysisTier = enrichedSelection &&
                             (enrichedSelection.analysisTier || (enrichedSelection.analyzed && enrichedSelection.analyzed.analysisTier));
                         const precisionReadyForRole = progress.analysisPhase === 'precision-final' && roleKey !== 'fastest' && roleMeta &&
+                            enrichedSelection?.id !== routeData.routes.fastest?.id &&
                             roleMeta.refinementReady === true && (roleMeta.sceneReady === true || roleMeta.weatherReady === true) &&
                             enrichedSelection && (['scene', 'hybrid-scene'].includes(enrichedSelection.analysisMode) ||
                                 String(refinedAnalysisTier || '').startsWith('weather-'));
@@ -4035,7 +4053,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
             const completedRequestKey = requestKey;
-            routeData = nextRouteData;
+            routeData = JourneyUpgrades.apply(nextRouteData, routeBudget);
             routingUnavailable = false;
             routeData.calculatedAt = Date.now();
             routeData.requestKey = completedRequestKey;
@@ -4121,6 +4139,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateRouteOptionButtons(routeData) {
+        journeyControls?.render();
         const isKo = I18n.getLanguage().startsWith('ko');
         const fst = routeData.routes.fastest;
         const glr = routeData.routes.glareFree;
@@ -4530,6 +4549,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateSummaryBox(selectedRouteObj) {
+        journeyControls?.render();
         updateRemainingSummary(selectedRouteObj.durationSec, selectedRouteObj.distanceMeters);
     }
 
@@ -4778,6 +4798,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('trip-stops-status').textContent=plan?(ko?'이후 목적지: ':'Next destinations: ')+plan.pending.map(p=>p.name).join(' → '):'';
         document.getElementById('btn-next-stop').hidden=!plan?.pending.length;
         document.getElementById('btn-clear-stops').hidden=!plan;
+        journeyControls?.render();
     }
     async function addTripStop(coords,name){
         const ko=I18n.getLanguage().startsWith('ko');
@@ -4794,15 +4815,6 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('destination-input').value='';document.getElementById('destination-input').focus();
     });
     document.getElementById('btn-clear-stops').addEventListener('click',()=>{TripTools.clear();pendingStopRequest=false;renderTripPlan();});
-    document.getElementById('btn-next-stop').addEventListener('click',async()=>{
-        const plan=TripTools.get(),ko=I18n.getLanguage().startsWith('ko');
-        if(isLiveNavActive||!plan?.pending.length){showApiNotice(ko?'현재 안내를 종료한 뒤 다음 목적지를 선택하세요.':'End current guidance before selecting the next destination.');return;}
-        if(!confirm(ko?`다음 목적지 ${plan.pending[0].name}로 경로를 계산할까요?`:`Calculate a route to ${plan.pending[0].name}?`))return;
-        const next=plan.pending[0];
-        if(await applyDestinationSelection(next.coords,next.name,{reviewed:true,keepTrip:true})){
-            if(plan.pending.length>1)TripTools.set({savedAt:Date.now(),current:next,pending:plan.pending.slice(1)});else TripTools.clear();renderTripPlan();
-        }
-    });
     document.getElementById('btn-voice-destination').addEventListener('click',async event=>{
         event.stopPropagation();
         const button=event.currentTarget,ko=I18n.getLanguage().startsWith('ko'),status=document.getElementById('voice-search-status');
@@ -5163,6 +5175,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleDestinationArrival(navStartTime, navStartDistanceMeters) {
+        journeyControls?.invalidate();
         try{etaLearning.finish(selectedRouteObj,true);renderEtaSettings();}catch{renderEtaSettings(true);}
         tripEta=null;
         DriveArchive.record('trip-end', {id:navigationSessionStartedAt,arrived:true});
@@ -5193,11 +5206,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (modeValEl) {
             if (currentMode === 'glareFree') modeValEl.innerText = isKo ? "역광 회피 (눈부심 차단)" : "Glare-Free";
             else if (currentMode === 'shade') modeValEl.innerText = isKo ? "그늘·구조물 우선" : "Shade Priority";
-            else modeValEl.innerText = isKo ? "최단 시간" : "Fastest";
+            else modeValEl.innerText = currentMode === 'simple' ? (isKo ? '회전·유턴 적게' : 'Fewer turns') : (isKo ? "최단 시간" : "Fastest");
         }
 
         const arrivalModal = document.getElementById('arrival-modal');
         if (arrivalModal) arrivalModal.classList.remove('hidden');
+        journeyControls?.render();
 
         const liveNavBtn = document.getElementById('live-gps-nav-btn');
         const directMapNavBtn = document.getElementById('btn-map-start-nav');
@@ -5244,6 +5258,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isLiveNavActive) {
             const wasFreeDrive = isFreeDriveMode;
+            journeyControls?.invalidate();
             DriveArchive.record('trip-end', {id:navigationSessionStartedAt,arrived:false});
             etaLearning.cancel();tripEta=null;
             stopGpsWatch();
@@ -5936,13 +5951,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* ROUTE MODE SELECTOR & MID-ROUTE REROUTING LOGIC WITH CANCEL HIGHLIGHT REVERT */
     function saveRouteModePreference(mode) {
-        if (!['glareFree', 'fastest', 'shade'].includes(mode)) return;
+        if (!['glareFree', 'fastest', 'shade', 'simple'].includes(mode)) return;
         try {
             localStorage.setItem(SAVED_ROUTE_MODE_KEY, mode);
         } catch (e) {}
     }
 
     function updateModeButtonsHighlight() {
+        journeyControls?.render();
         document.querySelectorAll('.mode-btn').forEach(b => {
             if (b.getAttribute('data-mode') === currentMode) {
                 b.classList.add('active');
@@ -6024,6 +6040,32 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    journeyControls = JourneyControls.create({
+        state: () => ({ route: selectedRouteObj, data: routeData, start: currentStart, end: currentEnd, name: destinationName,
+            mode: currentMode, budget: routeBudget, toll: isTollFreeOnly, live: isLiveNavActive, free: isFreeDriveMode,
+            realtime: isRealTimeMode, ready: isCurrentRouteReady(), busy: !!pendingRouteRequestKey || navigationTransitionPending || !!liveDestinationBackup,
+            fixAt: lastGpsTimestamp || gpsLastFixAt, accuracy: currentStart?.accuracy, speed: lastNavigationSpeedKmh,
+            snapped: navigationRouteProgress.result?.isSnapped === true, heading: hasValidGpsHeading ? currentHeading : null }),
+        remaining: () => JourneyPolicy.remaining(selectedRouteObj, navigationRouteProgress.snap),
+        preference: async (mode, budget) => {
+            if (!JourneyUpgrades.modes.includes(mode)) return;
+            localStorage.setItem('solarless_route_budget', String(budget));
+            localStorage.setItem(SAVED_ROUTE_MODE_KEY, mode);
+            currentMode = mode; routeBudget = budget; updateModeButtonsHighlight();
+            if (currentStart && currentEnd) await updateRoute(isLiveNavActive, { reason: 'manual-route-change', reuseCachedCandidates: true });
+        },
+        destination: point => applyDestinationSelection(point.coords, point.name, { reviewed: true, keepTrip: true }),
+        renderTrip: renderTripPlan,
+        gps: () => new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject,
+            { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 })),
+        useGps: pos => applyGpsFix(pos, 'leg-transition'),
+        stop: () => toggleLiveGpsNavigation(), notice: showApiNotice,
+        candidates: (state, signal) => ShadowRouter.fetchAndAnalyzeRoutes(state.start, state.end, new Date(), state.toll,
+            { signal, sceneSignal: signal, reuseOsrmCache: false, viaRequestBudget: 4, preferredRouteRole: state.mode,
+                startHeading: hasValidGpsHeading ? currentHeading : null }),
+        commit: data => updateRoute(true, { reason: 'closure-accepted', precomputed: data })
+    });
+    journeyControls.render();
     const appUpdater = SolarlessUpdater.create({
         language: () => I18n.getLanguage(),
         isDriving: () => isLiveNavActive || (lastNavigationSpeedKmh > 3.5 && Date.now() - gpsLastFixAt < 15000)

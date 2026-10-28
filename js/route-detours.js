@@ -66,5 +66,5 @@
         routes.forEach(({row,r},i)=>{if(allowed[i+1])row.detour=quote(base,r);else row.blocked=true;});
         return rows.sort((a,b)=>(a.detour?.extraSeconds??Infinity)-(b.detour?.extraSeconds??Infinity)||(a.detour?.uturns??Infinity)-(b.detour?.uturns??Infinity));
     }
-    return {url,validate,quote,rank,routingFetch,createRoutingFetch};
+    return {url,validate,quote,rank,request,routingFetch,createRoutingFetch};
 });

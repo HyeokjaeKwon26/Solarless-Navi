@@ -17,7 +17,7 @@
             state.remainingMeters >= 300 && (!state.next || state.next.distanceFromCar > 500));
     }
     function remaining(route, snap) {
-        if (!snap?.isSnapped || snap.segmentIndex < 0) return null;
+        if (!route?.analyzed?.coordinates || !snap?.isSnapped || snap.segmentIndex < 0) return null;
         const coordinates = [[snap.lng, snap.lat], ...route.analyzed.coordinates.slice(snap.segmentIndex + 1)];
         if (coordinates.length < 2 || snap.remainingMeters < 10) return null;
         // Keep original per-road timing proportions instead of assigning one speed to all roads.
@@ -30,6 +30,17 @@
             if (passed >= length) { passed -= length; continue; }
             const ratio = length > 0 ? (length - passed) / length : 0;
             const remainingStep = { ...step, distance: length * ratio, duration: (Number(step.duration) || 0) * ratio };
+            // A passed closure in the first partial step must not be evaluated
+            // as still ahead. Preserve the remaining step's geometry as well.
+            if (passed > 0 && step.geometry?.coordinates?.length > 1) {
+                const points = step.geometry.coordinates;
+                const lengths = points.slice(1).map((b,i) => Math.hypot((b[0]-points[i][0])*Math.cos((b[1]+points[i][1])*Math.PI/360), b[1]-points[i][1]));
+                let cut = lengths.reduce((a,b)=>a+b,0) * (1-ratio), index = 0;
+                while (index < lengths.length-1 && cut >= lengths[index]) cut -= lengths[index++];
+                const t = lengths[index] > 0 ? Math.min(1,cut/lengths[index]) : 0;
+                const a = points[index], b = points[index+1];
+                remainingStep.geometry = { ...step.geometry, coordinates: [[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t],...points.slice(index+1)] };
+            }
             steps.push(remainingStep); duration += remainingStep.duration; passed = 0;
         }
         if (!duration) duration = route.durationSec * snap.remainingMeters / total;
