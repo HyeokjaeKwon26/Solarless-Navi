@@ -1,0 +1,410 @@
+{
+  "checkedAt": "2026-10-28T00:48:55.977Z",
+  "method": "All existing released building and tunnel way IDs compared to current PBF for presence, building height model, and tunnel tags. Geometry and additions are not exhaustively compared.",
+  "regions": [
+    {
+      "tileCount": 15421,
+      "buildingsBaseline": 13408947,
+      "tunnelsBaseline": 43474,
+      "ways": 24089563,
+      "buildingsFound": 13406445,
+      "buildingsNoLongerTagged": 704,
+      "buildingModelChanged": 4562,
+      "tunnelsFound": 43407,
+      "tunnelsNoLongerTagged": 45,
+      "latestBuildingWayNotInBaseline": 82647,
+      "latestTunnelWayNotInBaseline": 833,
+      "examples": [
+        {
+          "id": 24677632,
+          "old": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Boston",
+            "addr:state": "MA",
+            "building": "train_station",
+            "building:levels": "0",
+            "building:levels:underground": "1",
+            "building:material": "stone",
+            "nohousenumber": "yes",
+            "operator": "MBTA",
+            "roof:colour": "#666666",
+            "roof:levels": "1",
+            "roof:shape": "hipped",
+            "wheelchair": "no"
+          }
+        },
+        {
+          "id": 24677664,
+          "old": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "train_station",
+            "building:levels": "0",
+            "building:material": "concrete",
+            "nohousenumber": "yes",
+            "roof:colour": "#666666",
+            "roof:levels": "1",
+            "roof:shape": "hipped"
+          }
+        },
+        {
+          "id": 24677688,
+          "old": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "train_station",
+            "building:levels": "0",
+            "building:material": "concrete",
+            "nohousenumber": "yes",
+            "roof:colour": "#666666",
+            "roof:levels": "1",
+            "roof:shape": "hipped"
+          }
+        },
+        {
+          "id": 25589604,
+          "old": [
+            12.8,
+            12,
+            18,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building:part": "yes"
+          }
+        },
+        {
+          "id": 25743795,
+          "old": [
+            12,
+            12,
+            12,
+            "osm-height",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Burlington",
+            "addr:housenumber": "234",
+            "addr:state": "VT",
+            "addr:street": "Penny Lane",
+            "building": "yes",
+            "man_made": "water_works",
+            "name": "Francic J. O'Brien Water Treatment Facility",
+            "ref:vcgi:esiteid": "47784",
+            "source_ref": "https://www.burlingtonvt.gov/DocumentCenter/View/2784/Water-Historical-Timeline?bidId="
+          }
+        },
+        {
+          "id": 27551590,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            19.2,
+            18,
+            27,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "4804",
+            "addr:state": "PA",
+            "addr:street": "Forbes Avenue",
+            "building": "university",
+            "building:levels": "6",
+            "ele": "268",
+            "gnis:feature_id": "2103462",
+            "layer": "1",
+            "name": "Newell-Simon Hall",
+            "source": "USGS Geonames",
+            "wikidata": "Q7017710"
+          }
+        },
+        {
+          "id": 28364594,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            3.2,
+            3,
+            4.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Durham",
+            "addr:housenumber": "5",
+            "addr:postcode": "03824",
+            "addr:street": "Mill Road",
+            "building": "retail",
+            "building:levels": "1",
+            "roof:levels": "0",
+            "roof:shape": "double_saltbox"
+          }
+        },
+        {
+          "id": 28748455,
+          "old": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "building": "yes"
+          }
+        },
+        {
+          "id": 29513001,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:city": "Cambridge",
+            "addr:housenumber": "750;766",
+            "addr:postcode": "02215",
+            "addr:state": "MA",
+            "addr:street": "Commonwealth Avenue",
+            "building": "university",
+            "building:levels": "2",
+            "name": "Boston University Engineering Product Innovation Center",
+            "roof:levels": "0",
+            "roof:shape": "flat"
+          }
+        },
+        {
+          "id": 29513171,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            16,
+            15,
+            22.5,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "452",
+            "addr:street": "Park Drive",
+            "building": "apartments",
+            "building:levels": "5",
+            "roof:levels": "0",
+            "roof:shape": "flat"
+          }
+        },
+        {
+          "id": 29513200,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            25.6,
+            24,
+            36,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "101",
+            "addr:street": "Monmouth Street",
+            "building": "apartments",
+            "building:levels": "8",
+            "roof:levels": "0",
+            "roof:shape": "flat"
+          }
+        },
+        {
+          "id": 29513571,
+          "old": [
+            6,
+            3,
+            12,
+            "missing-height-default",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "current": [
+            6.4,
+            6,
+            9,
+            "osm-building-levels",
+            0,
+            0,
+            0,
+            "ground"
+          ],
+          "tags": {
+            "addr:housenumber": "97",
+            "addr:street": "Norfolk Street",
+            "building": "apartments",
+            "building:levels": "2",
+            "roof:levels": "0",
+            "roof:shape": "flat"
+          }
+        }
+      ],
+      "buildingsNotFound": 2502,
+      "tunnelsNotFound": 67,
+      "region": "us-northeast",
+      "osmExtractTimestamp": "2026-10-27T21:23:59Z",
+      "osmSha256": "4b253ef4cc7d85e3dc265146c09c08c0cf829c6ebaa344166e1216e51dc7dd8c"
+    }
+  ]
+}
