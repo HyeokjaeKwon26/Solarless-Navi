@@ -631,6 +631,7 @@ export function packageSceneTiles(config = configFromEnvironment()) {
 export function planScenePackages(config = configFromEnvironment()) {
     const sourceManifestPath = config.sourceManifest || path.join(config.inputDir, 'manifest.json');
     const sourceManifest = JSON.parse(fs.readFileSync(sourceManifestPath, 'utf8'));
+    if (sourceManifest.terrainDeferred === true) throw new Error('Deferred terrain must be merged before packaging');
     const sourceTiles = normalizeSourceTiles(sourceManifest);
     const reader = new SourceTileReader(sourceManifest, config.sourceTileDir || config.inputDir, config.sourceReleaseDir, config.sourcePackCacheEntries);
     const progress = config.progress ? message => console.log(`[scene-package] ${message}`) : null;
@@ -689,4 +690,5 @@ function main() {
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
 if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) main();
 
-export { configFromEnvironment, createDryRunManifest, normalizeSourceTiles, planCacheIdentity, stablePackKey };
+export { configFromEnvironment, createDryRunManifest, normalizeSourceTiles, planCacheIdentity, stablePackKey,
+    createManifest, groupBounds, assertTileCoverage };

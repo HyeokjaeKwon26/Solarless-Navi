@@ -85,7 +85,7 @@ by the provider's current terms.
 
 ## Mapzen Terrain Tiles
 
-The 2026-10-26 Korea scene refresh uses Mapzen Terrain Tiles Skadi elevation
+The 2026-10-26 Korea and 2026-10-27 US scene refreshes use Mapzen Terrain Tiles Skadi elevation
 for newly covered tiles and new or changed building footprints. Previously
 released terrain grids are preserved. The source is the public AWS Terrain
 Tiles dataset: https://registry.opendata.aws/terrain-tiles/.

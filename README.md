@@ -190,13 +190,13 @@ CSV, JSON과 SVG 그래프도 보고서와 함께 저장됩니다. 재현 명령
 
 | 권역 | 5 km 타일 | ZIP 자산 | Release |
 |:--|--:|--:|:--|
-| 미국 Northeast | 15,421 | 766 | [v3](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v3) |
-| 미국 Midwest | 43,707 | 899 | [v3](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v3) |
-| 미국 South | 47,566 | 899 | [v3](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v3) |
-| 미국 West | 41,802 | 899 | [v3](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v3) |
+| 미국 Northeast | 15,445 | 770 | [v3, OSM 2026-10-27](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-northeast-hybrid-v3-osm-20261027) |
+| 미국 Midwest | 44,074 | 899 | [v3, OSM 2026-10-27](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-midwest-hybrid-v3-osm-20261027) |
+| 미국 South | 48,025 | 999 | [v3, OSM 2026-10-27](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-south-hybrid-v3-osm-20261027) |
+| 미국 West | 42,218 | 899 | [v3, OSM 2026-10-27](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-us-west-hybrid-v3-osm-20261027) |
 | 대한민국 | 4,719 | 160 | [v3, OSM 2026-10-26](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/scene-kr-hybrid-v3-osm-20261026-r2) |
 
-한국 데이터는 2026-10-26 21:24:46 UTC까지의 OSM 추출본을 사용합니다. 기존 v3의 지형 격자를 보존하고 신규 타일과 새로 생성되거나 형상이 바뀐 건물의 지면 고도에는 Mapzen Terrain Tiles Skadi를 사용합니다. 출처와 비교 결과는 [장면 데이터 점검 기록](docs/SCENE_DATA_AUDIT_2026-10-27.md)에 기록합니다.
+한국 데이터는 2026-10-26 21:24:46 UTC, 미국 네 권역은 2026-10-27 21:23:59 UTC까지의 OSM 추출본을 사용합니다. 기존 v3의 지형 격자를 보존하고 신규 타일과 새로 생성되거나 형상이 바뀐 건물의 지면 고도에는 Mapzen Terrain Tiles Skadi를 사용합니다. 출처와 비교 결과는 [한국과 기존 미국 점검 기록](docs/SCENE_DATA_AUDIT_2026-10-27.md)과 [미국 갱신 및 경로 비교](docs/US_SCENE_UPDATE_2026-10-27.md)에 기록합니다.
 
 공개 manifest와 Release 자산은 모두 schema v3입니다. v3는 건물 높이 출처와 민감도 범위, 지형의 상대 수직오차 범위를 보존하며 경계가 불확실한 차광에는 이득을 부여하지 않습니다.
 

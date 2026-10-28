@@ -1,5 +1,7 @@
 # 장면 데이터 OSM 점검 — 2026-10-27
 
+미국 네 권역의 후속 갱신, 신규 ID·외곽선 전체 대조와 경로 비교는 [미국 장면 데이터 갱신 기록](US_SCENE_UPDATE_2026-10-27.md)을 참고한다. 아래 미국 점검은 갱신 전 당시의 기록이다.
+
 ## 한국 갱신
 
 - 원본: [Geofabrik 한국 OSM](https://download.geofabrik.de/asia/south-korea.html), PBF 헤더 기준 2026-10-26T21:24:46Z. SHA-256: a8583ab6b7f0ed1a96dc8d8d1546474951370947710de94a016bf32c4f8d3bdd.

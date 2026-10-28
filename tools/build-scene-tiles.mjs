@@ -54,6 +54,9 @@ const OSM_EXTRACT_TIMESTAMP = process.env.SCENE_OSM_EXTRACT_TIMESTAMP || null;
 const OSM_SOURCE_METADATA_PATH = process.env.SCENE_OSM_SOURCE_METADATA || null;
 const DEM_DATASET = String(process.env.SCENE_DEM_DATASET || 'SRTM 1 arc-second public elevation tiles');
 const DEM_DATASET_VERSION = process.env.SCENE_DEM_DATASET_VERSION || null;
+// Refresh workflows may defer terrain emission until the old grids are merged.
+// These intermediate tiles are not suitable for publication or routing.
+const DEFER_TERRAIN = String(process.env.SCENE_DEFER_TERRAIN || '').toLowerCase() === 'true';
 // Regional tile emission can take hours. An interrupted write pass may be
 // resumed, but only after every existing tile is parsed and matched against
 // the immutable inputs/configuration that determine its payload.
@@ -616,6 +619,7 @@ function reusableTileEntry(file, key, metadata) {
             && tile.source?.osmPbfSha256 === metadata.osm.pbfSha256
             && tile.source?.demDataset === metadata.terrain.dataset
             && (tile.source?.demDatasetVersion || null) === (metadata.terrain.datasetVersion || null)
+            && Boolean(tile.source?.terrainDeferred) === DEFER_TERRAIN
             && Array.isArray(tile.buildings)
             && Array.isArray(tile.tunnels)
             && Array.isArray(tile.terrain);
@@ -712,7 +716,7 @@ async function writeTiles() {
             bounds: tileBounds(key),
             buildings,
             tunnels,
-            terrain: terrainGridForTile(key, hgt),
+            terrain: DEFER_TERRAIN ? [] : terrainGridForTile(key, hgt),
             profileResolution: {
                 azimuthDeg: PROFILE_AZIMUTH_DEG,
                 sampleSpacingM: PROFILE_SAMPLE_SPACING_M,
@@ -732,7 +736,7 @@ async function writeTiles() {
             sceneCoverage: {
                 buildings: true,
                 tunnels: true,
-                terrain: true,
+                terrain: !DEFER_TERRAIN,
                 buildingGround: buildings.every(building => finite(building.ground))
             },
             source: {
@@ -743,7 +747,8 @@ async function writeTiles() {
                 osmSourceUrl: metadata.osm.sourceUrl,
                 osmPbfSha256: metadata.osm.pbfSha256,
                 demDataset: metadata.terrain.dataset,
-                demDatasetVersion: metadata.terrain.datasetVersion
+                demDatasetVersion: metadata.terrain.datasetVersion,
+                terrainDeferred: DEFER_TERRAIN
             }
         };
         fs.writeFileSync(outputFile, JSON.stringify(tile));
@@ -778,6 +783,7 @@ async function writeTiles() {
             }
         },
         dataVersion: DATA_VERSION,
+        terrainDeferred: DEFER_TERRAIN,
         bounds: REGION_BOUNDS,
         includeRoadCoverage: INCLUDE_ROAD_COVERAGE,
         generatedAt: new Date().toISOString(),
