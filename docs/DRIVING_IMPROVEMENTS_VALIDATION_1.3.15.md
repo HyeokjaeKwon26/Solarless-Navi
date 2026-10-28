@@ -59,4 +59,14 @@
 
 ## 배포 검증
 
-최종 소스 검사 및 공개 APK 검증 후 기록합니다.
+2026-10-28 최종 검증을 완료했습니다.
+
+- 배포 소스: `4cbaf30f5253967bb47cee08f978f8d6592ea21c`.
+- [APK 배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40704021400)와 [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40704021700) 모두 성공했습니다. 최종 Node 299건, 브라우저 136건 통과, Android 단위 검사·debug 빌드·lint 및 서명 release 빌드 성공. 로컬 Android JVM 결과는 27건, 실패/오류 0건입니다.
+- [1.3.15 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.15)에서 [APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.15/SolarLessNavi-1.3.15.apk), `update.json`, `SHA256SUMS.txt`가 공개 HTTP 200으로 내려오는 것을 확인했습니다.
+- APK는 4,428,173바이트입니다. 이전 1.3.14의 4,420,841바이트보다 7,332바이트 증가했습니다. 지도 데이터 번들은 포함하지 않습니다.
+- APK SHA-256: `4eeae99205c5cc6fba886ae3b8ebe7c1bd1b60e061b4b646eab447b216cd4566`. 공개 manifest 및 체크섬 파일과 일치합니다.
+- 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`. 기존 정식 키와 일치하며 `apksigner verify` 통과, 패키지 `com.solaris.nav`, 버전 1.3.15 / 19, debuggable=false를 확인했습니다.
+- 공개 APK 내부 웹 자산 59개가 배포 커밋의 `www` 파일과 바이트 단위로 일치합니다. 네이티브 NavigationProgress와 기존 음성 설정 브리지도 포함되어 있습니다.
+- 실제 공개 GitHub 응답을 사용하는 Chromium 업데이트 검사에서 설치 정보만 모의한 1.3.14 / 1.3.13 / 1.3.5는 업데이트 가능, 1.3.15는 최신으로 판정했습니다. 이 검사는 폰의 네이티브 HTTP 브리지·Android 설치 화면·사용자 자료 보존 검사를 대신하지 않습니다.
+- 실제 폰 및 주행 검사는 위 목록대로 미실시입니다. 실제 GPS 오판 감소율·ETA 정확도 향상은 아직 측정하지 않았습니다.
