@@ -76,6 +76,133 @@ const places = {
     Charlie: [-71.055, 42.38]
 };
 
+const optionalAreaElements = [
+    {type:'node',id:1,lat:42.36,lon:-71.07},
+    {type:'node',id:2,lat:42.365,lon:-71.0675},
+    {type:'node',id:3,lat:42.37,lon:-71.065,tags:{'addr:housenumber':'94','addr:street':'Gerry Road','addr:city':'Brookline'}},
+    {type:'way',id:10,nodes:[1,2,3],tags:{highway:'residential',name:'Saved road'}}
+];
+
+test('optional area searches offline after reload and refuses oversized replacement or corrupted data',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});let downloads=0;
+    await page.route('https://overpass.private.coffee/api/interpreter',route=>{downloads++;return route.fulfill({json:{elements:optionalAreaElements}});});
+    await page.goto('./');
+    await page.locator('#mobile-toggle-panel').click();
+    expect(downloads).toBe(0);
+    await expect(page.locator('#offline-area-label')).toContainText('not bundled');
+    await page.locator('#btn-road-pack').click();
+    await expect(page.locator('#road-pack-status')).toContainText('places/addresses');
+    await page.reload();
+    await expect.poll(()=>page.evaluate(()=>!!RoadPack.graph)).toBe(true);
+    const result=await page.evaluate(async()=>{
+        Object.defineProperty(navigator,'onLine',{configurable:true,value:false});
+        const items=await Geocoder.searchPlaces('94 Gerry Rd',{lat:42.36,lng:-71.07});
+        const route=await RoadPack.route({lat:42.36,lng:-71.07},{lat:42.37,lng:-71.065});
+        return {items,route};
+    });
+    expect(result.items[0].houseNumber).toBe('94');expect(result.route.offline).toBe(true);
+    await page.route('https://overpass.private.coffee/api/interpreter',route=>route.fulfill({body:' '.repeat(13*1024*1024)}));
+    expect(await page.evaluate(()=>RoadPack.save({lat:42.365,lng:-71.0675}).catch(e=>e.message))).toBe('ROAD_PACK_TOO_LARGE');
+    expect(await page.evaluate(()=>RoadPack.search('94 Gerry Rd').length)).toBe(1);
+    await page.evaluate(async()=>{
+        const db=await new Promise(resolve=>{const r=indexedDB.open('solarless-road-pack',1);r.onsuccess=()=>resolve(r.result);});
+        await new Promise(resolve=>{const tx=db.transaction('packs','readwrite'),store=tx.objectStore('packs'),r=store.get('local');r.onsuccess=()=>{r.result.elements[2].tags['addr:housenumber']='95';store.put(r.result,'local');};tx.oncomplete=resolve;});db.close();
+    });
+    await page.reload();await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#road-pack-status')).toContainText('damaged');
+    expect(await page.evaluate(()=>RoadPack.graph)).toBeNull();
+    expect(state.errors).toEqual([]);
+});
+
+test('optional area deleted during download cannot return after completion or reload',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});let release;
+    await page.route('https://overpass.private.coffee/api/interpreter',async route=>{await new Promise(resolve=>release=resolve);await route.fulfill({json:{elements:optionalAreaElements}});});
+    await page.goto('./');await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-road-pack').click();
+    await expect.poll(()=>!!release).toBe(true);
+    await page.locator('#btn-road-pack-clear').click();release();
+    await expect(page.locator('#btn-road-pack')).toBeEnabled();
+    expect(await page.evaluate(()=>RoadPack.graph)).toBeNull();
+    await page.reload();await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#road-pack-status')).toContainText('No offline road pack');
+    expect(state.errors).toEqual([]);
+});
+
+test('system voice destination requires address selection and remembers recognition language',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});
+    await page.addInitScript(()=>{window.voiceCalls=[];window.voiceResult={text:'Alpha'};window.Capacitor={Plugins:{VoiceInput:{recognize:async options=>{window.voiceCalls.push(options);return window.voiceResult;}}}};});
+    await page.goto('./');await page.locator('#voice-search-language').selectOption('ko-KR');
+    await page.locator('#btn-voice-destination').click();
+    await expect(page.locator('#destination-input')).toHaveValue('Alpha');
+    await expect(page.locator('#destination-results [role="option"]').first()).toBeVisible();
+    expect(state.routes).toEqual([]);
+    expect(await page.evaluate(()=>window.voiceCalls[0].language)).toBe('ko-KR');
+    await page.locator('#destination-results [role="option"]').first().click();await page.locator('#btn-review-confirm').click();
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.reload();await expect(page.locator('#voice-search-language')).toHaveValue('ko-KR');
+    await page.evaluate(()=>window.voiceResult={cancelled:true});await page.locator('#btn-voice-destination').click();
+    await expect(page.locator('#voice-search-status')).toContainText('cancelled');
+    await page.evaluate(()=>window.Capacitor.Plugins.VoiceInput.recognize=async()=>{throw Error('VOICE_UNAVAILABLE');});
+    await page.locator('#btn-voice-destination').click();await expect(page.locator('#voice-search-status')).toContainText('unavailable');
+    expect(state.errors).toEqual([]);
+});
+
+test('manual stops keep the final destination and comparison controls fit a narrow phone',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-compare-routes').click();await expect(page.locator('#journey-detail-body')).toContainText('Estimated route overlap');
+    await page.locator('#btn-close-journey-detail').click();
+    await page.locator('#btn-add-stop').click();await selectDestination(page,'Bravo');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    const plan=await page.evaluate(()=>TripTools.get());expect(plan.current.name).toContain('Bravo');expect(plan.pending[0].name).toContain('Alpha');
+    await page.locator('#mobile-toggle-panel').click();
+    await page.setViewportSize({width:320,height:740});
+    for(const id of ['btn-add-stop','btn-next-stop','btn-clear-stops','btn-route-fuel','btn-route-parking']){
+        const el=page.locator('#'+id);await el.scrollIntoViewIfNeeded();const box=await el.boundingBox();
+        expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(321);expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    await page.screenshot({path:test.info().outputPath('trip-controls-320.png')});
+    await page.locator('#btn-next-stop').click();await expect(page.locator('#bar-dest-text')).toContainText('Alpha');
+    expect(await page.evaluate(()=>TripTools.get())).toBeNull();expect(state.errors).toEqual([]);
+});
+
+test('along-route fuel becomes a reviewed stop and retains the final destination',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});
+    await page.route('https://overpass.private.coffee/api/interpreter',route=>route.fulfill({json:{elements:[{type:'node',id:99,lat:42.365,lon:-71.0675,tags:{amenity:'fuel',name:'Route fuel'}}]}}));
+    await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-route-fuel').click();
+    await expect(page.locator('#route-place-results')).toContainText('unverified');
+    await page.locator('#route-place-results button').click();
+    expect(await page.evaluate(()=>TripTools.get())).toBeNull();
+    await page.locator('#btn-review-confirm').click();
+    await expect(page.locator('#bar-dest-text')).toContainText('Route fuel');
+    const plan=await page.evaluate(()=>TripTools.get());expect(plan.pending[0].name).toContain('Alpha');
+    expect(state.errors).toEqual([]);
+});
+
+test('extra alternatives use four bounded via requests and a cooldown',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#mobile-toggle-panel').click();
+    const urls=[];page.on('request',r=>{if(r.url().includes('/route/v1/driving/'))urls.push(r.url());});
+    await page.locator('#btn-more-routes').click();await expect(page.locator('#btn-more-routes')).toBeEnabled({timeout:20000});
+    const via=urls.filter(url=>new URL(url).pathname.split(';').length===3);
+    expect(via.length).toBe(4);expect(new Set(via).size).toBe(4);
+    const count=urls.length;await page.locator('#btn-more-routes').click();expect(urls.length).toBe(count);
+    expect(state.errors).toEqual([]);
+});
+
+test('optional area server rate limit and missing offline catalog are explained',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});
+    await page.route('https://overpass.private.coffee/api/interpreter',route=>route.fulfill({status:429,body:'Rate limit'}));
+    await page.goto('./');await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-road-pack').click();
+    await expect(page.locator('#road-pack-status')).toContainText('rate limit');
+    expect(await page.evaluate(()=>RoadPack.graph)).toBeNull();
+    await page.locator('#btn-header-home').click();
+    await page.evaluate(()=>Object.defineProperty(navigator,'onLine',{configurable:true,value:false}));
+    await page.locator('#destination-input').fill('94 Gerry Road');
+    await expect(page.locator('#destination-results')).toContainText('Save a local road/address area first');
+    expect(state.errors).toEqual([]);
+});
+
 test('confirmed vehicle entrance survives favorite reuse and arrival preview fits narrow screens', async ({page}) => {
     const state=await fixtures(page,{brokenMap:true});
     await page.goto('./');
@@ -345,7 +472,8 @@ for (const country of ['us', 'gb', 'kr']) test(`navigation units stay consistent
     await expect(page.locator('#speed-val')).toHaveText(imperial ? '43' : '27');
     await expect(page.locator('#sum-dist')).toHaveText(imperial ? / km$/ : / mi$/);
     await expect(page.locator('#sum-dist')).toHaveAttribute('data-distance-meters',rawRemaining);
-    await expect(page.locator('#road-save-label')).toContainText(imperial ? '3.0 km' : '1.9 mi');
+    await expect(page.locator('#offline-area-size option[value="3"]')).toHaveText(imperial ? '3.0 km × 3.0 km' : '1.9 mi × 1.9 mi');
+    await expect(page.locator('#offline-area-size option[value="6"]')).toHaveText(imperial ? '6.0 km × 6.0 km' : '3.7 mi × 3.7 mi');
     await page.locator('#btn-toggle-lang').click();
     await expect(page.locator('#navigation-units-label')).toHaveText('거리·속도 단위');
     await expect(page.locator('#speed-unit-val')).toHaveText(imperial ? 'km/h' : 'mph');

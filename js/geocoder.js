@@ -491,6 +491,10 @@ window.Geocoder = (function () {
 
     async function searchPlaces(query, userCoords = null, options = {}) {
         if (!query || query.trim().length === 0) return [];
+        if(typeof navigator!=='undefined'&&navigator.onLine===false){
+            if(!window.RoadPack?.graph)throw createApiError('NO_OFFLINE_ROAD_PACK','offlineSearchUnavailable',query);
+            return window.RoadPack.search(query,userCoords);
+        }
         // Expand common road suffixes before querying: Photon treats "rd" as
         // fuzzy place text and can ignore a house number altogether.
         const suffixes = { rd: 'road', st: 'street', ave: 'avenue', blvd: 'boulevard', dr: 'drive', ln: 'lane', ct: 'court', pkwy: 'parkway', hwy: 'highway' };
@@ -693,6 +697,7 @@ window.Geocoder = (function () {
         if (options.signal && options.signal.aborted) throw createApiError('ABORTED', 'searchNetworkError', cleanQ);
         // A partial outage cannot establish that an address does not exist.
         // In particular, Photon may have no match when Nominatim is offline.
+        if(results.length===0&&window.RoadPack?.graph)results.push(...window.RoadPack.search(query,userCoords));
         if (failedServices > 0 && results.length === 0) {
             throw createApiError('SEARCH_UNAVAILABLE', 'searchNetworkError', cleanQ);
         }

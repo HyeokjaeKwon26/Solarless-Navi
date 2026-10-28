@@ -116,6 +116,8 @@
                             <button type="button" id="destination-input-search" class="gps-auto-btn address-search-btn" aria-label="주소 검색 / Search address"><i class="fa-solid fa-magnifying-glass"></i></button>
                         </div>
                         <div class="search-results-dropdown" id="destination-results"></div>
+                        <div class="voice-search-row"><button type="button" class="nav-btn secondary" id="btn-voice-destination">음성 검색</button><select id="voice-search-language" aria-label="Voice input language"><option value="en-US">English</option><option value="ko-KR">한국어</option></select></div>
+                        <small id="voice-search-status" role="status"></small>
                     </div>
 
                     <!-- Favorites & Frequently Visited Section -->
@@ -531,6 +533,18 @@
                         <div class="action-buttons-group">
                             <button id="live-gps-nav-btn" class="nav-btn live"><i class="fa-solid fa-location-arrow"></i> GPS 내비 시작</button>
                             <button type="button" id="btn-arrival-preview" class="nav-btn secondary" disabled>도착 구간 미리보기 / Arrival preview</button>
+                            <button type="button" id="btn-compare-routes" class="nav-btn secondary">대안 경로 비교</button>
+                            <button type="button" id="btn-more-routes" class="nav-btn secondary">대안 경로 더 찾기</button>
+                            <section class="settings-section" aria-labelledby="trip-tools-title">
+                                <h4 id="trip-tools-title">경유 및 경로 주변</h4>
+                                <button type="button" id="btn-add-stop" class="nav-btn secondary">경유지 추가</button>
+                                <button type="button" id="btn-next-stop" class="nav-btn secondary" hidden>다음 목적지로</button>
+                                <button type="button" id="btn-clear-stops" class="nav-btn secondary" hidden>남은 경유 취소</button>
+                                <small id="trip-stops-status" role="status"></small>
+                                <button type="button" id="btn-route-fuel" class="nav-btn secondary">경로 주변 주유소</button>
+                                <button type="button" id="btn-route-parking" class="nav-btn secondary">경로 주변 주차장</button>
+                                <div id="route-place-results" role="status"></div>
+                            </section>
                             <div class="option-row settings-option">
                                 <div class="option-label-group"><span class="option-title" id="junction-auto-label">교차로 자동 확대</span></div>
                                 <label class="toggle-switch"><input type="checkbox" id="junction-auto-zoom" aria-labelledby="junction-auto-label" checked><span class="slider"></span></label>
@@ -542,6 +556,9 @@
                             </section>
                             <section class="settings-section" aria-labelledby="offline-section-title">
                                 <h4 id="offline-section-title">오프라인 도로</h4>
+                                <label for="offline-area-size" id="offline-area-label">저장 영역</label>
+                                <select id="offline-area-size"><option value="3">3 × 3 km</option><option value="6">6 × 6 km</option></select>
+                                <label class="arrival-check"><input type="checkbox" id="offline-simpler"><span id="offline-simpler-label">오프라인에서 단순한 경로 선호</span></label>
                                 <button type="button" id="btn-road-pack" class="nav-btn"><i class="fa-solid fa-download" aria-hidden="true"></i><span id="road-save-label">주변 도로 저장</span></button>
                                 <button type="button" id="btn-road-pack-clear" class="nav-btn secondary"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span id="road-delete-label">저장 도로 삭제</span></button>
                                 <small id="road-pack-status" role="status"></small>
@@ -755,6 +772,9 @@
     <script src="js/journey-policy.js"></script>
     <script src="js/public-traffic.js"></script>
     <script src="js/road-network.js"></script>
+    <script src="js/route-comparison.js"></script>
+    <script src="js/offline-catalog.js"></script>
+    <script src="js/trip-tools.js"></script>
     <script src="js/road-pack.js"></script>
     <script src="js/native-navigation.js"></script>
     <script src="js/drive-archive.js"></script>

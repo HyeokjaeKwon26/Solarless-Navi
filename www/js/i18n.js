@@ -142,6 +142,7 @@ window.I18n = (function () {
             turnBannerGlare: "⚠️ 전방 역광 가능성 추정!",
             estimateNote: "실험용 추정값",
             offlineRouteUnavailable: "오프라인에서는 실제 도로 경로를 계산할 수 없습니다.",
+            offlineSearchUnavailable: "오프라인 검색을 사용하려면 먼저 해당 지역의 도로·주소 자료를 저장하세요. 저장한 지역의 등록된 주소만 검색할 수 있습니다.",
             routeClosureError: "검색된 경로가 모두 확인된 전면 통제 구간을 지납니다. 다른 도착점을 선택하거나 나중에 다시 검색하세요. 통제 없는 우회 경로를 확보하지 못했습니다.",
             routeNetworkError: "경로 서버에 연결할 수 없습니다. 오프라인에서는 실제 도로 경로를 계산할 수 없습니다.",
             existingRouteKept: "이전 경로를 유지합니다.",
@@ -290,6 +291,7 @@ window.I18n = (function () {
             turnBannerGlare: "⚠️ Estimated sun-glare risk ahead!",
             estimateNote: "Experimental estimate",
             offlineRouteUnavailable: "A real road route cannot be calculated while offline.",
+            offlineSearchUnavailable: "Save a local road/address area first. Offline search only includes addresses recorded in that saved area.",
             routeClosureError: "All returned routes cross confirmed full closures. Try another arrival point or search again later. No closure-free detour was found.",
             routeNetworkError: "The routing service could not be reached. A real road route cannot be calculated offline.",
             existingRouteKept: "Keeping the previous route.",
@@ -354,13 +356,13 @@ window.I18n = (function () {
         const settingsText = currentLang.startsWith('ko') ? {
             'junction-auto-label': '교차로 자동 확대', 'app-update-section-title': '앱 업데이트', 'check-update-label': '업데이트 확인',
             'offline-section-title': '오프라인 도로', 'road-save-label': '주변 도로 저장', 'road-delete-label': '저장 도로 삭제',
-            'road-pack-help': '7일 유효 · 저장 지역에서만 재탐색 · 지도 타일 미포함',
+            'road-pack-help': '선택 다운로드 · 최대 12MB · 7일 유효 · 저장 도로·주소·장소만 사용 · 지도 타일 미포함',
             'diagnostics-section-title': '주행 진단', 'drive-export-label': '기록 내보내기', 'drive-delete-label': '저장 기록 삭제',
             'drive-record-help': '선택 시 위치·시간을 기기에만 기록합니다. 외부 업로드는 없습니다.', 'btn-cancel-update': '다운로드 취소'
         } : {
             'junction-auto-label': 'Junction auto zoom', 'app-update-section-title': 'App update', 'check-update-label': 'Check for updates',
             'offline-section-title': 'Offline roads', 'road-save-label': 'Save nearby roads', 'road-delete-label': 'Delete road pack',
-            'road-pack-help': 'Valid for 7 days. Rerouting within saved roads only; map tiles are not included.',
+            'road-pack-help': 'Optional download, max 12 MB, valid 7 days. Saved roads/addresses/places only; no map tiles.',
             'diagnostics-section-title': 'Drive diagnostics', 'drive-export-label': 'Export recording', 'drive-delete-label': 'Delete recordings',
             'drive-record-help': 'Opt-in location and time recording on this device. No upload.', 'btn-cancel-update': 'Cancel download'
         };

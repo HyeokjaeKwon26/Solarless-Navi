@@ -32,7 +32,7 @@
             if(blocked.has(from)||blocked.has(to)||!nodes.has(from)||!nodes.has(to))return;
             const a=nodes.get(from),b=nodes.get(to),length=distance(a,b);if(length<=0||length>3000)return;
             const parsed=Number.parseFloat(tags.maxspeed),speed=Number.isFinite(parsed)?Math.min(110,Math.max(5,parsed*(String(tags.maxspeed).includes('mph')?1.609344:1))):/motorway|trunk/.test(tags.highway)?70:/primary|secondary/.test(tags.highway)?45:25;
-            const edge={id:edges.length,from,to,way,a,b,length,seconds:length/(speed/3.6),name:tags.name||tags.ref||'',ref:tags.ref||'',toll:tags.toll==='yes',heading:bearing(a,b)};
+            const edge={id:edges.length,from,to,way,a,b,length,seconds:length/(speed/3.6),name:tags.name||tags.ref||'',ref:tags.ref||'',toll:tags.toll==='yes',service:tags.highway==='service',heading:bearing(a,b)};
             edges.push(edge);if(!adj.has(from))adj.set(from,[]);adj.get(from).push(edge);
             const minX=Math.floor(Math.min(a[0],b[0])*1000),maxX=Math.floor(Math.max(a[0],b[0])*1000),minY=Math.floor(Math.min(a[1],b[1])*1000),maxY=Math.floor(Math.max(a[1],b[1])*1000);
             for(let x=minX;x<=maxX;x++)for(let y=minY;y<=maxY;y++){const key=x+','+y;if(!grid.has(key))grid.set(key,[]);grid.get(key).push(edge);}
@@ -68,17 +68,20 @@
             return (rulesAt.get(prev.to+'|'+prev.way)||[]).every(r=>r.kind.startsWith('only_')?next.way===r.to:next.way!==r.to);
         }
         function route(start,end,options={}){
+            const inside=p=>!pack.bounds||p[1]>=pack.bounds[0]&&p[1]<=pack.bounds[2]&&p[0]>=pack.bounds[1]&&p[0]<=pack.bounds[3];
+            if(!inside(start)||!inside(end))throw Error('OUTSIDE_ROAD_PACK');
             const starts=snap(start,options.heading,options.tollFree),ends=snap(end,undefined,options.tollFree);
             const heap=new Heap(),best=new Map();let winner=null,iterations=0;
-            for(const s of starts){const first={...s.edge,a:s.point,length:s.edge.length*(1-s.t),seconds:s.edge.seconds*(1-s.t)};heap.push({edge:s.edge,cost:first.seconds,previous:null,part:first});
-                for(const e of ends)if(s.edge.id===e.edge.id&&e.t>=s.t){const part={...s.edge,a:s.point,b:e.point,length:s.edge.length*(e.t-s.t),seconds:s.edge.seconds*(e.t-s.t)};if(!winner||part.seconds<winner.cost)winner={cost:part.seconds,part,previous:null};}}
+            const penalty=(part,previous)=>{const turn=previous?Math.abs((part.heading-previous.heading+540)%360-180):0;return options.simpler?(turn>35?8:0)+(turn>110?12:0)+(part.service?part.length*.03:0):0;};
+            for(const s of starts){const first={...s.edge,a:s.point,length:s.edge.length*(1-s.t),seconds:s.edge.seconds*(1-s.t)};heap.push({edge:s.edge,cost:first.seconds+penalty(first),previous:null,part:first});
+                for(const e of ends)if(s.edge.id===e.edge.id&&e.t>=s.t){const part={...s.edge,a:s.point,b:e.point,length:s.edge.length*(e.t-s.t),seconds:s.edge.seconds*(e.t-s.t)},cost=part.seconds+penalty(part);if(!winner||cost<winner.cost)winner={cost,part,previous:null};}}
             while(heap.items.length&&iterations++<150000){
                 const current=heap.pop();if(winner&&current.cost>=winner.cost)break;
                 const edge=current.edge;if(best.has(edge.id)&&best.get(edge.id)<=current.cost)continue;best.set(edge.id,current.cost);
                 for(const next of adj.get(edge.to)||[]){
-                    if(options.tollFree&&next.toll||!permitted(edge,next))continue;
-                    for(const endSnap of ends)if(next.id===endSnap.edge.id){const part={...next,b:endSnap.point,length:next.length*endSnap.t,seconds:next.seconds*endSnap.t};const cost=current.cost+part.seconds;if(!winner||cost<winner.cost)winner={cost,part,previous:current};}
-                    const cost=current.cost+next.seconds;if(!best.has(next.id)||cost<best.get(next.id))heap.push({edge:next,cost,part:next,previous:current});
+                    if(options.tollFree&&next.toll||!permitted(edge,next)||!inside(next.a)||!inside(next.b))continue;
+                    for(const endSnap of ends)if(next.id===endSnap.edge.id){const part={...next,b:endSnap.point,length:next.length*endSnap.t,seconds:next.seconds*endSnap.t};const cost=current.cost+part.seconds+penalty(part,edge);if(!winner||cost<winner.cost)winner={cost,part,previous:current};}
+                    const cost=current.cost+next.seconds+penalty(next,edge);if(!best.has(next.id)||cost<best.get(next.id))heap.push({edge:next,cost,part:next,previous:current});
                 }
             }
             if(!winner)throw Error('NO_CONNECTED_OFFLINE_ROUTE');
@@ -91,7 +94,7 @@
                 else {const s=steps[steps.length-1];s.distance+=p.length;s.duration+=p.seconds;s.geometry.coordinates.push(p.b);}previous=p;
             }
             steps.push({name:'',distance:0,duration:0,maneuver:{type:'arrive',location:coordinates[coordinates.length-1]}});
-            return {geometry:{type:'LineString',coordinates},distance:parts.reduce((s,p)=>s+p.length,0),duration:winner.cost,legs:[{steps}],offline:true,packSavedAt:pack.savedAt};
+            return {geometry:{type:'LineString',coordinates},distance:parts.reduce((s,p)=>s+p.length,0),duration:parts.reduce((s,p)=>s+p.seconds,0),selectionCost:winner.cost,simpler:!!options.simpler,legs:[{steps}],offline:true,packSavedAt:pack.savedAt};
         }
         function conflictingRoad(point,heading,routeDistance){
             const c=nearby(point,heading),best=c[0];return !!(best&&best.distance<=8&&routeDistance>best.distance+15&&c.every(other=>other.edge.way===best.edge.way||other.distance>best.distance+8));

@@ -1306,14 +1306,16 @@ window.ShadowRouter = (function () {
 
     function routeDrivingQuality(route) {
         const steps = (route.legs || []).flatMap(leg => leg.steps || []);
-        let uturns = 0, shortAccess = 0;
+        let uturns = 0, shortAccess = 0, complexTurns = 0, unnamedMeters = 0;
         steps.forEach((step, index) => {
             if (step.maneuver?.modifier === 'uturn') uturns++;
+            if (/fork|merge|ramp|roundabout|rotary/.test(step.maneuver?.type || '') || /sharp/.test(step.maneuver?.modifier || '')) complexTurns++;
+            if (index > 0 && index < steps.length - 1 && !String(step.name || '').trim()) unnamedMeters += Math.max(0, Number(step.distance) || 0);
             // Interior unnamed access segments are a complexity signal, not
             // proof of illegal/private access. Never remove the only route.
             if (index > 0 && index < steps.length - 2 && !String(step.name || '').trim() && step.distance > 0 && step.distance < 60) shortAccess++;
         });
-        return { uturns, shortAccess };
+        return { uturns, shortAccess, complexTurns, unnamedMeters };
     }
 
     function filterDrivingCandidates(routes) {
@@ -1640,7 +1642,7 @@ window.ShadowRouter = (function () {
         };
     }
 
-    function buildExplorationViaPoints(rawRoute) {
+    function buildExplorationViaPoints(rawRoute, fraction = .5) {
         // Stay near the actual road corridor rather than the straight OD chord.
         const coordinates = rawRoute && rawRoute.geometry && rawRoute.geometry.coordinates;
         if (!Array.isArray(coordinates) || coordinates.length < 2) return [];
@@ -1650,8 +1652,9 @@ window.ShadowRouter = (function () {
         if (!Number.isFinite(total) || total < 100) return [];
         let walked = 0;
         let i = 0;
-        while (i < lengths.length - 1 && walked + lengths[i] < total / 2) walked += lengths[i++];
-        const t = lengths[i] ? (total / 2 - walked) / lengths[i] : 0;
+        const target = total * Math.max(.2, Math.min(.8, fraction));
+        while (i < lengths.length - 1 && walked + lengths[i] < target) walked += lengths[i++];
+        const t = lengths[i] ? (target - walked) / lengths[i] : 0;
         const a = coordinates[i], b = coordinates[i + 1];
         const lat = a[1] + (b[1] - a[1]) * t;
         const lng = a[0] + (b[0] - a[0]) * t;
@@ -1731,12 +1734,13 @@ window.ShadowRouter = (function () {
             // available. These are optional enrichment, not a prerequisite
             // for displaying or starting the verified direct route.
             const fastestRaw = rawCandidates.slice().sort((a, b) => a.duration - b.duration)[0];
-            const offsets = fastestRaw?.offline ? [] : buildExplorationViaPoints(fastestRaw);
+            const offsets = fastestRaw?.offline ? [] : [...buildExplorationViaPoints(fastestRaw),
+                buildExplorationViaPoints(fastestRaw, .3)[0], buildExplorationViaPoints(fastestRaw, .7)[1]].filter(Boolean);
             const directDistinct = rawCandidates.filter((route, index) => rawCandidates.slice(0, index).every(previous => !areRoutesGeometricallySimilar(previous, route))).length;
             const requestedBudget = options.viaRequestBudget === undefined ? 2 : Number(options.viaRequestBudget);
             const solarExploration = options.preferredRouteRole === 'shade' || options.preferredRouteRole === 'glareFree';
-            const viaBudget = directDistinct >= 3 && !solarExploration ? 0
-                : (Number.isFinite(requestedBudget) ? Math.min(2, Math.max(0, Math.floor(requestedBudget))) : 0);
+            const viaBudget = directDistinct >= 3 && !solarExploration && requestedBudget <= 2 ? 0
+                : (Number.isFinite(requestedBudget) ? Math.min(4, Math.max(0, Math.floor(requestedBudget))) : 0);
             if (viaBudget === 0) {
                 if (window.DebugLogger) window.DebugLogger.log('osrm-via-skipped', { reason: 'DIRECT_ALTERNATIVES_SUFFICIENT', directDistinct });
             }

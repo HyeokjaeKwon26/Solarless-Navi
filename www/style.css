@@ -1333,4 +1333,10 @@ body.battery-saver-active .route-summary-floating {
 .arrival-check { display:flex; align-items:flex-start; gap:10px; text-align:left; padding:8px 0; font-size:14px; line-height:1.4; }
 .arrival-check input { flex:0 0 auto; width:20px; height:20px; margin:0; accent-color:#38bdf8; }
 .arrival-check[hidden] { display:none; }
+#journey-detail-body { white-space:pre-line; }
+#offline-area-size { width:100%; padding:10px; border:1px solid #38bdf8; border-radius:8px; background:#17263c; color:#e2e8f0; }
+.voice-search-row { display:flex; gap:8px; margin-top:8px; }
+.voice-search-row .nav-btn { flex:1; min-width:0; font-size:14px; padding:10px; }
+#voice-search-language { max-width:110px; color:#e2e8f0; background:#17263c; border:1px solid #38bdf8; border-radius:8px; }
+#route-place-results .nav-btn { white-space:normal; text-align:left; width:100%; }
 .lane-chips span { white-space:nowrap; min-width:28px; }

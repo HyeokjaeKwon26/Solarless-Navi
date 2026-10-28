@@ -88,6 +88,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let routeData = null;
     let selectedRouteObj = null;
+    let pendingStopRequest = false;
     let activeRoutePolylineGroup = null;
     let dynamicRemainingPolylineGroup = null;
     let dynamicRemainingLayers = new Map();
@@ -176,12 +177,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const autoZoomToggle = document.getElementById('junction-auto-zoom');
     autoZoomToggle.checked = localStorage.getItem('solarless_junction_zoom') !== 'false';
     autoZoomToggle.addEventListener('change', () => localStorage.setItem('solarless_junction_zoom', String(autoZoomToggle.checked)));
-    RoadPack.init().catch(() => { document.getElementById('road-pack-status').textContent = '오프라인 저장소 사용 불가 / Offline storage unavailable'; });
+    RoadPack.init().then(()=>{if(navigator.onLine===false)RoadPack.draw(map);}).catch(() => { document.getElementById('road-pack-status').textContent = '오프라인 저장소 사용 불가 / Offline storage unavailable'; });
+    window.addEventListener('offline',()=>RoadPack.draw(map));
+    document.getElementById('offline-simpler').checked=localStorage.getItem('solarless_offline_simpler')==='true';
+    document.getElementById('offline-simpler').addEventListener('change',event=>localStorage.setItem('solarless_offline_simpler',String(event.target.checked)));
+    const savedVoiceLanguage=localStorage.getItem('solarless_voice_input_language');
+    if(['en-US','ko-KR'].includes(savedVoiceLanguage))document.getElementById('voice-search-language').value=savedVoiceLanguage;
+    document.getElementById('voice-search-language').addEventListener('change',event=>localStorage.setItem('solarless_voice_input_language',event.target.value));
     document.getElementById('btn-road-pack').addEventListener('click', async event => {
         if (isLiveNavActive) { showApiNotice('주행을 종료한 뒤 저장하세요 / Stop navigation before downloading roads'); return; }
         event.currentTarget.disabled = true;
-        try { await RoadPack.save(map.getCenter()); RoadPack.draw(map); }
-        catch (e) { document.getElementById('road-pack-status').textContent = '도로 저장 실패 · 기존 자료 유지 / Download failed; existing pack kept'; }
+        try { await RoadPack.save(map.getCenter(),Number(document.getElementById('offline-area-size').value)); RoadPack.draw(map); }
+        catch (e) {
+            if(e.message==='DOWNLOAD_CANCELLED')RoadPack.show();
+            else {
+                const ko=I18n.getLanguage().startsWith('ko');
+                const messages={
+                    ROAD_PACK_TOO_LARGE:ko?'12 MiB 상한 초과 · 작은 영역을 선택하세요':'Over 12 MiB. Choose a smaller area.',
+                    DOWNLOAD_COOLDOWN:ko?'1분 뒤 다시 저장하세요':'Wait one minute before downloading again.',
+                    ROAD_PROVIDER_BUSY:ko?'무료 지도 서버 요청 제한 · 기존 자료는 유지됩니다. 나중에 다시 시도하세요.':'Free map server rate limit. Existing data is kept; try again later.'
+                };
+                document.getElementById('road-pack-status').textContent=messages[e.message]||(ko?'도로 저장 실패 · 기존 자료 유지':'Download failed; existing pack kept');
+            }
+        }
         finally { document.getElementById('btn-road-pack').disabled = false; }
     });
     document.getElementById('btn-road-pack-clear').addEventListener('click', () => RoadPack.clear().catch(() => showApiNotice('삭제 실패 / Delete failed')));
@@ -350,6 +368,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? `화면 위치 기록 ${report.samples}개\n도로 매칭 ${report.matched} · 불확실 ${report.uncertain} · 미분류 ${report.unlabelled}\n화면 GPS 최대 간격 ${report.maxGpsGapSec.toFixed(1)}초\nAndroid 위치 기록 ${report.nativeSamples}개 · 최대 간격 ${report.maxNativeGpsGapSec.toFixed(1)}초\n재탐색 성공 ${report.rerouteLatencySec.length}회 · 평균 ${latency}초 · 실패 ${report.failedReroutes}회\n완료 주행 ${report.etaErrorsSec.length}회 · 도착시간 평균 절대 오차 ${eta}분\n\n기록을 켠 구간만 집계합니다. 정답 도로 라벨이 없어 도로 선택 정확도를 뜻하지 않습니다. 햇빛 회피는 예상값이며 실제 효과는 미측정입니다.`
                 : `Foreground GPS samples: ${report.samples}\nRoad matches: ${report.matched} · uncertain: ${report.uncertain} · unclassified: ${report.unlabelled}\nLongest foreground GPS gap: ${report.maxGpsGapSec.toFixed(1)} s\nAndroid GPS samples: ${report.nativeSamples} · longest gap: ${report.maxNativeGpsGapSec.toFixed(1)} s\nSuccessful reroutes: ${report.rerouteLatencySec.length} · average: ${latency} s · failed: ${report.failedReroutes}\nCompleted trips: ${report.etaErrorsSec.length} · mean absolute ETA error: ${eta} min\n\nOnly recorded periods are counted. Without labelled road truth, this is not road-selection accuracy. Sun avoidance is predicted; actual benefit is unmeasured.`);
         } catch (e) { showJourneyDetail(ko ? '기록 읽기 실패' : 'Recording unavailable', ko ? '다시 시도해 주세요.' : 'Please try again.'); }
+    });
+    document.getElementById('btn-compare-routes').addEventListener('click',()=>{
+        const ko=I18n.getLanguage().startsWith('ko'),baseline=routeData?.routes?.fastest;
+        if(!baseline){showApiNotice(ko?'경로를 먼저 계산해 주세요.':'Calculate a route first.');return;}
+        const rows=RouteComparison.rows(routeData.routes.all,baseline,ShadowRouter.routeDrivingQuality);
+        const text=rows.map((row,i)=>{
+            const selected=row.id===selectedRouteObj?.id;
+            const duration=`${Math.round(row.durationSec/60)} ${ko?'분':'min'}`;
+            const time=row.solar?`${row.solar.extraSeconds>=0?'+':''}${(row.solar.extraSeconds/60).toFixed(1)} ${ko?'분':'min'}`:'—';
+            const sun=row.solar?.comparable?`${(row.solar.sunlitSecondsSaved/60).toFixed(1)} ${ko?'분':'min'}`:(ko?'비교 불가':'not comparable');
+            return `${i+1}. ${selected?(ko?'선택됨 · ':'Selected · '):''}${duration} · ${NavigationUnits.distance(row.distanceMeters,{long:true})}\n`+
+                (ko?`기준 대비 ${time} · 유턴 ${row.uturns}회 · 복잡한 분기 ${row.complexTurns}회 · 이름 없는 도로 ${NavigationUnits.distance(row.unnamedMeters)}\n경로 중복 추정 ${Math.round((row.shared||0)*100)}% · 햇빛 시간 감소 추정 ${sun}`:
+                    `Vs baseline ${time} · ${row.uturns} U-turns · ${row.complexTurns} complex junctions · ${NavigationUnits.distance(row.unnamedMeters)} unnamed roads\nEstimated route overlap ${Math.round((row.shared||0)*100)}% · predicted sun time saved ${sun}`);
+        }).join('\n\n');
+        showJourneyDetail(ko?'대안 경로 비교':'Compare alternatives',text+'\n\n'+(ko?'실제 찾은 후보만 비교합니다. 이름 없는 도로가 좁거나 불법이라는 뜻은 아닙니다. 도로 폭 자료는 없습니다. 햇빛 감소는 예측입니다.':'Only returned candidates are compared. Unnamed roads are not necessarily narrow or prohibited. Road width is unavailable. Sun reduction is a prediction.'));
+    });
+    let lastExtraRouteSearch=0;
+    document.getElementById('btn-more-routes').addEventListener('click',async event=>{
+        const ko=I18n.getLanguage().startsWith('ko');
+        if(isLiveNavActive||!currentEnd||navigator.onLine===false||Date.now()-lastExtraRouteSearch<60000){showApiNotice(ko?'주행 전 온라인 상태에서 목적지를 선택하세요. 추가 검색은 1분 간격입니다.':'Select a destination online before driving. Extra searches are limited to once a minute.');return;}
+        lastExtraRouteSearch=Date.now();const button=event.currentTarget;button.disabled=true;
+        try{await updateRoute(false,{moreAlternatives:true});}finally{button.disabled=false;}
     });
     function saveActiveNavigationSession() {
         if (!currentEnd) return;
@@ -1216,6 +1256,19 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('btn-route-analysis').textContent = ko ? '경로 분석 보기' : 'View route analysis';
         document.getElementById('btn-drive-report').textContent = ko ? '주행 품질 요약' : 'Drive quality summary';
         document.getElementById('btn-arrival-preview').textContent = ko ? '도착 구간 미리보기' : 'Preview arrival approach';
+        document.getElementById('btn-voice-destination').textContent=ko?'음성으로 목적지 검색':'Search by voice';
+        document.getElementById('voice-search-status').textContent=ko?'시스템 음성 입력 · 제공자에 따라 인터넷 필요':'System voice input · may require internet';
+        document.getElementById('trip-tools-title').textContent=ko?'경유 및 경로 주변':'Stops and places along route';
+        document.getElementById('btn-add-stop').textContent=ko?'주행 전 경유지 추가':'Add a stop before driving';
+        document.getElementById('btn-next-stop').textContent=ko?'다음 목적지로':'Go to next destination';
+        document.getElementById('btn-clear-stops').textContent=ko?'남은 경유 취소':'Clear remaining stops';
+        document.getElementById('btn-route-fuel').textContent=ko?'경로 주변 주유소':'Fuel along route';
+        document.getElementById('btn-route-parking').textContent=ko?'경로 주변 주차장':'Parking along route';
+        renderTripPlan();
+        document.getElementById('btn-compare-routes').textContent=ko?'대안 경로 비교':'Compare alternatives';
+        document.getElementById('btn-more-routes').textContent=ko?'대안 경로 더 찾기':'Find more alternatives';
+        document.getElementById('offline-area-label').textContent=ko?'선택 저장 영역 · APK에 미포함':'Optional saved area · not bundled in APK';
+        document.getElementById('offline-simpler-label').textContent=ko?'오프라인에서 회전·연결도로가 적은 경로 선호':'Prefer fewer turns and service roads offline';
         document.getElementById('btn-close-journey-detail').textContent = ko ? '닫기' : 'Close';
         document.getElementById('btn-preview-voice').textContent = ko ? '안내 음성 미리 듣기 (도로명은 영어)' : 'Preview guidance voice';
         selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
@@ -1223,8 +1276,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('[data-distance-meters]').forEach(element => setDistanceLabel(element, Number(element.dataset.distanceMeters), element.dataset.distanceLong === 'true', element.dataset.distancePrefix));
         const summary = document.getElementById('sum-dist');
         if (!summary.dataset.distanceMeters) summary.textContent = `-- ${NavigationUnits.system() === 'imperial' ? 'mi' : 'km'}`;
-        const radius = NavigationUnits.distance(3000);
-        document.getElementById('road-save-label').textContent = ko ? `주변 도로 저장 (약 ${radius})` : `Save nearby roads (about ${radius})`;
+        document.getElementById('road-save-label').textContent = ko ? '선택 영역 저장/갱신' : 'Save / update selected area';
+        for(const option of document.getElementById('offline-area-size').options){const side=NavigationUnits.distance(Number(option.value)*1000,{long:true});option.textContent=`${side} × ${side}`;}
         if (routeData) updateRouteOptionButtons(routeData);
         if (isLiveNavActive) {
             updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare, true);
@@ -3296,6 +3349,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function applyDestinationSelection(coords, name, options = {}) {
+        if(pendingStopRequest&&!options.keepTrip){pendingStopRequest=false;return addTripStop(coords,name);}
         const lat = Number(coords && coords.lat);
         const lng = Number(coords && coords.lng);
         if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
@@ -3332,6 +3386,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        if(!options.keepTrip){TripTools.clear();pendingStopRequest=false;renderTripPlan();}
         currentEnd = nextEnd;
         destinationName = nextName;
         const input = document.getElementById('destination-input');
@@ -3448,6 +3503,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function openSearchModal() {
+        pendingStopRequest = false;
         pendingFavoriteRequest = null;
         renderFavorites();
         renderRecentDestinationHistory();
@@ -3793,8 +3849,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     // when that is the only connected option.
                     startHeading: isMidDrive && (hasValidGpsHeading || !!lastStableMovingGps) &&
                         Number.isFinite(Number(currentHeading)) ? currentHeading : null,
-                    candidates: reusableCandidates,
-                    reuseOsrmCache: true,
+                    candidates: routeOptions.moreAlternatives ? null : reusableCandidates,
+                    reuseOsrmCache: !routeOptions.moreAlternatives,
+                    viaRequestBudget: routeOptions.moreAlternatives ? 4 : 2,
                     reuseSceneCache: true,
                     // Refine the role the user is actually viewing/driving
                     // before lower-value alternatives. ShadowRouter still
@@ -4532,7 +4589,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) {
                 if (generation !== requestGeneration || (e && e.name === 'AbortError')) return;
                 console.warn('Autocomplete search unavailable:', e);
-                status(isKo ? '검색 서비스에 연결하지 못했습니다. 다시 검색해 주세요.' : 'Search unavailable. Please try again.');
+                status(e?.messageKey==='offlineSearchUnavailable' ? I18n.getText('offlineSearchUnavailable') : (isKo ? '검색 서비스에 연결하지 못했습니다. 다시 검색해 주세요.' : 'Search unavailable. Please try again.'));
                 offerAddressSearch();
                 return;
             }
@@ -4654,6 +4711,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const destinationSearch = setupAutocomplete('destination-input', 'destination-results', async (coords, name) => {
+        if(pendingStopRequest){pendingStopRequest=false;await addTripStop(coords,name);return;}
         if (pendingFavoriteRequest) {
             const request = pendingFavoriteRequest; pendingFavoriteRequest = null;
             const reviewed = await DestinationReview.show(coords, name, currentStart, { favorite: !request.navigate });
@@ -4669,6 +4727,83 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('btn-confirm-destination').addEventListener('click', resolveAndStartNavigation);
+    function renderTripPlan(){
+        const plan=TripTools.get(),ko=I18n.getLanguage().startsWith('ko');
+        document.getElementById('trip-stops-status').textContent=plan?(ko?'이후 목적지: ':'Next destinations: ')+plan.pending.map(p=>p.name).join(' → '):'';
+        document.getElementById('btn-next-stop').hidden=!plan?.pending.length;
+        document.getElementById('btn-clear-stops').hidden=!plan;
+    }
+    async function addTripStop(coords,name){
+        const ko=I18n.getLanguage().startsWith('ko');
+        if(isLiveNavActive||!currentEnd){showApiNotice(ko?'목적지를 먼저 정하고 주행 전에 경유지를 추가하세요.':'Set a destination and add stops before driving.');return;}
+        const reviewed=await DestinationReview.show(coords,name,currentStart);if(!reviewed)return;
+        try{
+            const plan=TripTools.insert({coords:{...currentEnd},name:destinationName},{coords:reviewed,name:String(name).slice(0,300)},TripTools.get());
+            if(await applyDestinationSelection(reviewed,name,{reviewed:true,keepTrip:true})){TripTools.set(plan);renderTripPlan();return true;}
+        }catch{showApiNotice(ko?'중복 지점 또는 경유 개수 상한입니다. 최대 3개 지점을 남겨 둘 수 있습니다.':'Duplicate stop or limit reached. Up to three remaining destinations are supported.');}
+    }
+    document.getElementById('btn-add-stop').addEventListener('click',()=>{
+        if(isLiveNavActive||!currentEnd){showApiNotice(I18n.getLanguage().startsWith('ko')?'목적지를 정하고 주행 전에 추가하세요.':'Set a destination before driving first.');return;}
+        openSearchModal();pendingStopRequest=true;
+        document.getElementById('destination-input').value='';document.getElementById('destination-input').focus();
+    });
+    document.getElementById('btn-clear-stops').addEventListener('click',()=>{TripTools.clear();pendingStopRequest=false;renderTripPlan();});
+    document.getElementById('btn-next-stop').addEventListener('click',async()=>{
+        const plan=TripTools.get(),ko=I18n.getLanguage().startsWith('ko');
+        if(isLiveNavActive||!plan?.pending.length){showApiNotice(ko?'현재 안내를 종료한 뒤 다음 목적지를 선택하세요.':'End current guidance before selecting the next destination.');return;}
+        if(!confirm(ko?`다음 목적지 ${plan.pending[0].name}로 경로를 계산할까요?`:`Calculate a route to ${plan.pending[0].name}?`))return;
+        const next=plan.pending[0];
+        if(await applyDestinationSelection(next.coords,next.name,{reviewed:true,keepTrip:true})){
+            if(plan.pending.length>1)TripTools.set({savedAt:Date.now(),current:next,pending:plan.pending.slice(1)});else TripTools.clear();renderTripPlan();
+        }
+    });
+    document.getElementById('btn-voice-destination').addEventListener('click',async event=>{
+        event.stopPropagation();
+        const button=event.currentTarget,ko=I18n.getLanguage().startsWith('ko'),status=document.getElementById('voice-search-status');
+        const plugin=window.Capacitor?.Plugins?.VoiceInput;
+        if(!plugin?.recognize){status.textContent=ko?'Android 앱의 시스템 음성 입력을 사용하세요.':'Voice input requires the Android app and a system recognizer.';return;}
+        button.disabled=true;status.textContent=ko?'듣는 중…':'Listening…';
+        try{const result=await plugin.recognize({language:document.getElementById('voice-search-language').value});
+            if(result.cancelled||!String(result.text||'').trim()){status.textContent=ko?'음성 입력 취소':'Voice input cancelled';return;}
+            const input=document.getElementById('destination-input');
+            input.value=String(result.text).slice(0,300);input.dispatchEvent(new Event('input',{bubbles:true}));
+            status.textContent=ko?'검색 결과에서 주소를 선택해 주세요.':'Choose the correct address from the results.';
+            await destinationSearch.submit();
+        }catch{status.textContent=ko?'음성 입력을 사용할 수 없습니다. 시스템 음성 앱을 확인하거나 직접 입력하세요.':'Voice input unavailable. Check the system recognizer or type the address.';}
+        finally{button.disabled=false;}
+    });
+    let lastPlaceSearch=0;
+    async function findAlongRoute(kind){
+        const route=selectedRouteObj,ko=I18n.getLanguage().startsWith('ko'),container=document.getElementById('route-place-results');
+        container.replaceChildren();
+        if(!route||!currentEnd||isLiveNavActive&&!navigationRouteProgress.result?.isSnapped){container.textContent=ko?'경로와 현재 위치를 먼저 확인하세요.':'Confirm a route and your position first.';return;}
+        const progress=isLiveNavActive?navigationRouteProgress.snap.progressMeters:0,coords=route.analyzed.coordinates;
+        let items=RoadPack.along(coords,kind,progress),liveSearchFailed=false;
+        if(navigator.onLine!==false){
+            if(Date.now()-lastPlaceSearch<60000){container.textContent=ko?'주변 검색은 1분 간격입니다.':'Place searches are limited to once a minute.';return;}
+            lastPlaceSearch=Date.now();container.textContent=ko?'경로 주변 검색 중…':'Searching along route…';
+            const samples=TripTools.corridor(coords,progress);
+            try{
+                if(!samples.length)throw Error('NO_REMAINING_ROUTE');
+                const query=`[out:json][timeout:15];(${samples.map(p=>`nwr[amenity=${kind}](around:750,${p[1]},${p[0]});`).join('')});out center 200;`;
+                const response=await fetch('https://overpass.private.coffee/api/interpreter',{method:'POST',body:new URLSearchParams({data:query}),signal:AbortSignal.timeout(20000)});
+                if(!response.ok)throw Error('POI_FETCH');const text=await response.text();if(text.length>2000000)throw Error('POI_SIZE');
+                const data=JSON.parse(text);if(!Array.isArray(data.elements)||data.remark)throw Error('POI_INCOMPLETE');
+                const found=OfflineCatalog.along(OfflineCatalog.build({elements:data.elements}),coords,kind,progress);
+                const ids=new Set(items.map(i=>i.id));items=[...items,...found.filter(i=>!ids.has(i.id))].sort((a,b)=>a.aheadMeters-b.aheadMeters).slice(0,8);
+            }catch{liveSearchFailed=true;}
+        }
+        if(route!==selectedRouteObj){container.textContent=ko?'경로가 변경되었습니다. 다시 검색하세요.':'Route changed. Search again.';return;}
+        const range=NavigationUnits.distance(10000,{long:true});
+        container.textContent=ko?`앞쪽 최대 ${range}의 표본 구간 · 실제 우회 시간/영업/출입구 미확인`:`Sampled sections up to ${range} ahead · detour time, opening and entrances unverified`;
+        if(liveSearchFailed)container.textContent+=ko?' · 온라인 검색 실패, 저장 자료만 사용':' · Online search failed; saved data only';
+        if(!items.length){container.textContent+=' · '+(ko?'사용 가능한 결과 없음':'No available results');return;}
+        for(const item of items){const button=document.createElement('button');button.type='button';button.className='nav-btn secondary';
+            button.textContent=`${item.shortTitle} · ${ko?'경로 앞쪽':'Ahead'} ${NavigationUnits.distance(item.aheadMeters,{long:true})} · ${ko?'경로와 거리':'Distance from route'} ${NavigationUnits.distance(item.corridorMeters)}`;
+            button.addEventListener('click',()=>{if(route===selectedRouteObj)addTripStop({lat:item.lat,lng:item.lng},item.displayName);else showApiNotice(ko?'경로가 변경되었습니다. 다시 검색하세요.':'Route changed. Search again.');});container.appendChild(button);}
+    }
+    document.getElementById('btn-route-fuel').addEventListener('click',()=>findAlongRoute('fuel'));
+    document.getElementById('btn-route-parking').addEventListener('click',()=>findAlongRoute('parking'));
     document.getElementById('btn-arrival-preview').addEventListener('click', () => {
         const ready = isCurrentRouteReady() || (isLiveNavActive && !isFreeDriveMode && !liveDestinationBackup && !pendingRouteRequestKey);
         if (ready && selectedRouteObj?.analyzed?.coordinates?.length && currentEnd) DestinationReview.show(currentEnd, destinationName, currentStart, { route: selectedRouteObj });
