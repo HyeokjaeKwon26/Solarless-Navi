@@ -25,3 +25,13 @@ Map fitting measures the top and bottom overlays after updating the route summar
 4. With real GPS, start guidance from a provisional origin, obtain a reliable outdoor fix, and confirm the route starts at the current location. Verify moving guidance and rerouting in a safe road test with a passenger operating the phone.
 
 Physical-phone installation and road tests were not performed in this session.
+
+## Published release verification
+
+- Release source: `94f2fe0cbab303e9e9c5e57d1caf92a96008a404`.
+- [APK release workflow](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40614462289) and [general CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40614461434) succeeded.
+- [Public release](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.7): APK, `update.json`, and `SHA256SUMS.txt` are publicly downloadable.
+- APK: 4,384,499 bytes; SHA-256 `b545f0461fa067fa2b126cd97c38877efcde42a6743dc012e0fa602b0ede0257`.
+- Android signature verified against the existing certificate `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`; package `com.solaris.nav`, version 1.3.7 / code 11, not debuggable.
+- Public APK's `index.html`, `style.css`, `js/app.js`, and `js/route-presentation.js` match the release commit byte-for-byte.
+- Shipping updater in Chromium, using real public GitHub responses and simulated installed identities: 1.3.5 and 1.3.6 offer 1.3.7; 1.3.7 reports up to date. This verifies discovery/metadata, not physical Android installation or data retention.
