@@ -40,6 +40,19 @@
 - 웹 자산 80개 root/www SHA-256 일치, npm audit 취약점 0개, 버전 단조 증가 확인.
 - 전체 브라우저 회귀와 정식 서명 빌드는 배포 CI에서 다시 검사한다.
 
+## 공개 APK 검증 결과
+
+- 공개 버전 **1.3.25 / versionCode 29**, 패키지 `com.solaris.nav`, minSdk 22.
+- 배포 소스: `592d6dec46b77635b266c3ff12300a3f81f8548f`.
+- [정식 APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.25/SolarLessNavi-1.3.25.apk): **4,505,732 bytes**, 1.3.24보다 **11,559 bytes 증가**. 지역 지도 DB는 포함하지 않는다.
+- APK SHA-256: `a9071198abd181d3a81e68e6c40b098feeb72bcc0e2668c10599dbbdab3c6200`.
+- 기존 인증서 SHA-256 `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977` 일치. 공개 APK 암호학적 서명 검증 성공, debuggable 아님. 내부 웹 파일 **80개**가 배포 커밋과 바이트 단위로 일치한다.
+- [배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40903817181)와 [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40903809277): Node **366개**, 브라우저 **210개** 각각 통과. Android JVM·debug 빌드·lint 성공, 배포 작업의 정식 서명 빌드·공개 성공.
+- 실제 공개 GitHub 응답으로 앱 업데이트 코드를 실행했다. 설치 정보만 모의한 code 9 및 17–28에는 업데이트 제공, code 29에는 최신 상태를 확인했다. Android 설치 프로그램이나 폰 데이터 유지를 검사한 것은 아니다.
+- Android 16/API 36 에뮬레이터의 debug 앱에서 실제 OpenFreeMap 스타일·Mapterhorn DEM 요청과 직접 WebView fetch, 앱 User-Agent, 캐시 저장/재사용을 확인했다. 검사 시 저장량은 4,045,437 bytes/39개, 저장 오류는 없었고 같은 스타일 재요청은 네트워크를 사용하지 않았다. 실제 폰 성능 검사는 아니다.
+- 에뮬레이터에 기존 정식 1.3.24 설치까지 성공했으나 공개 1.3.25 덮어쓰기 시도 전에 장치가 연결 해제됐다. 최종 대체 설치·설정 유지는 **미확인**이다.
+- 기계 판독 기록: [app-release-1.3.25-verification.json](data/app-release-1.3.25-verification.json).
+
 ## 실제 폰과 주행에서 확인 — 미실시
 
 | 항목 | 확인 방법 |
