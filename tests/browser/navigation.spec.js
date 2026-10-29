@@ -1262,6 +1262,9 @@ test('uncertain GPS preserves guidance and local recording exports the sample', 
     await page.locator('#btn-drive-record').click();
     await page.waitForTimeout(300);
     await expect.poll(()=>page.evaluate(()=>drivingTestState.reliable)).toBe(true);
+    // Fast guidance can be ready while optional alternatives are still loading.
+    // Only count requests after that initial analysis has finished.
+    await expect(page.locator('#route-summary-box')).toHaveAttribute('aria-busy', 'false');
     const before = state.routes.length;
     await page.evaluate(() => window.testGps.emit({ latitude: 42.365, longitude: -71.06, accuracy: 180 }));
     // The generic notice is rate-limited and can be replaced by road-data
