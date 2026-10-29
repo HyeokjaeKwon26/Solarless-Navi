@@ -62,7 +62,7 @@
         let map=null,vehicle=null,end=null,ready=false,failed=false,state=null,timer=null,theme='',generation=0;
         let lastDataAt=0,lastSegments=null,lastIndex=-1,lastReliable=null,lastFrame=0,lastCameraAt=0,errors=[],fitKey='',fitCeiling=20;
         let active=false,viewSize=null,lastChunk=-1,lastJunctionKey='';
-        let performanceState={},appliedRatio=0,heldBearing=null,pendingRender=null,renderLatencies=[],lastSpeed=null,lastTurn='',cameraKey='',lastRenderAt=0;
+        let performanceState={},appliedRatio=0,heldBearing=null,pendingRender=null,renderLatencies=[],lastSpeed=null,lastTurn='',cameraKey='',lastRenderAt=0,details=null;
         function markRender(){if(pendingRender===null)pendingRender=performance.now();}
         function rendered(){
             if(pendingRender===null)return;
@@ -71,6 +71,7 @@
         }
         const activate=value=>{if(active===value)return;active=value;container.classList.toggle('ready',value);onActive(value);};
         function destroy(){
+            details?.dispose();details=null;options.onDetailStatus?.({});
             pendingRender=null;renderLatencies=[];performanceState={};lastSpeed=null;lastTurn='';cameraKey='';heldBearing=null;appliedRatio=0;
             generation++;clearTimeout(timer);ready=false;activate(false);
             if(map){vehicle?.remove();end?.remove();map.remove();}
@@ -84,13 +85,14 @@
                 theme=state.theme;errors=[];
                 map=new gl.Map({container,style:theme,center:state.position,zoom:17,pitch:50,bearing:state.bearing||0,
                     attributionControl:false,maxPitch:60,minZoom:2,maxZoom:20,renderWorldCopies:false,
+                    maxTileCacheSize:48,transformRequest:window.MapCache?.transformRequest,
                     pixelRatio:Math.min(1.5,window.devicePixelRatio||1),fadeDuration:0});
                 map.on('render',rendered);
                 map.touchZoomRotate.enable();map.touchPitch?.disable();
                 map.on('dragstart',onPan);map.on('drag',onPan);map.on('rotate',e=>{if(e.originalEvent)onPan();});
                 map.on('zoom',e=>{if(e.originalEvent)onPan();});
                 map.getCanvas().addEventListener('webglcontextlost',e=>{e.preventDefault();if(token===generation)fail();},{once:true});
-                map.on('error',()=>{if(token!==generation)return;const now=Date.now();errors=errors.filter(t=>now-t<10000);errors.push(now);if(errors.length>=(ready?6:2))fail();});
+                map.on('error',e=>{if(token!==generation||e.sourceId==='nav-dem')return;const now=Date.now();errors=errors.filter(t=>now-t<10000);errors.push(now);if(errors.length>=(ready?6:2))fail();});
                 timer=setTimeout(()=>{if(token===generation&&!ready)fail();},8000);
                 map.once('load',()=>{
                     if(token!==generation)return;
@@ -110,6 +112,7 @@
                     map.addLayer({id:'driving-junctions',type:'circle',source:'driving-junctions',paint:{'circle-radius':8,'circle-color':'#f8fafc','circle-stroke-color':'#0369a1','circle-stroke-width':3}});
                     vehicle=new gl.Marker({element:makeMarker('driving-vehicle','▲'),rotationAlignment:'map',pitchAlignment:'map'}).setLngLat(state.position).addTo(map);
                     end=new gl.Marker({element:makeMarker('driving-end','⚑')}).setLngLat(state.position).addTo(map);
+                    details=window.NavigationMap?.create(map,{dark:theme===window.MapProvider?.OPENFREEMAP_STYLES.dark,onStatus:options.onDetailStatus});
                     ready=true;activate(true);draw(true);
                     }catch{fail();}
                 });
@@ -121,6 +124,7 @@
             const samples=renderLatencies.slice().sort((a,b)=>a-b);
             const latency=Math.max(samples.length>=4?samples[Math.floor((samples.length-1)*.9)]:0,pendingRender===null?0:performance.now()-pendingRender);
             performanceState=quality(performanceState,{now,latency,thermalStatus:state.thermalStatus});
+            details?.update(state,performanceState.reduced,force);
             const interval=cadence(state,performanceState),turn=JSON.stringify([state.maneuver?.location,p.close]);
             const urgent=state.reliable!==lastReliable||turn!==lastTurn||lastSpeed<3&&state.speed>=3;
             if(!force&&!urgent&&now-lastFrame<interval)return;
@@ -168,16 +172,16 @@
             // easeTo animations on every GPS interpolation frame.
             const dt=Math.min(1,(now-lastCameraAt)/500);lastCameraAt=now;
             const pitch=force||state.reducedMotion?p.pitch:map.getPitch()+(p.pitch-map.getPitch())*dt;
-            const key=JSON.stringify([p.points,size.width,size.height,top,bottom,left]);
+            const key=JSON.stringify([p.points,details?.arrival()?[state.end,state.destination]:null,size.width,size.height,top,bottom,left]);
             if(key!==fitKey){fitKey=key;fitCeiling=20;}
-            const targetZoom=Math.min(p.zoom,fitCeiling);
+            const targetZoom=Math.min(details?.arrival()?18:p.zoom,fitCeiling);
             const zoom=state.autoZoom?(force||state.reducedMotion?targetZoom:map.getZoom()+(targetZoom-map.getZoom())*dt):map.getZoom();
             const nextCameraKey=JSON.stringify([camera.center.map(v=>v.toFixed(7)),camera.bearing.toFixed(1),pitch.toFixed(1),zoom.toFixed(2),padding]);
             if(force||nextCameraKey!==cameraKey){cameraKey=nextCameraKey;markRender();map.jumpTo({...camera,pitch,zoom});}
             // Check the actual pitched projection: next and chained turns must
             // stay clear of HUD panels. Do not assume flat fitBounds geometry.
-            if(p.points.length){
-                const points=[state.position,...p.points];let z=map.getZoom();
+            if(p.points.length||details?.arrival()){
+                const points=[state.position,...p.points,...(details?.arrival()?[state.end,state.destination].filter(valid):[])];let z=map.getZoom();
                 while(z>13.5&&points.some(pos=>{const v=map.project(pos);return v.x<left||v.x>size.width-right||v.y<top+12||v.y>size.height-bottom-12;})){
                     z-=.25;fitCeiling=z;markRender();map.jumpTo({zoom:z});
                 }

@@ -1651,7 +1651,8 @@ async function startTilted(page,options={}){
     await expect(page.locator('#driving-map')).not.toHaveClass(/ready/);
     await page.locator('#btn-map-start-nav').click();
     await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:20});return journeyTestApi.state().snapped;})).toBe(true);
-    try{await expect(page.locator('#driving-map')).toHaveClass(/ready/);}catch(e){console.log(await page.evaluate(()=>({...drivingTestState,segments:drivingTestState?.segments?.length,failed:drivingTestController.failed()})));throw e;}return state;
+    try{await expect(page.locator('#driving-map')).toHaveClass(/ready/);}catch(e){console.log(await page.evaluate(()=>({...drivingTestState,segments:drivingTestState?.segments?.length,failed:drivingTestController.failed()})));throw e;}
+    await expect.poll(()=>page.evaluate(()=>journeyTestApi.state().busy)).toBe(false);return state;
 }
 
 test('tilted renderer caps pixel ratio under thermal pressure and keeps the live route',async({page})=>{
@@ -1966,4 +1967,127 @@ test('reliability native guidance retries failures with bounded backoff and clea
         return {bounded,calls,clears};
     });
     expect(result).toEqual({bounded:2,calls:3,clears:1});expect(state.errors).toEqual([]);
+});
+
+async function detailedMapFixture(page){
+    const state=await fixtures(page,{pitched:true});await captureDrivingMap(page);await captureJourneyControls(page);
+    const {GeoJSONVT}=await import('@maplibre/geojson-vt'),{fromGeojsonVt}=await import('@maplibre/vt-pbf');
+    const features=[[-71.0678,42.3607],[-71.07,42.3602]].map(([x,y],i)=>({type:'Feature',id:i+1,properties:{render_height:20},geometry:{type:'Polygon',coordinates:[[[x,y],[x+.00012,y],[x+.00012,y+.00012],[x,y+.00012],[x,y]]]}}));
+    const index=new GeoJSONVT({type:'FeatureCollection',features});let resources=0,blocked=false;
+    await page.route('https://tiles.openfreemap.org/**',async route=>{
+        resources++;if(blocked)return route.abort();const url=new URL(route.request().url()),tile=url.pathname.match(/\/test\/(\d+)\/(\d+)\/(\d+)\.pbf/);
+        if(tile){const [z,x,y]=tile.slice(1).map(Number),data=index.getTile(z,x,y)||{features:[]};return route.fulfill({body:Buffer.from(fromGeojsonVt({building:data})),contentType:'application/x-protobuf',headers:{'Cache-Control':'max-age=3600'}});}
+        return route.fulfill({json:{version:8,sources:{buildings:{type:'vector',tiles:['https://tiles.openfreemap.org/test/{z}/{x}/{y}.pbf'],maxzoom:14}},layers:[{id:'background',type:'background',paint:{'background-color':'#e2e8f0'}},{id:'building',type:'fill',source:'buildings','source-layer':'building',paint:{'fill-color':'#94a3b8'}}]},headers:{'Cache-Control':'max-age=3600'}});
+    });
+    await page.goto('./');
+    await page.evaluate(()=>{window.Capacitor={...(window.Capacitor||{}),isNativePlatform:()=>true};});
+    await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:20});return journeyTestApi.state().snapped;})).toBe(true);
+    await expect(page.locator('#driving-map')).toHaveClass(/ready/);await expect.poll(()=>page.evaluate(()=>journeyTestApi.state().busy)).toBe(false);
+    // Deterministic renderer inputs after the normal startup path. GPS/routing
+    // integration remains exercised by the unmodified driving tests above.
+    await page.evaluate(()=>{window.mapDetailBase={...drivingTestState};window.mapDetailUpdate=drivingTestController.update.bind(drivingTestController);drivingTestController.update=()=>{};});
+    return {...state,count:()=>resources,block:()=>{blocked=true;}};
+}
+
+test('map upgrade settings fit 320px, keep heavy detail optional and persist',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.setViewportSize({width:320,height:740});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#map-detail-terrain')).not.toBeChecked();await expect(page.locator('#map-detail-shade')).not.toBeChecked();
+    for(const key of ['style','arrows','buildings','arrival','cache','shade','terrain']){
+        const input=page.locator('#map-detail-'+key);await input.locator('..').scrollIntoViewIfNeeded();
+        const row=await input.evaluate(el=>({switch:el.parentElement.getBoundingClientRect().toJSON(),row:el.closest('.option-row').getBoundingClientRect().toJSON()}));
+        expect(row.switch.width).toBe(44);expect(row.switch.right).toBeLessThanOrEqual(row.row.right+.5);
+    }
+    await page.locator('#map-detail-buildings').locator('..').click();
+    await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#map-detail-buildings')).not.toBeChecked();expect(state.errors).toEqual([]);
+});
+
+test('map upgrades render bounded buildings, route arrows, shade and arrival without changing geometry',async({page})=>{
+    const state=await detailedMapFixture(page);
+    await expect.poll(()=>page.evaluate(()=>drivingTestMap.querySourceFeatures('buildings',{'sourceLayer':'building'}).length)).toBeGreaterThan(0);
+    const result=await page.evaluate(async()=>{
+        const s=mapDetailBase,base=drivingTestMap.getSource('driving-route');const coords=JSON.stringify((await base.getData()).features.map(f=>f.geometry.coordinates));
+        const data=await drivingTestMap.getSource('nav-arrows').getData();
+        return {arrows:data.features.length,height:drivingTestMap.getPaintProperty('nav-buildings','fill-extrusion-height'),filter:drivingTestMap.getFilter('nav-buildings'),coords,errors:drivingMapErrors};
+    });
+    expect(result.arrows).toBeGreaterThan(0);expect(JSON.stringify(result.height)).toContain('60');expect(JSON.stringify(result.filter)).toContain('within');expect(result.errors).toEqual([]);
+    await expect.poll(()=>page.evaluate(async()=>{
+        const s=mapDetailBase,segments=s.segments.map(x=>({...x,occlusionRatio:1,shadeState:'confirmed-shade',passTime:new Date().toISOString()}));
+        mapDetailUpdate({...s,details:{...s.details,shade:true},segments});return (await drivingTestMap.getSource('nav-shade').getData()).features.length;
+    })).toBeGreaterThan(0);
+    expect(await page.evaluate(async()=>JSON.stringify((await drivingTestMap.getSource('driving-route').getData()).features.map(f=>f.geometry.coordinates)))).toBe(result.coords);
+    await expect.poll(()=>page.evaluate(async()=>{mapDetailUpdate({...mapDetailBase,reliable:false});return (await drivingTestMap.getSource('nav-arrows').getData()).features.length;})).toBe(0);
+    await expect(page.locator('#driving-map')).toHaveClass(/ready/);
+    await expect.poll(()=>page.evaluate(async()=>{
+        const s=mapDetailBase,end=s.end;mapDetailUpdate({...s,reliable:true,position:end,remaining:40,destination:[end[0]+.0002,end[1]],entranceConfirmed:false,maneuver:null});
+        return (await drivingTestMap.getSource('nav-arrival').getData()).features.map(f=>f.properties.kind).join(',');
+    })).toBe('end,pin,gap');
+    await expect(page.locator('#map-detail-status')).toContainText('not a driving route');
+    expect(await page.evaluate(()=>drivingTestMap.getLayoutProperty('nav-buildings','visibility'))).toBe('none');
+    await page.screenshot({path:test.info().outputPath('map-arrival.png')});expect(state.errors).toEqual([]);
+});
+
+test('map cache serves real vector resources offline and can be cleared',async({page})=>{
+    const state=await detailedMapFixture(page);
+    await expect.poll(()=>page.evaluate(async()=>(await MapCache.stats()).count)).toBeGreaterThan(1);
+    const before=state.count();state.block();
+    const result=await page.evaluate(async()=>{
+        const first=await MapCache.resource('https://tiles.openfreemap.org/styles/liberty',new AbortController().signal);
+        const json=JSON.parse(new TextDecoder().decode(first));return {version:json.version,bytes:(await MapCache.stats()).bytes};
+    });
+    expect(result.version).toBe(8);expect(result.bytes).toBeLessThanOrEqual(32*1048576);expect(state.count()).toBe(before);
+    await page.evaluate(async()=>{if(!await MapCache.clear())throw Error('clear failed');});expect(await page.evaluate(async()=>(await MapCache.stats()).count)).toBe(0);expect(state.errors).toEqual([]);
+});
+
+test('optional terrain renders from DEM and is removed under heat while the route survives',async({page})=>{
+    const state=await detailedMapFixture(page);const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=512;const ctx=c.getContext('2d');ctx.fillStyle='rgb(128,0,0)';ctx.fillRect(0,0,512,512);return c.toDataURL().split(',')[1];});
+    let demRequests=0;await page.route('https://tiles.mapterhorn.com/**',route=>{demRequests++;return route.fulfill({contentType:'image/png',body:Buffer.from(png,'base64'),headers:{'Cache-Control':'max-age=3600'}});});
+    await expect.poll(()=>page.evaluate(()=>{mapDetailUpdate({...mapDetailBase,maneuver:null,details:{...mapDetailBase.details,terrain:true}});return drivingTestMap.getTerrain()?.source;})).toBe('nav-dem');
+    await expect.poll(()=>demRequests).toBeGreaterThan(0);
+    await expect.poll(()=>page.evaluate(()=>drivingTestMap.isSourceLoaded('nav-dem'))).toBe(true);
+    expect(await page.evaluate(()=>drivingTestMap.getStyle().sources['nav-dem'].maxzoom)).toBe(12);
+    await expect.poll(()=>page.evaluate(()=>{mapDetailUpdate({...mapDetailBase,maneuver:null,thermalStatus:2,details:{...mapDetailBase.details,terrain:true}});return drivingTestMap.getTerrain();})).toBeNull();
+    expect(await page.evaluate(()=>!!drivingTestMap.getSource('nav-dem'))).toBe(false);expect(await page.evaluate(()=>!!drivingTestMap.getSource('driving-route'))).toBe(true);expect(await page.evaluate(()=>drivingMapErrors)).toEqual([]);expect(state.errors).toEqual([]);
+});
+
+test('map cache persists across reload, honors no-store and survives storage failure',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});let requests=0;
+    await page.route('https://tiles.openfreemap.org/cache-test/**',route=>{requests++;return route.fulfill({body:'cached map payload',headers:{'Cache-Control':route.request().url().endsWith('private')?'no-store':'max-age=0'}});});
+    await page.goto('./');await page.evaluate(async()=>{window.Capacitor={isNativePlatform:()=>true};await MapCache.clear();await MapCache.resource('https://tiles.openfreemap.org/cache-test/stale');});
+    await expect.poll(()=>page.evaluate(async()=>(await MapCache.stats()).count)).toBe(1);
+    await page.reload();const before=requests;
+    const cached=await page.evaluate(async()=>{window.Capacitor={isNativePlatform:()=>true};Object.defineProperty(navigator,'onLine',{configurable:true,value:false});return new TextDecoder().decode(await MapCache.resource('https://tiles.openfreemap.org/cache-test/stale'));});
+    expect(cached).toBe('cached map payload');expect(requests).toBe(before);await expect(page.locator('#map-detail-status')).toContainText('Using cached map');
+    await page.evaluate(async()=>{Object.defineProperty(navigator,'onLine',{configurable:true,value:true});await MapCache.resource('https://tiles.openfreemap.org/cache-test/private');});
+    expect(await page.evaluate(async()=>(await MapCache.stats()).count)).toBe(1);
+    expect(await page.evaluate(async()=>{
+        const original=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(...args){if(this.name==='data')throw new DOMException('Quota exceeded','QuotaExceededError');return original.apply(this,args);};
+        return new TextDecoder().decode(await MapCache.resource('https://tiles.openfreemap.org/cache-test/quota'));
+    })).toBe('cached map payload');
+    await expect.poll(()=>page.evaluate(()=>MapCache.status().storageFailed)).toBe(true);expect(state.errors).toEqual([]);
+});
+
+test('map tile fetch is cancellable and limited to four concurrent transfers',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');
+    await page.evaluate(()=>{
+        window.Capacitor={isNativePlatform:()=>true};window.cacheTransfers={active:0,max:0,calls:0};window.tileControllers=[];
+        window.CapacitorWebFetch=(_url,{signal})=>new Promise((_resolve,reject)=>{
+            const t=cacheTransfers;t.active++;t.calls++;t.max=Math.max(t.max,t.active);
+            const abort=()=>{t.active--;reject(new DOMException('Aborted','AbortError'));};if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});
+        });
+        window.tileResults=Promise.allSettled(Array.from({length:8},(_,i)=>{const c=new AbortController();tileControllers.push(c);return MapCache.resource('https://tiles.openfreemap.org/cancel/'+i,c.signal);}));
+    });
+    await expect.poll(()=>page.evaluate(()=>cacheTransfers.active)).toBe(4);
+    const result=await page.evaluate(async()=>{tileControllers.forEach(c=>c.abort());const outcomes=await tileResults;return {...cacheTransfers,errors:outcomes.map(x=>x.reason?.name)};});
+    expect(result).toEqual({active:0,max:4,calls:4,errors:Array(8).fill('AbortError')});expect(state.errors).toEqual([]);
+});
+
+test('terrain request failure leaves the base map and guidance alive',async({page})=>{
+    const state=await detailedMapFixture(page);
+    await page.route('https://tiles.mapterhorn.com/**',route=>route.fulfill({status:503,body:'Terrain unavailable'}));
+    await page.evaluate(()=>mapDetailUpdate({...mapDetailBase,maneuver:null,details:{...mapDetailBase.details,terrain:true}}));
+    await expect(page.locator('#map-detail-status')).toContainText('Terrain unavailable');
+    expect(await page.evaluate(()=>drivingTestMap.getTerrain())).toBeNull();
+    await expect(page.locator('#driving-map')).toHaveClass(/ready/);
+    expect(await page.evaluate(()=>!!drivingTestMap.getSource('driving-route'))).toBe(true);expect(state.errors).toEqual([]);
 });

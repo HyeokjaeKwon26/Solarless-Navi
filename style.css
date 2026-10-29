@@ -1479,3 +1479,9 @@ body.constrained-controls.map-tools-open .map-controls-group { max-height:var(--
 body.constrained-controls.map-tools-open .map-controls-group .map-floating-btn { flex:0 0 48px; }
 body.constrained-controls.map-tools-open #btn-recenter-gps { position:sticky; bottom:0; z-index:2; }
 body.constrained-controls.map-tools-open #btn-map-tools { position:sticky; bottom:54px; z-index:2; }
+
+#map-detail-settings p { margin:10px 0; font-size:12px; line-height:1.5; color:#cbd5e1; overflow-wrap:anywhere; }
+#map-detail-settings .nav-btn { width:100%; margin-top:8px; }
+#map-detail-status { margin:6px 8px; color:#bae6fd; font-size:11px; line-height:1.35; overflow-wrap:anywhere; }
+body.pip-mode #map-detail-status { display:none; }
+@media (orientation:landscape) and (max-height:540px) { #map-detail-status { font-size:9px; max-height:38px; overflow:auto; } }

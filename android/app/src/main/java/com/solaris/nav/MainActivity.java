@@ -24,6 +24,10 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AppUpdatePlugin.class);
         registerPlugin(VoiceInputPlugin.class);
         super.onCreate(savedInstanceState);
+        // Identify ordinary map-resource requests to public tile providers.
+        android.webkit.WebSettings webSettings = getBridge().getWebView().getSettings();
+        String agent = webSettings.getUserAgentString();
+        if (!agent.contains("SolarLessNavi")) webSettings.setUserAgentString(agent + " SolarLessNavi/Android");
     }
 
     @Override

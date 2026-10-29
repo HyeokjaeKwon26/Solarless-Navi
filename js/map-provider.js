@@ -36,20 +36,25 @@
     }
 
     function configureMapLibreRuntime(maplibregl) {
+        globalThis.MapCache?.configure(maplibregl);
         if (!maplibregl || typeof maplibregl.setWorkerUrl !== 'function') return false;
         const current = typeof maplibregl.getWorkerUrl === 'function' ? maplibregl.getWorkerUrl() : '';
         if (!current) maplibregl.setWorkerUrl(MAPLIBRE_WORKER_URL);
         return true;
     }
 
-    function guardVectorLayer(layer, leaflet) {
+    function guardVectorLayer(layer, leaflet, dark=false) {
         if (!layer || typeof layer._transitionEnd !== 'function') return layer;
         // The upstream bridge queues a frame that still reads _map after
         // onRemove. Camera/PiP changes can remove and re-add the same layer
         // before that frame runs. Cancel it and reject old renderer callbacks.
         let generation = 0, frame = null;
         const add = layer.onAdd, remove = layer.onRemove;
-        layer.onAdd = function(map) { generation++; this._zooming=false; return add.call(this,map); };
+        layer.onAdd = function(map) {
+            generation++;this._zooming=false;const result=add.call(this,map),gl=this._glMap;
+            if(globalThis.NavigationMap&&gl){const apply=()=>{if(this._glMap===gl)globalThis.NavigationMap.style(gl,dark,globalThis.NavigationMap.settings(globalThis.localStorage).style);};if(gl.isStyleLoaded())apply();else gl.once('load',apply);}
+            return result;
+        };
         layer.onRemove = function(map) {
             generation++;
             if(frame!==null)leaflet.Util.cancelAnimFrame(frame);
@@ -104,7 +109,7 @@
             padding: 0.15,
             maxZoom: 20,
             pixelRatio: Math.min(1.5, Math.max(1, deviceRatio)),
-            maxCanvasSize: [4096, 4096]
+            maxCanvasSize: [4096, 4096],transformRequest:globalThis.MapCache?.transformRequest,maxTileCacheSize:48
         };
         const primary = vectorSupported ? {
             light: guardVectorLayer(leaflet.maplibreGL({
@@ -114,7 +119,7 @@
             dark: guardVectorLayer(leaflet.maplibreGL({
                 ...sharedVectorOptions,
                 style: OPENFREEMAP_STYLES.dark,
-            }),leaflet)
+            }),leaflet,true)
         } : fallback;
 
         return { primary, fallback, vectorSupported };
@@ -129,7 +134,7 @@
     function attributionFor(options) {
         const state = options || {};
         if (state.satellite) return ATTRIBUTION.satellite;
-        return state.fallbackActive || !state.vectorSupported ? ATTRIBUTION.osm : ATTRIBUTION.vector;
+        return (state.fallbackActive || !state.vectorSupported ? ATTRIBUTION.osm : ATTRIBUTION.vector)+(state.terrain?' · <a href="https://mapterhorn.com/attribution/" target="_blank" rel="noopener noreferrer">© Mapterhorn</a>':'');
     }
 
     return {

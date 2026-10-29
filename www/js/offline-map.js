@@ -3,8 +3,8 @@ window.OfflineMap = (function () {
 
     // Do not call cache.add() after tileload: that starts a second network
     // request and the app has no service-worker read-through path. The map
-    // provider/browser HTTP cache remains authoritative until a proper
-    // provider-compatible tile cache is implemented.
+    // Raster tiles retain provider/browser HTTP caching. MapCache handles
+    // the separate bounded MapLibre vector/DEM read-through path.
     function registerOfflineTileCache() {
         return false;
     }

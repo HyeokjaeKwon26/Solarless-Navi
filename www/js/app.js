@@ -1040,10 +1040,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setupDrivingView() {
         drivingView = DrivingView.create({container:document.getElementById('driving-map'),library:window.maplibregl,
+            onDetailStatus:status=>MapDetailSettings.status(status),
             color:RoutePresentation.segmentColor,uncertain:s=>RoutePresentation.assessment(s).uncertain,
             onPan:markUserMapPanning,
             onActive:active=>{
                 document.getElementById('map-perspective-wrapper').classList.toggle('driving-map-active',active);
+                if(!active)MapDetailSettings.status({});
+                updateMapAttribution();
                 if(active){if(currentTileLayer&&map.hasLayer(currentTileLayer))map.removeLayer(currentTileLayer);}
                 else if(currentTileLayer&&!map.hasLayer(currentTileLayer))addBaseLayerSafely(currentTileLayer);
                 if(!active&&currentSmoothLat!==null){map.panTo([currentSmoothLat,currentSmoothLng],{animate:false});applyMapRotation(currentSmoothHeading);
@@ -1096,6 +1099,10 @@ document.addEventListener('DOMContentLoaded', () => {
             visible:document.visibilityState!=='hidden',satellite:isSatelliteViewActive,available:!!roadLayerSet?.vectorSupported&&!isRasterMapFallbackActive,
             position:[currentSmoothLng,currentSmoothLat],heading:currentSmoothHeading,bearing:compassMode==='heading-up'?currentSmoothHeading:0,
             reliable,segments:drivingSceneSegments||selectedRouteObj?.analyzed?.segments,index:navigationRouteProgress.segmentIndex||0,
+            model:selectedRouteObj?.analyzed?.coordinates&&!isFreeDriveMode?NavigationGuidance.model(selectedRouteObj):null,
+            details:MapDetailSettings.get(),language:I18n.getLanguage(),
+            remaining:navigationRouteProgress.result?.remainingMeters,
+            destination:currentEnd&&!isFreeDriveMode?[currentEnd.lng,currentEnd.lat]:null,entranceConfirmed:currentEnd?.entranceConfirmed===true,
             end:selectedRouteObj&&!isFreeDriveMode?selectedRouteObj.analyzed?.coordinates?.at(-1):null,
             maneuver:!isFreeDriveMode&&reliable?lastTurnPresentation.maneuver:null,speed:lastNavigationSpeedKmh,
             thermalStatus:runtimeHealth?.thermalStatus,
@@ -1429,6 +1436,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('btn-preview-voice').textContent = ko ? '한영 혼합 안내 미리 듣기' : 'Preview mixed-language guidance';
         VoiceSettings.render();
         DriveExperience.render();
+        MapDetailSettings.render();
         selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
         renderSpeedDisplay();
         document.querySelectorAll('[data-distance-meters]').forEach(element => setDistanceLabel(element, Number(element.dataset.distanceMeters), element.dataset.distanceLong === 'true', element.dataset.distancePrefix));
@@ -1447,6 +1455,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function setupFeatureListeners() {
         DriveExperience.init();
         JourneyUI.init();
+        MapDetailSettings.init(()=>{
+            for(const [name,layer] of Object.entries(roadLayerSet?.primary||{}))if(layer?._glMap?.isStyleLoaded())NavigationMap.style(layer._glMap,name==='dark',NavigationMap.settings(localStorage).style);
+            syncDrivingView();updateMapAttribution();
+        });
         window.addEventListener('solarless:alerts',()=>{isSpeedingWarningActive=false;document.getElementById('speeding-warning-overlay').classList.add('hidden');updateTurnBannerText(lastTurnPresentation.maneuver,lastTurnPresentation.glare,true);});
         refreshDrivingFocus();
         document.getElementById('toggle-driving-focus').addEventListener('change', event => {
@@ -1888,6 +1900,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!attribution || !window.MapProvider) return;
         attribution.innerHTML = MapProvider.attributionFor({
             satellite: isSatelliteViewActive,
+            terrain:NavigationMap.settings(localStorage).terrain&&drivingView?.active(),
             fallbackActive: isRasterMapFallbackActive,
             vectorSupported: !!(roadLayerSet && roadLayerSet.vectorSupported)
         });
@@ -2052,7 +2065,7 @@ document.addEventListener('DOMContentLoaded', () => {
             runtimeHealth = health;
             if(driveRecorder.active&&Date.now()-lastPerformanceRecordAt>=30000){
                 lastPerformanceRecordAt=Date.now();
-                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.24',
+                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.25',
                     visible:!document.hidden,pip:isPipMode,live:isLiveNavActive,saver:isBatterySaverActive,map3d:!!drivingView?.active()});
             }
             automaticBatterySaver = NavigationGuidance.shouldConserve(runtimeHealth, automaticBatterySaver);
