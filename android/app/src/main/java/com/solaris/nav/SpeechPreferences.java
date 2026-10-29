@@ -57,6 +57,14 @@ final class SpeechPreferences {
         catch (JSONException ignored) { }
         return new SpeechPreferences(value);
     }
+    SpeechPreferences comparison(boolean useDefault) {
+        JSONObject value = json();
+        try {
+            value.put("unifiedVoice", true);
+            if (useDefault) value.put("koVoice", "").put("enVoice", "");
+        } catch (JSONException ignored) { }
+        return new SpeechPreferences(value);
+    }
     JSONObject json() {
         JSONObject value = new JSONObject();
         try { value.put("koVoice", koVoice).put("enVoice", enVoice).put("rate", (double)rate).put("pitch", (double)pitch).put("unifiedVoice", unifiedVoice); }

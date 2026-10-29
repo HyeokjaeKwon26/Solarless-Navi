@@ -38,8 +38,12 @@
             'speech-en-label':config.unifiedVoice?label('영어 안내 목소리','English guidance voice'):label('영어 목소리 · 영어 도로명','English voice · English road names'),
             'speech-mode-label':label('한영 혼합 안내','Mixed-language guidance'),
             'speech-mode-help':config.unifiedVoice
-                ?label('선택한 안내 목소리로 문장 전체를 읽습니다. 영어 발음은 해당 음성 엔진에 따라 달라집니다.','Reads the whole instruction with the selected guidance voice. English pronunciation depends on that voice engine.')
+                ?label('선택한 목소리 하나로 문장 전체를 읽고 영어 도로명에 발음 언어 정보를 전달합니다. 실제 발음·음색 유지 여부는 음성 엔진에 따라 다릅니다.','Uses one selected voice for the whole instruction and passes language hints for English roads. Pronunciation and speaker consistency depend on the engine.')
                 :label('한국어와 영어를 각각 선택한 목소리로 읽습니다. 도로명에서 음색이 바뀔 수 있습니다.','Uses the selected Korean and English voices separately. The tone can change at road names.'),
+            'speech-comparison-help':label('같은 한영 문장을 같은 속도·음높이로 비교합니다. 설정은 바뀌지 않습니다. 발음과 음색이 유지되는지 직접 들어보세요.','Compare the same Korean/English sentence at the same rate and pitch without changing settings. Listen for pronunciation and speaker consistency.'),
+            'btn-compare-default':label('기본 목소리로 비교 듣기','Compare: default Korean voice'),
+            'btn-compare-selected':label('선택한 목소리로 비교 듣기','Compare: selected Korean voice'),
+            'speech-comparison-details-label':label('비교 정보 · 엔진 보고값','Comparison details · engine-reported'),
             'btn-preview-ko':label('한국어 미리 듣기','Preview Korean'),'btn-preview-en':label('영어 미리 듣기','Preview English'),
             'speech-rate-label':label('말하기 속도 · 두 언어 공통','Speech rate · both languages'),
             'speech-pitch-label':label('음높이 · 두 언어 공통','Pitch · both languages'),
@@ -47,6 +51,7 @@
             'speech-settings-help':label('가람·Alex 등은 구분용 별칭입니다. 성별·음색은 미리 듣기로 확인하고 메모해 두세요. 품질·응답은 엔진 제공 등급입니다. 설치된 기기용 음성만 표시합니다. Android에서는 PiP·화면 꺼짐에도 설정을 유지합니다. 엔진 변경 후 앱을 다시 켜 주세요.','Garam, Alex and similar names are app nicknames. Preview each voice and note its tone. Quality and response are engine-reported ratings. Only installed on-device voices are listed. Android keeps settings in PiP and with the screen off. Restart after changing engines.')
         };
         for(const [id,value] of Object.entries(text))el(id).textContent=value;
+        el('speech-comparison').hidden=!native()?.compareSpeechPreview;
         el('speech-mode').value=config.unifiedVoice?'unified':'separate';
         el('speech-mode').options[0].textContent=label('한 목소리로 통일 (기본)','One voice throughout (default)');
         el('speech-mode').options[1].textContent=label('언어별 목소리 · 발음 우선','Separate voices · language pronunciation');
@@ -107,9 +112,26 @@
         try{const accepted=await root.TTSVoice.previewLanguage(language);status(accepted?label('미리 듣기를 요청했습니다. 소리가 없으면 음량과 음성 설치 상태를 확인하세요.','Preview requested. If silent, check volume and installed voices.'):label('현재 음성을 재생할 수 없습니다. 잠시 후 다시 시도하세요.','Voice is unavailable right now. Please try again shortly.'));}
         catch{status(label('미리 듣기에 실패했습니다. 음성 설치 상태를 확인하세요.','Preview failed. Check installed voices.'));}
     }
+    async function compare(useDefault){
+        if(busy||!ready)return;
+        if(!canPreview()){status(label('주행 안내를 종료한 뒤 미리 들어보세요.','End guidance before previewing.'));return;}
+        if(root.TTSVoice.isMuted()){status(label('상단 스피커 버튼으로 음성을 켜 주세요.','Enable voice using the speaker button first.'));return;}
+        const plugin=native();if(!plugin?.compareSpeechPreview)return;
+        busy=true;controls();
+        try{
+            const result=await deadline(plugin.compareSpeechPreview({useDefault}));
+            if(!result.accepted)throw Error('PREVIEW_UNAVAILABLE');
+            const source=useDefault?label('기본','Default'):label('선택','Selected');
+            el('speech-comparison-details').textContent=`${source} · ${result.engine||''} · ${result.requestedVoice||label('기기용 기본','On-device default')} → ${(result.reportedVoices||[]).join(', ')} · ${result.rate}× / ${result.pitch}×`;
+            status(result.voiceFallback?label('선택한 음성이 없어 기본 음성으로 비교했습니다.','Selected voice unavailable; compared using the default voice.'):label('비교 재생을 요청했습니다. 설정은 바뀌지 않았습니다.','Comparison requested. Settings are unchanged.'));
+        }catch{status(label('비교 재생을 시작하지 못했습니다. 안내 종료·음량·설치 음성을 확인하세요.','Could not start comparison. End guidance and check volume and installed voices.'));}
+        finally{busy=false;controls();}
+    }
     function init(options={}){
         if(initialized)return;initialized=true;canPreview=options.canPreview||canPreview;
         try{const stored=JSON.parse(root.localStorage.getItem('solarless_voice_notes')||'{}');for(const [id,note] of Object.entries(stored||{}).slice(0,200))if(typeof note==='string')notes[id]=note.slice(0,80);}catch{}
+        el('btn-compare-default').addEventListener('click',()=>compare(true));
+        el('btn-compare-selected').addEventListener('click',()=>compare(false));
         el('speech-mode').addEventListener('change',e=>save({...config,unifiedVoice:e.target.value==='unified'}));
         for(const language of ['ko','en']){
             el('speech-voice-'+language).addEventListener('change',e=>save({...config,[language+'Voice']:e.target.value}));

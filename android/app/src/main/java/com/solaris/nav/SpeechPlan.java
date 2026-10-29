@@ -7,7 +7,17 @@ import java.util.*;
 final class SpeechPlan {
     static final class Part {
         final String text, language;
-        Part(String text, String language) { this.text = text; this.language = language; }
+        final List<Range> ranges;
+        Part(String text, String language) { this(text, language, Collections.emptyList()); }
+        Part(String text, String language, List<Range> ranges) {
+            this.text = text; this.language = language;
+            this.ranges = Collections.unmodifiableList(new ArrayList<>(ranges));
+        }
+    }
+    static final class Range {
+        final int start, end;
+        final String language;
+        Range(int start, int end, String language) { this.start = start; this.end = end; this.language = language; }
     }
     static List<Part> parts(String text, String language, JSONArray segments) {
         List<Part> out = new ArrayList<>();
@@ -36,7 +46,11 @@ final class SpeechPlan {
         List<Part> plan = parts(text, language, segments);
         if (!unifiedVoice || plan.isEmpty()) return plan;
         StringBuilder joined = new StringBuilder();
-        for (Part part : plan) joined.append(part.text);
-        return Collections.singletonList(new Part(joined.toString(), language));
+        List<Range> ranges = new ArrayList<>();
+        for (Part part : plan) {
+            int start = joined.length(); joined.append(part.text);
+            if (!part.language.equals(language)) ranges.add(new Range(start, joined.length(), part.language));
+        }
+        return Collections.singletonList(new Part(joined.toString(), language, ranges));
     }
 }

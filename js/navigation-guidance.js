@@ -169,8 +169,8 @@
     }
     // Only road-name fields are expanded: St. Louis and Dr. King must remain names.
     function spokenRoad(value) {
-        const suffixes = { st: 'Street', rd: 'Road', ave: 'Avenue', blvd: 'Boulevard', dr: 'Drive', ln: 'Lane', ct: 'Court', pkwy: 'Parkway', hwy: 'Highway' };
-        return String(value || '').replace(/\b(st|rd|ave|blvd|dr|ln|ct|pkwy|hwy)\.?\s*(?=$|[,;·])/gi,
+        const suffixes = { st: 'Street', rd: 'Road', av: 'Avenue', ave: 'Avenue', blvd: 'Boulevard', dr: 'Drive', ln: 'Lane', ct: 'Court', pkwy: 'Parkway', hwy: 'Highway' };
+        return String(value || '').replace(/\b(st|rd|av|ave|blvd|dr|ln|ct|pkwy|hwy)\.?\s*(?=$|[,;·])/gi,
             (_, suffix) => suffixes[suffix.toLowerCase()])
             .replace(/\bI[- ](\d+)\b/g, 'Interstate $1').replace(/\bUS[- ](\d+)\b/g, 'U S Route $1');
     }

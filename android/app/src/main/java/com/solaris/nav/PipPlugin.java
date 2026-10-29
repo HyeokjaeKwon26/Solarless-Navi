@@ -56,6 +56,14 @@ public class PipPlugin extends Plugin {
     @PluginMethod public void getSpeechSettings(PluginCall call) {
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> call.resolve(NavigationSpeech.get(getContext()).speechSettings()));
     }
+    @PluginMethod public void compareSpeechPreview(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            if (!MainActivity.foreground || navigationActive) {
+                call.reject("END_GUIDANCE_BEFORE_PREVIEW"); return;
+            }
+            call.resolve(NavigationSpeech.get(getContext()).comparePreview(call.getBoolean("useDefault", false)));
+        });
+    }
     @PluginMethod public void setSpeechSettings(PluginCall call) {
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
             try { call.resolve(NavigationSpeech.get(getContext()).saveSpeechSettings(call.getObject("settings", new JSObject()))); }

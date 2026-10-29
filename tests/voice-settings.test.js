@@ -64,3 +64,11 @@ test('legacy native fallback selects an installed voice by catalogue index',asyn
     root.window=root;vm.createContext(root);vm.runInContext(fs.readFileSync('js/tts-voice.js','utf8'),root);
     assert.equal(await root.TTSVoice.preview(),true);assert.equal(spoken.length,1);assert.equal(spoken[0].voice,1);
 });
+
+test('known road abbreviations expand Av without changing Saint or Doctor names',()=>{
+    const guidance=require('../js/navigation-guidance');
+    const parts=guidance.speechSegments('잠시 후 Harvard Av. 방면으로 우회전','ko-KR',['Harvard Av.']);
+    assert.equal(parts.find(p=>p.lang==='en-US').text,'Harvard Avenue');
+    const saint=guidance.speechSegments('St. Louis Rd.에서 좌회전','ko-KR',['St. Louis Rd.']);
+    assert.equal(saint.find(p=>p.lang==='en-US').text,'St. Louis Road');
+});

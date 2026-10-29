@@ -701,6 +701,12 @@ async function speechSettingsFixture(page,{missing=false,delayed=false}={}) {
         if(missing&&!localStorage.getItem('native-speech-fixture'))localStorage.setItem('native-speech-fixture',JSON.stringify({koVoice:'removed:ko',enVoice:'',rate:1,pitch:1}));
         const get=()=>({ready:!delayed||window.speechReads>1,voices:window.speechCatalogue,settings:JSON.parse(localStorage.getItem('native-speech-fixture')||'{"koVoice":"","enVoice":"","rate":1,"pitch":1}')});
         window.Capacitor={Plugins:{Pip:{
+            compareSpeechPreview:async({useDefault})=>{
+                const saved=get().settings;
+                (window.comparisonRequests ||= []).push({useDefault,saved});
+                if(window.compareFailure)throw Error('PREVIEW_UNAVAILABLE');
+                return {accepted:true,engine:'fixture-engine',requestedVoice:useDefault?'':saved.koVoice,reportedVoices:[useDefault?'default-ko':saved.koVoice||'default-ko'],rate:saved.rate,pitch:saved.pitch};
+            },
             getSpeechSettings:async()=>{window.speechReads++;return get();},
             setSpeechSettings:async({settings})=>{if(window.speechSaveFailure)throw Error('SAVE_FAILED');localStorage.setItem('native-speech-fixture',JSON.stringify(settings));return get();},
             stopFocusedSpeech:async()=>{},speakFocused:async request=>{window.speechRequests.push({...request,saved:get().settings,planned:NavigationGuidance.voicePlan(request.segments,request.lang,get().settings.unifiedVoice)});return {accepted:true};}
@@ -731,6 +737,27 @@ test('voice settings persist separately by language and previews use the saved n
     await expect(page.locator('#speech-rate-value')).toHaveText('0.80×');await expect(page.locator('#speech-pitch-value')).toHaveText('1.20×');
     await page.locator('#btn-reset-voices').click();await expect(page.locator('#speech-rate-value')).toHaveText('1.00×');
     await expect(page.locator('#speech-voice-ko')).toHaveValue('');await expect(page.locator('#speech-voice-en')).toHaveValue('');expect(state.errors).toEqual([]);
+});
+
+test('voice comparison keeps saved settings and reports errors without interrupting guidance',async({page})=>{
+    const state=await speechSettingsFixture(page);await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await page.locator('#speech-voice-ko').selectOption('engine:ko1');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    const saved=await page.evaluate(()=>localStorage.getItem('native-speech-fixture'));
+    await page.locator('#btn-compare-default').click();await expect(page.locator('#speech-settings-status')).toContainText('unchanged');
+    await page.locator('#btn-compare-selected').click();await expect(page.locator('#speech-comparison-details')).toContainText('engine:ko1');
+    expect(await page.evaluate(()=>comparisonRequests.map(r=>r.useDefault))).toEqual([true,false]);
+    expect(await page.evaluate(()=>localStorage.getItem('native-speech-fixture'))).toBe(saved);
+    await page.evaluate(()=>window.compareFailure=true);await page.locator('#btn-compare-selected').click();
+    await expect(page.locator('#speech-settings-status')).toContainText('Could not start');
+    await page.evaluate(()=>TTSVoice.toggleMute());await page.locator('#btn-compare-default').click();
+    await expect(page.locator('#speech-settings-status')).toContainText('Enable voice');
+    expect(await page.evaluate(()=>comparisonRequests.length)).toBe(3);
+    await page.evaluate(()=>TTSVoice.toggleMute());
+    await page.locator('#btn-open-search-modal').click();await selectDestination(page,'Alpha');await page.locator('#btn-map-start-nav').click();
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-compare-default').click();
+    await expect(page.locator('#speech-settings-status')).toContainText('End guidance');
+    expect(await page.evaluate(()=>comparisonRequests.length)).toBe(3);expect(state.errors).toEqual([]);
 });
 
 test('online choices disappear and saved network voice migrates to its installed counterpart',async({page})=>{
@@ -795,7 +822,7 @@ test('voice settings fit narrow and landscape screens and mute prevents previews
     await expect(page.locator('#speech-voice-ko')).toBeEnabled();
     for(const size of [{width:320,height:740},{width:640,height:320}]){
         await page.setViewportSize(size);
-        for(const id of ['speech-mode','speech-voice-ko','speech-voice-en','speech-note-ko','speech-note-en','speech-rate','speech-pitch','btn-preview-ko','btn-preview-en','btn-reset-voices','btn-refresh-voices']){
+        for(const id of ['speech-mode','speech-voice-ko','speech-voice-en','speech-note-ko','speech-note-en','speech-rate','speech-pitch','btn-preview-ko','btn-preview-en','btn-compare-default','btn-compare-selected','btn-reset-voices','btn-refresh-voices']){
             const control=page.locator('#'+id);await control.scrollIntoViewIfNeeded();const box=await control.boundingBox();
             expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(size.width+1);expect(box.height).toBeGreaterThanOrEqual(44);
         }
