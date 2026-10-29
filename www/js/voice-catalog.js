@@ -34,12 +34,21 @@
     }
     function details(voice,language){
         const ko=String(language).startsWith('ko');
-        if(!voice)return ko?'시스템이 고른 기본 음성입니다. 미리 듣기로 확인하세요.':'Uses the system default. Preview to hear it.';
+        if(!voice)return ko?'설치된 기기용 기본 음성입니다. 미리 듣기로 확인하세요.':'Uses an installed on-device default. Preview to hear it.';
         const qualities={100:['매우 낮음','Very low'],200:['낮음','Low'],300:['보통','Normal'],400:['높음','High'],500:['매우 높음','Very high']};
         const latency={100:['매우 빠름','Very fast'],200:['빠름','Fast'],300:['보통','Normal'],400:['느림','Slow'],500:['매우 느림','Very slow']};
         const unknown=ko?'미제공':'Unlisted';
         return ko?`엔진 기준 품질: ${qualities[voice.quality]?.[0]||unknown} · 응답: ${latency[voice.latency]?.[0]||unknown}. 음색은 미리 듣기로 비교하세요.`
             :`Engine-rated quality: ${qualities[voice.quality]?.[1]||unknown} · Response: ${latency[voice.latency]?.[1]||unknown}. Preview to compare tone.`;
     }
-    return {name,label,details};
+    function installed(voice){return voice.networkRequired!==true && voice.localService!==false;}
+    function localId(id,language,voices){
+        const matches=v=>String(v.lang||'').toLowerCase().split(/[-_]/)[0]===language.split('-')[0];
+        const existing=voices.find(v=>v.id===id);
+        if(existing&&installed(existing)&&matches(existing))return id;
+        if(!(existing&&!installed(existing))&&!/-network$/i.test(id))return id;
+        const local=/-network$/i.test(id)?id.replace(/-network$/i,'-local'):'';
+        return voices.some(v=>v.id===local&&installed(v)&&matches(v))?local:'';
+    }
+    return {name,label,details,installed,localId};
 });

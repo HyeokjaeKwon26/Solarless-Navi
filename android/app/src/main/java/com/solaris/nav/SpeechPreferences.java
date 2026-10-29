@@ -27,12 +27,35 @@ final class SpeechPreferences {
     }
     static final class Choice {
         final String id, language;
-        Choice(String id, String language) { this.id = id; this.language = language; }
+        final boolean network;
+        Choice(String id, String language) { this(id, language, false); }
+        Choice(String id, String language, boolean network) { this.id = id; this.language = language; this.network = network; }
     }
     static Choice selected(String id, String language, List<Choice> choices) {
         if (id.isEmpty()) return null;
-        for (Choice choice : choices) if (choice.id.equals(id) && matches(language, choice.language)) return choice;
+        for (Choice choice : choices) if (!choice.network && choice.id.equals(id) && matches(language, choice.language)) return choice;
         return null;
+    }
+    static Choice defaultLocal(String language, String defaultId, List<Choice> choices) {
+        Choice preferred = selected(defaultId,language,choices);
+        if (preferred != null) return preferred;
+        for (Choice choice : choices) if (!choice.network && choice.language.equalsIgnoreCase(language)) return choice;
+        for (Choice choice : choices) if (!choice.network && matches(language,choice.language)) return choice;
+        return null;
+    }
+    static String localId(String id, String language, List<Choice> choices) {
+        if (selected(id, language, choices) != null) return id;
+        boolean network = id.endsWith("-network");
+        for (Choice choice : choices) if (choice.id.equals(id)) network |= choice.network;
+        if (!network) return id; // Retain missing installed voices for later restoration.
+        String local = id.endsWith("-network") ? id.substring(0, id.length()-8)+"-local" : "";
+        return selected(local, language, choices) != null ? local : "";
+    }
+    SpeechPreferences offline(List<Choice> choices) {
+        JSONObject value = json();
+        try { value.put("koVoice", localId(koVoice,"ko-KR",choices)); value.put("enVoice",localId(enVoice,"en-US",choices)); }
+        catch (JSONException ignored) { }
+        return new SpeechPreferences(value);
     }
     JSONObject json() {
         JSONObject value = new JSONObject();

@@ -206,7 +206,8 @@ window.TTSVoice = (function () {
                 const result = await focused.speakFocused({ text, lang: language, segments });
                 if (generation !== speechGeneration) return false;
                 if (!result.accepted) { spokenStages.clear(); lastTurnAnnounceTime = 0; }
-                if (result.languageFallback) showVoiceToast(currentLang.startsWith('ko') ? '영어 음성이 없어 한국어 음성으로 안내합니다. Android 음성 출력 설정에서 영어 음성을 설치해 주세요.' : 'English voice unavailable. Check Android text-to-speech settings.');
+                if(result.onDeviceVoiceUnavailable)showVoiceToast(currentLang.startsWith('ko')?'기기용 음성을 설치한 뒤 다시 시도해 주세요.':'Install an on-device voice, then try again.');
+                else if (result.languageFallback) showVoiceToast(currentLang.startsWith('ko') ? '영어 음성이 없어 한국어 음성으로 안내합니다. Android 음성 출력 설정에서 영어 음성을 설치해 주세요.' : 'English voice unavailable. Check Android text-to-speech settings.');
                 else if(result.voiceFallback&&!voiceFallbackNotified){voiceFallbackNotified=true;showVoiceToast(currentLang.startsWith('ko')?'선택한 목소리가 없어 같은 언어의 기본 음성으로 안내합니다.':'Selected voice unavailable. Using the language default.');}
                 if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, utteranceId, timestamp: Date.now(), status: result.accepted ? 'accepted' : 'denied', source: 'native-foreground' } }));
                 return result.accepted === true;
@@ -220,7 +221,18 @@ window.TTSVoice = (function () {
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech) {
             let completed = 0;
             try {
-                for (const segment of segments) {
+                const plugin=window.Capacitor.Plugins.TextToSpeech;
+                const voices=(await plugin.getSupportedVoices()).voices||[];
+                const plan=segments.map(segment=>{
+                    const id=segment.lang.startsWith('ko')?preferences.koVoice:preferences.enVoice;
+                    const usable=v=>v.localService===true&&v.lang.replace('_','-').split('-')[0]===segment.lang.split('-')[0];
+                    let index=voices.findIndex(v=>usable(v)&&id&&('web:'+v.voiceURI===id||id.endsWith(':'+v.voiceURI)));
+                    if(index<0)index=voices.findIndex(v=>usable(v)&&v.lang===segment.lang);
+                    if(index<0)index=voices.findIndex(usable);
+                    if(index<0)throw Error('ON_DEVICE_VOICE_UNAVAILABLE');
+                    return {...segment,voice:index};
+                });
+                for (const segment of plan) {
                     if (generation !== speechGeneration || isMuted || interruptionActive) return false;
                     await window.Capacitor.Plugins.TextToSpeech.speak({
                     text: segment.text,
@@ -228,7 +240,8 @@ window.TTSVoice = (function () {
                     rate: preferences.rate,
                     pitch: preferences.pitch,
                     volume: 1.0,
-                    category: 'ambient'
+                    category: 'ambient',
+                    voice: segment.voice
                 });
                     completed++;
                 }
@@ -245,22 +258,24 @@ window.TTSVoice = (function () {
             try {
                 window.speechSynthesis.resume();
 
+                const queued=[];
                 for (const segment of segments) {
                 const utterance = new SpeechSynthesisUtterance(segment.text);
                 utterance.lang = segment.lang;
                 utterance.rate = preferences.rate;
                 utterance.pitch = preferences.pitch;
 
-                const voices = window.speechSynthesis.getVoices();
+                const voices = window.speechSynthesis.getVoices().filter(v=>v.localService!==false);
                 if (voices && voices.length > 0) {
                     const id=segment.lang.startsWith('ko')?preferences.koVoice:preferences.enVoice;
                     const compatible=v=>v.lang.replace('_','-').split('-')[0]===segment.lang.split('-')[0];
                     const match = voices.find(v=>'web:'+v.voiceURI===id&&compatible(v)) || voices.find(v=>compatible(v)&&v.lang===segment.lang) || voices.find(compatible);
                     if (match) utterance.voice = match;
                 }
-
-                window.speechSynthesis.speak(utterance);
+                if(!utterance.voice){showVoiceToast(currentLang.startsWith('ko')?'기기용 음성을 설치한 뒤 다시 시도해 주세요.':'Install an on-device voice, then try again.');spokenStages.clear();return false;}
+                queued.push(utterance);
                 }
+                for(const utterance of queued)window.speechSynthesis.speak(utterance);
                 return true;
             } catch (err) {
                 console.warn("Web Speech API Error:", err);

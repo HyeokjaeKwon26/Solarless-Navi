@@ -21,3 +21,14 @@ test('catalog describes only engine-provided properties and preserves readable n
     assert.doesNotMatch(catalog.label(unfamiliar,'en'),/en-us-x-new123/);
     assert.equal(catalog.name(unfamiliar,'en'),catalog.name({...unfamiliar,name:'en-us-x-new123-network',id:'android:engine:en-us-x-new123-network'},'en'));
 });
+
+test('online voice selections migrate only to a matching installed voice from the same engine',()=>{
+    const local=voice('ko-kr-x-koc-local'),online=voice('ko-kr-x-koc-network','ko-KR',true);
+    assert.equal(catalog.localId(online.id,'ko',[online,local]),local.id);
+    assert.equal(catalog.localId(online.id,'ko',[{...local,id:local.id.replace('engine','other')}]),'');
+    assert.equal(catalog.localId(online.id,'en',[local]),'');
+    assert.equal(catalog.localId('vendor:cloud','ko',[{id:'vendor:cloud',lang:'ko-KR',networkRequired:true}]),'');
+    assert.equal(catalog.localId('missing:installed','ko',[]),'missing:installed');
+    assert.deepEqual([online,local].filter(catalog.installed),[local]);
+    assert.equal(catalog.installed({localService:false}),false);
+});

@@ -44,3 +44,23 @@ test('unified mixed Korean guidance keeps the selected voice and expanded Englis
     spoken.length=0;config={...config,unifiedVoice:true};await root.TTSVoice.previewLanguage('en-US');
     assert.equal(spoken.length,1);assert.equal(spoken[0].voice.voiceURI,'en2');
 });
+
+test('web speech never uses network defaults and does not queue half a mixed instruction',async()=>{
+    const spoken=[];let voices=[{voiceURI:'cloud-ko',lang:'ko-KR',localService:false},{voiceURI:'local-ko',lang:'ko-KR',localService:true},{voiceURI:'cloud-en',lang:'en-US',localService:false}];
+    let config={koVoice:'web:cloud-ko',enVoice:'web:cloud-en',rate:1,pitch:1,unifiedVoice:true};
+    const root={navigator:{language:'ko-KR'},console,Date,SpeechSynthesisUtterance:function(text){this.text=text;},
+        VoiceSettings:{get:()=>config},NavigationGuidance:require('../js/navigation-guidance'),
+        speechSynthesis:{getVoices:()=>voices,cancel(){},resume(){},speak:v=>spoken.push(v)}};
+    root.window=root;vm.createContext(root);vm.runInContext(fs.readFileSync('js/tts-voice.js','utf8'),root);
+    assert.equal(await root.TTSVoice.preview(),true);assert.equal(spoken.length,1);assert.equal(spoken[0].voice.voiceURI,'local-ko');
+    spoken.length=0;config={...config,unifiedVoice:false};assert.equal(await root.TTSVoice.preview(),false);assert.equal(spoken.length,0);
+    voices=voices.filter(v=>!v.localService);config={...config,unifiedVoice:true};assert.equal(await root.TTSVoice.preview(),false);assert.equal(spoken.length,0);
+});
+test('legacy native fallback selects an installed voice by catalogue index',async()=>{
+    const spoken=[],voices=[{voiceURI:'cloud',lang:'ko-KR',localService:false},{voiceURI:'local',lang:'ko-KR',localService:true}];
+    const root={navigator:{language:'ko-KR'},console,Date,NavigationGuidance:require('../js/navigation-guidance'),
+        VoiceSettings:{get:()=>({rate:1,pitch:1,unifiedVoice:true,koVoice:'',enVoice:''})},
+        Capacitor:{Plugins:{TextToSpeech:{stop:async()=>{},getSupportedVoices:async()=>({voices}),speak:async v=>spoken.push(v)}}}};
+    root.window=root;vm.createContext(root);vm.runInContext(fs.readFileSync('js/tts-voice.js','utf8'),root);
+    assert.equal(await root.TTSVoice.preview(),true);assert.equal(spoken.length,1);assert.equal(spoken[0].voice,1);
+});

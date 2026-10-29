@@ -49,6 +49,7 @@ public class PipPlugin extends Plugin {
             result.put("accepted", MainActivity.foreground && speech.speak(call.getString("text", ""), call.getString("lang", "en-US"), false, call.getArray("segments")));
             result.put("languageFallback", speech.usedLanguageFallback());
             result.put("voiceFallback", speech.usedVoiceFallback());
+            result.put("onDeviceVoiceUnavailable", speech.onDeviceVoiceUnavailable());
             call.resolve(result);
         });
     }

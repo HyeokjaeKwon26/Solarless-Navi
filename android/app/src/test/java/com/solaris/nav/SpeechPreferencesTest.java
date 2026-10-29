@@ -37,4 +37,24 @@ public class SpeechPreferencesTest {
         assertNull(SpeechPreferences.selected(en.id, "en-US", Arrays.asList(ko)));
         assertNull(SpeechPreferences.selected("", "ko-KR", Arrays.asList(ko,en)));
     }
+
+    @Test public void networkSelectionsMigrateToSameEngineLocalWithoutChangingOtherSettings() throws Exception {
+        SpeechPreferences.Choice local = new SpeechPreferences.Choice("android:engine:ko-kr-x-koc-local","ko-KR");
+        SpeechPreferences.Choice remote = new SpeechPreferences.Choice("android:engine:ko-kr-x-koc-network","ko-KR",true);
+        SpeechPreferences saved = new SpeechPreferences(new JSONObject().put("koVoice",remote.id).put("rate",.8).put("pitch",1.2).put("unifiedVoice",false));
+        SpeechPreferences migrated = saved.offline(Arrays.asList(remote,local));
+        assertEquals(local.id,migrated.koVoice);assertEquals(saved.rate,migrated.rate,0);assertEquals(saved.pitch,migrated.pitch,0);assertFalse(migrated.unifiedVoice);
+        assertEquals("",saved.offline(Arrays.asList(remote,new SpeechPreferences.Choice("android:other:ko-kr-x-koc-local","ko-KR"))).koVoice);
+        assertEquals("",SpeechPreferences.localId(remote.id,"en-US",Arrays.asList(remote,local)));
+    }
+    @Test public void networkDefaultCannotBypassInstalledVoicePolicy() {
+        SpeechPreferences.Choice remote = new SpeechPreferences.Choice("cloud","en-US",true);
+        SpeechPreferences.Choice gb = new SpeechPreferences.Choice("gb","en-GB"), us = new SpeechPreferences.Choice("us","en-US");
+        assertNull(SpeechPreferences.selected(remote.id,"en-US",Arrays.asList(remote,us)));
+        assertSame(us,SpeechPreferences.defaultLocal("en-US",remote.id,Arrays.asList(remote,gb,us)));
+        assertSame(gb,SpeechPreferences.defaultLocal("en-US",gb.id,Arrays.asList(remote,gb,us)));
+        assertNull(SpeechPreferences.defaultLocal("en-US",remote.id,Arrays.asList(remote)));
+        assertEquals("",SpeechPreferences.localId("cloud","en-US",Arrays.asList(remote,us)));
+        assertEquals("missing-local",SpeechPreferences.localId("missing-local","ko-KR",Arrays.asList(remote)));
+    }
 }

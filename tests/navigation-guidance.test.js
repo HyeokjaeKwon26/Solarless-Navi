@@ -100,9 +100,9 @@ function voice(native = null) {
     const context = { navigator: { language: 'en-US' }, console, NavigationGuidance: guidance,
         VoiceSettings:{get:()=>({rate:1,pitch:1,koVoice:'',enVoice:'',unifiedVoice:false})},
         Date: { now: () => now }, SpeechSynthesisUtterance: function (text) { this.text = text; },
-        speechSynthesis: { cancel() {}, resume() {}, getVoices: () => [], speak: u => spoken.push(u.text) } };
+        speechSynthesis: { cancel() {}, resume() {}, getVoices: () => [{voiceURI:"ko",lang:"ko-KR",localService:true},{voiceURI:"en",lang:"en-US",localService:true}], speak: u => spoken.push(u.text) } };
     context.window = context;
-    if (native) context.Capacitor = { Plugins: { TextToSpeech: native } };
+    if (native) context.Capacitor = { Plugins: { TextToSpeech: {getSupportedVoices:async()=>({voices:[{voiceURI:"ko",lang:"ko-KR",localService:true},{voiceURI:"en",lang:"en-US",localService:true}]}),...native} } };
     vm.createContext(context);
     vm.runInContext(fs.readFileSync(require.resolve('../js/navigation-units.js'), 'utf8'), context);
     vm.runInContext(fs.readFileSync(require.resolve('../js/alert-settings.js'), 'utf8'), context);

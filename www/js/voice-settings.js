@@ -7,7 +7,7 @@
     const bound=(value,min,max)=>typeof value==='number'&&Number.isFinite(value)?Math.max(min,Math.min(max,value)):1;
     function normalize(value={}){return {koVoice:typeof value?.koVoice==='string'&&value.koVoice.length<=1024?value.koVoice:'',enVoice:typeof value?.enVoice==='string'&&value.enVoice.length<=1024?value.enVoice:'',rate:bound(value?.rate,.5,1.5),pitch:bound(value?.pitch,.75,1.5),unifiedVoice:value?.unifiedVoice!==false};}
     const matches=(lang,voice)=>String(voice.lang||'').toLowerCase().split(/[-_]/)[0]===lang.split('-')[0];
-    function selected(config,language,voices){const id=language.startsWith('ko')?config.koVoice:config.enVoice;return voices.find(v=>v.id===id&&matches(language,v))||null;}
+    function selected(config,language,voices){const id=language.startsWith('ko')?config.koVoice:config.enVoice;return voices.find(v=>v.networkRequired!==true&&v.id===id&&matches(language,v))||null;}
     let config={...defaults},catalog=[],ready=false,busy=false,initialized=false,canPreview=()=>true;
     let notes=Object.create(null);
     const native=()=>root?.Capacitor?.Plugins?.Pip?.getSpeechSettings?root.Capacitor.Plugins.Pip:null;
@@ -17,7 +17,18 @@
     function status(text){el('speech-settings-status').textContent=text;}
     function deadline(promise){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('TTS_TIMEOUT')),6000);Promise.resolve(promise).then(v=>{clearTimeout(timer);resolve(v);},e=>{clearTimeout(timer);reject(e);});});}
     function webVoices(){return (root.speechSynthesis?.getVoices()||[]).map(v=>({id:'web:'+v.voiceURI,name:v.name,lang:v.lang,networkRequired:v.localService===false})).filter(v=>matches('ko',v)||matches('en',v));}
-    function accept(result){config=normalize(result.settings);catalog=Array.isArray(result.voices)?result.voices:[];ready=result.ready===true;}
+    function accept(result){config=normalize(result.settings);catalog=(Array.isArray(result.voices)?result.voices:[]).filter(root.VoiceCatalog.installed);ready=result.ready===true;}
+    function offlineConfig(value,voices){const next=normalize(value);for(const lang of ['ko','en'])next[lang+'Voice']=root.VoiceCatalog.localId(next[lang+'Voice'],lang,voices);return next;}
+    async function acceptNative(result,plugin){
+        if(result.ready){const next=offlineConfig(result.settings,Array.isArray(result.voices)?result.voices:[]);
+            if(next.koVoice!==(result.settings?.koVoice||'')||next.enVoice!==(result.settings?.enVoice||''))result=await deadline(plugin.setSpeechSettings({settings:next}));}
+        accept(result);
+    }
+    function acceptWeb(){
+        const all=webVoices(),next=offlineConfig(config,all);
+        if(next.koVoice!==config.koVoice||next.enVoice!==config.enVoice)root.localStorage.setItem('solarless_web_speech_settings',JSON.stringify(next));
+        config=next;catalog=all.filter(root.VoiceCatalog.installed);
+    }
     function controls(){el('speech-settings-controls').disabled=busy||!ready;el('btn-refresh-voices').disabled=busy;}
     function render(){
         if(!initialized)return;
@@ -33,7 +44,7 @@
             'speech-rate-label':label('말하기 속도 · 두 언어 공통','Speech rate · both languages'),
             'speech-pitch-label':label('음높이 · 두 언어 공통','Pitch · both languages'),
             'btn-reset-voices':label('음성 설정 초기화','Reset voice settings'),'btn-refresh-voices':label('목소리 목록 새로고침','Refresh voices'),
-            'speech-settings-help':label('가람·Alex 등은 구분용 별칭입니다. 성별·음색은 미리 듣기로 확인하고 메모해 두세요. 품질·응답은 엔진 제공 등급입니다. 인터넷용은 연결이 필요합니다. Android에서는 PiP·화면 꺼짐에도 설정을 유지합니다. 엔진 변경 후 앱을 다시 켜 주세요.','Garam, Alex and similar names are app nicknames. Preview each voice and note its tone. Quality and response are engine-reported ratings. Online voices need a connection. Android keeps settings in PiP and with the screen off. Restart after changing engines.')
+            'speech-settings-help':label('가람·Alex 등은 구분용 별칭입니다. 성별·음색은 미리 듣기로 확인하고 메모해 두세요. 품질·응답은 엔진 제공 등급입니다. 설치된 기기용 음성만 표시합니다. Android에서는 PiP·화면 꺼짐에도 설정을 유지합니다. 엔진 변경 후 앱을 다시 켜 주세요.','Garam, Alex and similar names are app nicknames. Preview each voice and note its tone. Quality and response are engine-reported ratings. Only installed on-device voices are listed. Android keeps settings in PiP and with the screen off. Restart after changing engines.')
         };
         for(const [id,value] of Object.entries(text))el(id).textContent=value;
         el('speech-mode').value=config.unifiedVoice?'unified':'separate';
@@ -42,7 +53,7 @@
         for(const language of ['ko','en']){
             const selector=el('speech-voice-'+language),id=config[language+'Voice'];selector.replaceChildren();
             const option=(value,text)=>{const o=root.document.createElement('option');o.value=value;o.textContent=text;selector.appendChild(o);};
-            option('',label('시스템 기본','System default'));
+            option('',label('기기용 기본','On-device default'));
             const choices=catalog.filter(v=>matches(language,v));
             for(const voice of choices)option(voice.id,root.VoiceCatalog.label(voice,ko()?'ko':'en')+(notes[voice.id]?` · ${notes[voice.id].slice(0,32)}`:''));
             if(id&&!choices.some(v=>v.id===id))option(id,label('사용 불가 · 기본 음성으로 대체','Unavailable · using language default'));
@@ -72,8 +83,8 @@
             if(plugin){
                 let result;
                 for(let i=0;i<8;i++){result=await deadline(plugin.getSpeechSettings());if(result.ready)break;await new Promise(resolve=>setTimeout(resolve,400));}
-                accept(result);
-            }else{try{config=normalize(JSON.parse(root.localStorage.getItem('solarless_web_speech_settings')||'{}'));}catch{config={...defaults};}catalog=webVoices();ready=!!root.speechSynthesis;}
+                await acceptNative(result,plugin);
+            }else{try{config=normalize(JSON.parse(root.localStorage.getItem('solarless_web_speech_settings')||'{}'));}catch{config={...defaults};}acceptWeb();ready=!!root.speechSynthesis;}
             render();status(summary());
         }catch{ready=false;render();status(label('음성 목록을 읽지 못했습니다. 다시 새로고침하세요.','Could not load voices. Please refresh again.'));}
         finally{busy=false;controls();}
@@ -81,8 +92,8 @@
     async function save(next){
         if(busy||!ready)return;busy=true;controls();status(label('저장 중…','Saving…'));
         try{
-            const normalized=normalize(next),plugin=native();
-            if(plugin)accept(await deadline(plugin.setSpeechSettings({settings:normalized})));
+            const normalized=offlineConfig(next,catalog),plugin=native();
+            if(plugin)await acceptNative(await deadline(plugin.setSpeechSettings({settings:normalized})),plugin);
             else{root.localStorage.setItem('solarless_web_speech_settings',JSON.stringify(normalized));config=normalized;}
             root.TTSVoice?.resetGuidance();
             render();status(summary());
@@ -116,7 +127,7 @@
             el('speech-'+name).addEventListener('change',e=>save({...config,[name]:Number(e.target.value)}));
         }
         el('btn-reset-voices').addEventListener('click',()=>save(defaults));el('btn-refresh-voices').addEventListener('click',refresh);
-        root.speechSynthesis?.addEventListener?.('voiceschanged',()=>{if(!native()&&!busy){catalog=webVoices();render();status(summary());}});
+        root.speechSynthesis?.addEventListener?.('voiceschanged',()=>{if(!native()&&!busy){acceptWeb();render();status(summary());}});
         render();refresh();
     }
     return {normalize,selected,init,refresh,render,get:()=>({...config})};

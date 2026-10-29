@@ -713,7 +713,7 @@ test('voice settings persist separately by language and previews use the saved n
     const state=await speechSettingsFixture(page,{delayed:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
     await expect(page.locator('#speech-voice-ko')).toBeEnabled();
     await page.locator('#speech-voice-ko').selectOption('engine:ko1');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
-    await page.locator('#speech-voice-en').selectOption('engine:en2');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await page.locator('#speech-voice-en').selectOption('engine:en1');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
     for(const [id,value] of [['speech-rate','0.8'],['speech-pitch','1.2']]){
         await page.locator('#'+id).fill(value);await page.locator('#'+id).dispatchEvent('change');await expect(page.locator('#speech-voice-ko')).toBeEnabled();
     }
@@ -721,16 +721,36 @@ test('voice settings persist separately by language and previews use the saved n
     await page.locator('#btn-preview-en').click();await expect.poll(()=>page.evaluate(()=>window.speechRequests.length)).toBe(2);
     const requests=await page.evaluate(()=>window.speechRequests);
     expect(requests.map(r=>r.lang)).toEqual(['ko-KR','en-US']);
-    for(const r of requests)expect(r.saved).toEqual({koVoice:'engine:ko1',enVoice:'engine:en2',rate:.8,pitch:1.2,unifiedVoice:true});
+    for(const r of requests)expect(r.saved).toEqual({koVoice:'engine:ko1',enVoice:'engine:en1',rate:.8,pitch:1.2,unifiedVoice:true});
     expect(requests[0].planned.every(s=>s.lang==='ko-KR')).toBe(true);
     expect(requests[0].planned[0].text).toContain('Harvard Avenue');
     await page.locator('#btn-toggle-lang').click();await expect(page.locator('#speech-settings-title')).toHaveText('안내 목소리');
-    await expect(page.locator('#speech-voice-en')).toHaveValue('engine:en2');
+    await expect(page.locator('#speech-voice-en')).toHaveValue('engine:en1');
     await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#speech-voice-ko')).toBeEnabled();
-    await expect(page.locator('#speech-voice-ko')).toHaveValue('engine:ko1');await expect(page.locator('#speech-voice-en')).toHaveValue('engine:en2');
+    await expect(page.locator('#speech-voice-ko')).toHaveValue('engine:ko1');await expect(page.locator('#speech-voice-en')).toHaveValue('engine:en1');
     await expect(page.locator('#speech-rate-value')).toHaveText('0.80×');await expect(page.locator('#speech-pitch-value')).toHaveText('1.20×');
     await page.locator('#btn-reset-voices').click();await expect(page.locator('#speech-rate-value')).toHaveText('1.00×');
     await expect(page.locator('#speech-voice-ko')).toHaveValue('');await expect(page.locator('#speech-voice-en')).toHaveValue('');expect(state.errors).toEqual([]);
+});
+
+test('online choices disappear and saved network voice migrates to its installed counterpart',async({page})=>{
+    const state=await speechSettingsFixture(page);
+    await page.addInitScript(()=>{
+        speechCatalogue.push({id:'engine:ko-kr-x-koc-local',name:'ko-kr-x-koc-local',lang:'ko-KR',networkRequired:false},
+            {id:'engine:ko-kr-x-koc-network',name:'ko-kr-x-koc-network',lang:'ko-KR',networkRequired:true});
+        if(!localStorage.getItem('native-speech-fixture'))localStorage.setItem('native-speech-fixture',JSON.stringify({koVoice:'engine:ko-kr-x-koc-network',enVoice:'engine:en2',rate:.8,pitch:1.2,unifiedVoice:true}));
+    });
+    await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#speech-voice-ko')).toHaveValue('engine:ko-kr-x-koc-local');
+    await expect(page.locator('#speech-voice-en')).toHaveValue('');
+    await expect(page.locator('#speech-voice-en option[value="engine:en2"]')).toHaveCount(0);
+    await expect(page.locator('#speech-voice-ko')).not.toContainText('Online');
+    await page.locator('#btn-preview-ko').click();await expect.poll(()=>page.evaluate(()=>speechRequests.length)).toBe(1);
+    const saved=await page.evaluate(()=>speechRequests[0].saved);
+    expect(saved).toEqual({koVoice:'engine:ko-kr-x-koc-local',enVoice:'',rate:.8,pitch:1.2,unifiedVoice:true});
+    await page.reload();await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#speech-voice-ko')).toHaveValue(saved.koVoice);
+    await page.screenshot({path:test.info().outputPath('installed-voice-settings.png')});expect(state.errors).toEqual([]);
 });
 
 test('voice nicknames, tone notes and unified mixed guidance persist without exposing raw codes in choices',async({page})=>{

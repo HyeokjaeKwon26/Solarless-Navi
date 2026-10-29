@@ -32,6 +32,8 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
     private String currentGroup = "";
     private boolean languageFallback;
     private boolean voiceFallback;
+    private boolean onDeviceVoiceUnavailable;
+    boolean onDeviceVoiceUnavailable() { return onDeviceVoiceUnavailable; }
     boolean usedLanguageFallback() { return languageFallback; }
     boolean usedVoiceFallback() { return voiceFallback; }
     static synchronized NavigationSpeech get(Context context) {
@@ -52,16 +54,23 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         });
     }
     private SpeechPreferences settings() {
-        try { return new SpeechPreferences(new JSONObject(preferences.getString("settings", "{}"))); }
-        catch (JSONException error) { return new SpeechPreferences(null); }
+        SpeechPreferences saved;
+        try { saved = new SpeechPreferences(new JSONObject(preferences.getString("settings", "{}"))); }
+        catch (JSONException error) { saved = new SpeechPreferences(null); }
+        if (!ready) return saved;
+        SpeechPreferences local = saved.offline(choices(voices(true)));
+        if (!local.koVoice.equals(saved.koVoice) || !local.enVoice.equals(saved.enVoice))
+            preferences.edit().putString("settings",local.json().toString()).apply();
+        return local;
     }
     private String voiceId(Voice voice) { return "android:" + engine + ":" + voice.getName(); }
-    private List<Voice> voices() {
+    private List<Voice> voices() { return voices(false); }
+    private List<Voice> voices(boolean includeNetwork) {
         List<Voice> list = new ArrayList<>();
         if (!ready || tts.getVoices() == null) return list;
         for (Voice voice : tts.getVoices()) {
             String language = voice.getLocale().getLanguage();
-            if ((language.equals("ko") || language.equals("en")) &&
+            if ((language.equals("ko") || language.equals("en")) && (includeNetwork || !voice.isNetworkConnectionRequired()) &&
                 (voice.getFeatures() == null || !voice.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED))) list.add(voice);
         }
         Collections.sort(list, (a,b) -> {
@@ -70,12 +79,20 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         });
         return list;
     }
+    private List<SpeechPreferences.Choice> choices(List<Voice> list) {
+        List<SpeechPreferences.Choice> out = new ArrayList<>();
+        for (Voice voice : list) out.add(new SpeechPreferences.Choice(voiceId(voice),voice.getLocale().toLanguageTag(),voice.isNetworkConnectionRequired()));
+        return out;
+    }
     private Voice chosen(String id, String language, List<Voice> list) {
-        List<SpeechPreferences.Choice> choices = new ArrayList<>();
-        for (Voice voice : list) choices.add(new SpeechPreferences.Choice(voiceId(voice), voice.getLocale().toLanguageTag()));
-        SpeechPreferences.Choice selected = SpeechPreferences.selected(id, language, choices);
+        SpeechPreferences.Choice selected = SpeechPreferences.selected(id, language, choices(list));
         if (selected != null) for (Voice voice : list) if (voiceId(voice).equals(selected.id)) return voice;
         return null;
+    }
+    private Voice localDefault(String language, List<Voice> list) {
+        Voice current = tts.getVoice();
+        SpeechPreferences.Choice selected = SpeechPreferences.defaultLocal(language,current == null ? "" : voiceId(current),choices(list));
+        return selected == null ? null : chosen(selected.id,language,list);
     }
     JSObject speechSettings() {
         SpeechPreferences value = settings();
@@ -91,7 +108,7 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
     }
     JSObject saveSpeechSettings(JSONObject input) {
         if (!ready) throw new IllegalStateException("TTS_NOT_READY");
-        SpeechPreferences next = new SpeechPreferences(input), previous = settings();
+        SpeechPreferences next = new SpeechPreferences(input).offline(choices(voices(true))), previous = settings();
         List<Voice> list = voices();
         for (String language : new String[]{"ko-KR", "en-US"}) {
             String id = next.forLanguage(language);
@@ -115,6 +132,7 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
     boolean speak(String text, String language, boolean fromBackground, JSONArray segments) {
         languageFallback = false;
         voiceFallback = false;
+        onDeviceVoiceUnavailable = false;
         if (System.currentTimeMillis() < deniedUntil) return false;
         if (!ready || audio == null || text == null || text.isEmpty() || audio.getMode() == AudioManager.MODE_IN_CALL || audio.getMode() == AudioManager.MODE_IN_COMMUNICATION) return false;
         int result;
@@ -134,8 +152,9 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         currentId = currentGroup + (parts.size() - 1);
         List<Voice> availableVoices = voices();
         tts.setSpeechRate(config.rate); tts.setPitch(config.pitch);
-        // Each speak() captures the current language/voice in its request. Keep
-        // audio focus until the final segment, including across language changes.
+        // Resolve every segment before queueing: a missing installed language
+        // must not produce half an instruction or fall through to cloud synthesis.
+        List<Voice> plannedVoices = new ArrayList<>();
         for (int i = 0; i < parts.size(); i++) {
             SpeechPlan.Part part = parts.get(i);
             String actualLanguage = part.language;
@@ -147,11 +166,18 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
             }
             String requestedVoice = config.forLanguage(actualLanguage);
             Voice selected = chosen(requestedVoice, actualLanguage, availableVoices);
-            if (!requestedVoice.isEmpty() && (selected == null || tts.setVoice(selected) != TextToSpeech.SUCCESS)) {
-                voiceFallback = true;
-                if (tts.setLanguage(Locale.forLanguageTag(actualLanguage)) < 0) { stop(); return false; }
+            if (selected == null) {
+                if (!requestedVoice.isEmpty()) voiceFallback = true;
+                selected = localDefault(actualLanguage,availableVoices);
             }
-            if (tts.speak(part.text, i == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD, null, currentGroup + i) != TextToSpeech.SUCCESS) { stop(); return false; }
+            // Never let an engine's network default bypass the installed-only list.
+            if (selected == null || selected.isNetworkConnectionRequired()) { onDeviceVoiceUnavailable = true; stop(); return false; }
+            plannedVoices.add(selected);
+        }
+        // Each speak() captures the selected voice; retain focus for the group.
+        for (int i = 0; i < parts.size(); i++) {
+            if (tts.setVoice(plannedVoices.get(i)) != TextToSpeech.SUCCESS) { onDeviceVoiceUnavailable = true; stop(); return false; }
+            if (tts.speak(parts.get(i).text, i == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD, null, currentGroup + i) != TextToSpeech.SUCCESS) { stop(); return false; }
         }
         return true;
     }
