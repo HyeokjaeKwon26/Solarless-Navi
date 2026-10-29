@@ -1,4 +1,4 @@
-SolarLess Navi 1.3.27
+SolarLess Navi 1.3.28
 
 무료 기능 범위에서 주행 품질 검증, 햇빛 회피 탐색, 지도 가독성, 경로 비교, 저장공간 관리를 개선했습니다.
 
@@ -13,4 +13,4 @@ GPS·회전 판단·음성 안내 주기를 낮추지 않았습니다. 유료 AP
 
 실제 폰의 배터리 소모, 화면 꺼짐/PiP 안내, 실제 우회 효과는 별도 확인이 필요합니다.
 검증 범위와 폰/주행 확인 목록:
-https://github.com/HyeokjaeKwon26/Solarless-Navi/blob/main/docs/NAVIGATION_REFINEMENT_VALIDATION_1.3.27.md
+https://github.com/HyeokjaeKwon26/Solarless-Navi/blob/main/docs/NAVIGATION_REFINEMENT_VALIDATION_1.3.28.md

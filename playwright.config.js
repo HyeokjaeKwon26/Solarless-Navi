@@ -3,9 +3,8 @@ const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
     testDir: './tests/browser',
     timeout: 30000,
-    // Root and packaged-www projects use isolated browser contexts and read-only
-    // fixtures. CI can check them concurrently; local WebGL debugging stays serial.
-    workers: process.env.CI ? 2 : 1,
+    // Software WebGL and live-GPS fixtures run serially to avoid CPU contention.
+    workers: 1,
     forbidOnly: !!process.env.CI,
     retries: 0,
     use: {

@@ -31,12 +31,6 @@ jobs:
       - name: Labelled drive regression gate
         run: npm run test:drive-regression
 
-      - name: Install browser for regression tests
-        run: npx playwright install --with-deps chromium
-
-      - name: Run browser regression tests
-        run: npm run test:browser
-
       - name: Check JavaScript syntax
         shell: bash
         run: |
@@ -77,3 +71,21 @@ jobs:
           printf 'sdk.dir=%s\n' "$sdk_root" > local.properties
           chmod +x gradlew
           bash ./gradlew testDebugUnitTest assembleDebug lintDebug --no-daemon --max-workers=2
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        bundle: [root, www]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # One software-WebGL browser at a time on each independent runner.
+      - run: npx playwright test --project=${{ matrix.bundle }}

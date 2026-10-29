@@ -35,8 +35,6 @@ jobs:
       - name: Labelled drive regression gate
         run: npm run test:drive-regression
       - run: npm run check:mirrors
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -53,8 +51,25 @@ jobs:
           cd android
           ./gradlew testDebugUnitTest assembleDebug lintDebug --no-daemon --max-workers=2
 
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        bundle: [root, www]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --project=${{ matrix.bundle }}
+
   publish:
-    needs: validate
+    needs: [validate, browser]
     if: startsWith(github.ref, 'refs/tags/app-v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -542,7 +542,9 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
         localStorage.setItem('solarless_auto_free_drive_enabled', 'false');
         let nextId = 0;
         const watchers = new Map();
-        let coords = { latitude: 42.36, longitude: -71.07, accuracy: initialAccuracy, heading: 45, speed: 12,
+        // Pitched-map fixtures hold one coordinate; report a stationary vehicle.
+        // Moving guidance is exercised with changing fixes in separate cases.
+        let coords = { latitude: 42.36, longitude: -71.07, accuracy: initialAccuracy, heading: 45, speed: pitched ? 0 : 12,
             altitude: 0, altitudeAccuracy: 5 };
         const fix = () => ({ coords: { ...coords }, timestamp: Date.now() });
         Object.defineProperty(navigator, 'geolocation', { value: {
@@ -558,6 +560,7 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
         if(pitched&&!holdWatchFix)setInterval(()=>{for(const callback of watchers.values())callback(fix());},1000);
         window.testGps = {
             emit(update) { coords = { ...coords, ...update }; for (const callback of watchers.values()) callback(fix()); },
+            snapshot: fix,
             watchers() { return watchers.size; }
         };
     }, {initialAccuracy, holdWatchFix,pitched});
@@ -1646,12 +1649,20 @@ test('queued vector resize cannot access a removed or replaced Leaflet map',asyn
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     expect(state.errors).toEqual([]);
 });
+async function establishMapFix(page){
+    try{await expect.poll(()=>page.evaluate(()=>{testGps.emit({speed:0,heading:20});return journeyTestApi.state().snapped;})).toBe(true);}
+    catch(error){
+        console.log('Map fixture readiness',await page.evaluate(()=>{
+            const s=journeyTestApi.state(),fix=testGps.snapshot();return {live:s.live,ready:s.ready,busy:s.busy,snapped:s.snapped,fixAge:Date.now()-s.fixAt,speed:s.speed,heading:s.heading,gps:fix,viewReady:document.getElementById('driving-map').className};
+        }));throw error;
+    }
+}
 async function startTilted(page,options={}){
     const state=await fixtures(page,{pitched:true,...options});await captureDrivingMap(page);await captureJourneyControls(page);
     await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
     await expect(page.locator('#driving-map')).not.toHaveClass(/ready/);
     await page.locator('#btn-map-start-nav').click();
-    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:20});return journeyTestApi.state().snapped;})).toBe(true);
+    await establishMapFix(page);
     try{await expect(page.locator('#driving-map')).toHaveClass(/ready/);}catch(e){console.log(await page.evaluate(()=>({...drivingTestState,segments:drivingTestState?.segments?.length,failed:drivingTestController.failed()})));throw e;}
     await expect.poll(()=>page.evaluate(()=>journeyTestApi.state().busy)).toBe(false);return state;
 }
@@ -1988,7 +1999,7 @@ async function detailedMapFixture(page){
     await page.goto('./');
     await page.evaluate(()=>{window.Capacitor={...(window.Capacitor||{}),isNativePlatform:()=>true};});
     await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();
-    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:20});return journeyTestApi.state().snapped;})).toBe(true);
+    await establishMapFix(page);
     await expect(page.locator('#driving-map')).toHaveClass(/ready/);await expect.poll(()=>page.evaluate(()=>journeyTestApi.state().busy)).toBe(false);
     // Deterministic renderer inputs after the normal startup path. GPS/routing
     // integration remains exercised by the unmodified driving tests above.
