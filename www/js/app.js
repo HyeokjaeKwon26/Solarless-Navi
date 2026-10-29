@@ -3987,7 +3987,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const recoverySelection=data=>{
             const preferred=data.routes[currentMode]||data.routes.fastest;
             if(!isMidDrive||rerouteReason!=='off-route')return preferred;
-            const choice=RecoveryPolicy.choose(data,currentMode,routeBudget);data.recovery=choice;
+            const choice=RecoveryPolicy.choose(data,currentMode,routeBudget,ShadowRouter.glareMetrics);data.recovery=choice;
             return choice.route||preferred;
         };
         const destinationBackup = isMidDrive && rerouteReason === 'destination-change' ? liveDestinationBackup : null;

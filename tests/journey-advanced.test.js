@@ -63,3 +63,16 @@ test('junction drawing uses actual path, fits bounded viewport and does not add 
     assert.ok(shape.length>=3);assert.ok(shape.every(p=>p[0]>=0&&p[0]<=160&&p[1]>=0&&p[1]<=90));
     assert.equal(Junction.shape(model,{progressMeters:NaN}),null);
 });
+
+test('avoiding a U-turn cannot trade lower average glare for longer strong glare',()=>{
+    const a=route(600,true),b=route(660);
+    for(const r of [a,b]){r.analysisMode='scene';r.weatherMode='forecast';r.analyzed.segments=[{}];}
+    a.analyzed.avgGlareRisk=.4;b.analyzed.avgGlareRisk=.3;
+    a.analyzed.metrics={burden:300,strongSeconds:60,longestSeconds:30};
+    b.analyzed.metrics={burden:290,strongSeconds:80,longestSeconds:50};
+    const data={routes:{fastest:a,glareFree:a,all:[a,b]}},metrics=v=>v.metrics;
+    assert.equal(Recovery.choose(data,'glareFree',2,metrics).route,a);
+    b.analyzed.metrics={burden:270,strongSeconds:50,longestSeconds:20};
+    assert.equal(Recovery.choose(data,'glareFree',2,metrics).route,b);
+    assert.equal(Recovery.choose(data,'glareFree',2).route,a);
+});
