@@ -1701,11 +1701,15 @@ test('tilted junction camera fits consecutive turns and changes geometry colors 
     });
     await expect.poll(()=>page.evaluate(async()=>(await drivingTestMap.getSource('driving-route').getData()).features.some(f=>f.properties.uncertain&&f.properties.color==='#eab308'))).toBe(true);
     await expect.poll(()=>page.evaluate(()=>Math.round(drivingTestMap.getPitch()))).toBe(32);
-    const result=await page.evaluate(async()=>{
+    // Pitch readiness does not mean the asynchronous HUD resize has reached
+    // the camera yet. Keep the same spatial bounds and wait for convergence.
+    await expect(async()=>{
+        const result=await page.evaluate(async()=>{
         const map=drivingTestMap,points=(await map.getSource('driving-junctions').getData()).features.map(f=>map.project(f.geometry.coordinates)),r=map.getContainer().getBoundingClientRect();
         return {points:points.map(p=>({x:p.x,y:p.y})),width:r.width,height:r.height,top:document.getElementById('mobile-turn-banner').getBoundingClientRect().bottom-r.top,bottom:document.getElementById('map-bottom-overlay-stack').getBoundingClientRect().top-r.top};
     });
-    expect(result.points.length).toBe(2);for(const p of result.points){expect(p.x).toBeGreaterThan(10);expect(p.x).toBeLessThan(result.width-10);expect(p.y).toBeGreaterThan(result.top);expect(p.y).toBeLessThan(result.bottom);}
+        expect(result.points.length).toBe(2);for(const p of result.points){expect(p.x).toBeGreaterThan(10);expect(p.x).toBeLessThan(result.width-10);expect(p.y).toBeGreaterThan(result.top);expect(p.y).toBeLessThan(result.bottom);}
+    }).toPass({timeout:5000});
     await page.screenshot({path:test.info().outputPath('tilted-junction.png')});
     for(const size of [{width:320,height:740},{width:640,height:320}]){
         await page.setViewportSize(size);
