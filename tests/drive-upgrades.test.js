@@ -57,6 +57,17 @@ test('exit-only and disconnected or conditional entrances are not recommended',(
     p.elements[1].tags={amenity:'parking_entrance','access:conditional':'yes @ (Mo-Fr)'};
     assert.deepEqual(Entrance.candidates(p,[.001,0]),[]);
 });
+test('Android entrance requests identify the app and set native connection and read deadlines',async()=>{
+    const before=globalThis.Capacitor;let request;
+    const p=pack();p.elements[1].tags={amenity:'parking_entrance'};
+    globalThis.Capacitor={isNativePlatform:()=>true,nativePromise:async(plugin,method,options)=>{request={plugin,method,options};return {status:200,headers:{},data:JSON.stringify({elements:p.elements})};}};
+    try{
+        const found=await Entrance.find([.001,0],null,()=>{throw Error('Patched POST fetch must not be used');});
+        assert.equal(found.items.length,1);assert.equal(request.plugin,'CapacitorHttp');assert.equal(request.method,'request');
+        assert.equal(request.options.connectTimeout,5000);assert.equal(request.options.readTimeout,15000);
+        assert.match(request.options.headers['User-Agent'],/SolarLessNavi/);assert.match(request.options.data,/^data=/);
+    }finally{globalThis.Capacitor=before;}
+});
 test('replay recomputes recorded GPS against route revisions without treating saved matches as truth',()=>{
     const sample=(time,lng,extra={})=>({lat:0,lng,timestamp:time,receivedAt:time,accuracy:5,heading:90,reportedSpeedKmh:20,...extra});
     const recording={version:2,samples:[sample(1000,.0001,{snapped:false}),sample(2000,.00015,{expectedProgressMeters:900}),sample(3000,.0002,{accuracy:100})],events:[{type:'route',recordedAt:500,data:{coordinates:[[0,0],[.01,0]],maneuvers:[]}}]};

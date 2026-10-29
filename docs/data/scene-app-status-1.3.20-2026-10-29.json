@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-10-29T04:15:47.596Z",
+  "point": "Boston scene compatibility sample (not a recorded drive)",
+  "scene": [
+    {
+      "region": "us-northeast",
+      "tile": "160:96",
+      "cache": "not-downloaded",
+      "extract": "2026-10-27T21:23:59Z",
+      "bytes": 5205884,
+      "manifestStale": false
+    }
+  ],
+  "entranceError": "PROVIDER_UNAVAILABLE"
+}

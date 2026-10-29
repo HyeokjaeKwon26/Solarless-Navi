@@ -20,6 +20,24 @@
     }
     let lastRequest=0;
     const cache=new Map();
+    async function request(query,fetcher){
+        const url='https://overpass.private.coffee/api/interpreter',body=new URLSearchParams({data:query});
+        const cap=globalThis.Capacitor;
+        if(!cap?.isNativePlatform?.()||!cap.nativePromise)return fetcher(url,{method:'POST',body,signal:AbortSignal.timeout(15000)});
+        // Capacitor 6's patched POST fetch does not forward AbortSignal or
+        // timeout options. Use the bundled native transport's explicit limits.
+        let timer;
+        try{
+            const result=await Promise.race([cap.nativePromise('CapacitorHttp','request',{
+                url,method:'POST',data:body.toString(),responseType:'text',connectTimeout:5000,readTimeout:15000,
+                headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json',
+                    'User-Agent':'SolarLessNavi (+https://github.com/HyeokjaeKwon26/Solarless-Navi)'}}),
+                new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('REQUEST_TIMEOUT')),20000);})]);
+            const text=typeof result.data==='string'?result.data:JSON.stringify(result.data);
+            if(new TextEncoder().encode(text).length>1500000)throw Error('TOO_LARGE');
+            return {ok:result.status>=200&&result.status<300,status:result.status,headers:{get:name=>result.headers?.[name]||result.headers?.[name.toLowerCase()]||null},text:async()=>text};
+        }finally{clearTimeout(timer);}
+    }
     async function find(point,saved,fetcher=fetch,now=Date.now()){
         if(!Array.isArray(point)||point.length!==2||!point.every(Number.isFinite)||Math.abs(point[0])>180||Math.abs(point[1])>85)throw Error('INVALID_LOCATION');
         if(saved&&now-saved.savedAt<=7*86400000&&saved.bounds&&point[1]>=saved.bounds[0]+.003&&point[1]<=saved.bounds[2]-.003&&point[0]>=saved.bounds[1]+.004&&point[0]<=saved.bounds[3]-.004)return {items:candidates(saved,point),source:'saved',at:saved.savedAt};
@@ -28,7 +46,8 @@
         if(now-lastRequest<60000)throw Error('COOLDOWN');lastRequest=now;
         const around=`around:350,${point[1]},${point[0]}`;
         const query=`[out:json][timeout:12];way[highway](${around})->.roads;(.roads;rel(bw.roads)[type~"^restriction"];node[amenity=parking_entrance](${around});node[barrier=entrance](${around});node[entrance][motor_vehicle=yes](${around}););(._;>;);out body;`;
-        const response=await fetcher('https://overpass.private.coffee/api/interpreter',{method:'POST',body:new URLSearchParams({data:query}),signal:AbortSignal.timeout(15000)});
+        const response=await request(query,fetcher);
+        if(response.status===429)throw Error('COOLDOWN');
         if(!response.ok)throw Error('PROVIDER_UNAVAILABLE');
         if(Number(response.headers.get('content-length'))>1500000)throw Error('TOO_LARGE');
         const reader=response.body?.getReader();let text;
