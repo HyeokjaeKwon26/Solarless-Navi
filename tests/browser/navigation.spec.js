@@ -922,13 +922,14 @@ for (const originKind of ['stale GPS','selected address','coarse GPS']) {
         await page.locator('#btn-map-start-nav').click();
         // Wait for the health timer that used to overwrite the provisional
         // banner, rather than asserting only during its first frame.
-        await expect(page.locator('#guidance-health')).toContainText('Waiting for GPS');
-        await expect(page.locator('#banner-dist')).toContainText('Refining GPS');
+        await expect(page.locator('#btn-recenter-gps')).toHaveClass(/gps-unavailable/);
+        await expect(page.locator('#guidance-health')).toBeHidden();
+        await expect(page.locator('#mobile-turn-banner')).toBeHidden();
         await page.evaluate(()=>NavigationUnits.setPreference('metric'));
         await page.locator('#btn-toggle-lang').click();
-        await expect(page.locator('#banner-dist')).toContainText('GPS 보정 중');
+        await expect(page.locator('#btn-recenter-gps')).toHaveAttribute('aria-label', /GPS 수신 불안정/);
         await page.locator('#btn-toggle-lang').click();
-        await expect(page.locator('#banner-dist')).toContainText('Refining GPS');
+        await expect(page.locator('#mobile-turn-banner')).toBeHidden();
         await expect(page.locator('#route-preview-status')).toBeHidden();
         expect((await previewGeometry(page,start,places.Alpha)).paths).toBe(0);
         await page.evaluate(()=>window.testGps.emit({accuracy:150}));
@@ -989,7 +990,7 @@ async function establishReliableGuidance(page) {
     // Supply live fixes until its forward replacement and first turn are ready.
     await expect.poll(async () => {
         await page.evaluate(() => window.testGps.emit({ latitude: 42.36005, accuracy: 5 }));
-        return page.locator('#banner-lanes').evaluate(el => !el.hidden && document.getElementById('guidance-health')?.hidden ? el.textContent : 'Waiting for accepted GPS');
+        return page.locator('#banner-lanes').evaluate(el => !el.hidden && !document.getElementById('btn-recenter-gps').classList.contains('gps-unavailable') ? el.textContent : 'Waiting for accepted GPS');
     }, { timeout: 15000, intervals: [500] }).toContain('Use lane 2, 3 from left');
 }
 
@@ -1310,11 +1311,19 @@ test('lane guidance renders and GPS silence is reported until a reliable fix ret
     await expect(page.locator('#banner-lanes')).toBeVisible();
     await expect(page.locator('#guidance-health')).toBeHidden();
     await page.screenshot({ path: `.codex-remote-attachments/lanes-${test.info().project.name}.png` });
-    await expect(page.locator('#guidance-health')).toContainText('Waiting for GPS', { timeout: 13000 });
+    await expect(page.locator('#btn-recenter-gps')).toHaveClass(/gps-unavailable/, { timeout: 13000 });
+    await expect(page.locator('#guidance-health')).toBeHidden();
     await page.evaluate(()=>NavigationUnits.setPreference('metric'));
-    await expect(page.locator('#banner-dist')).toHaveText('—');
-    await expect(page.locator('#banner-desc')).toContainText('Waiting for GPS');
+    await expect(page.locator('#mobile-turn-banner')).toBeHidden();
+    await expect(page.locator('#btn-recenter-gps i')).toHaveClass(/fa-satellite-dish/);
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await expect(page.locator('#btn-recenter-gps')).toHaveCSS('animation-name','none');
+    await page.locator('#btn-recenter-gps').click();
+    await expect(page.locator('#btn-recenter-gps')).toHaveClass(/gps-unavailable/);
     await page.evaluate(() => window.testGps.emit({ latitude: 42.3601 }));
+    await expect(page.locator('#btn-recenter-gps')).not.toHaveClass(/gps-unavailable/);
+    await expect(page.locator('#btn-recenter-gps i')).toHaveClass(/fa-location-crosshairs/);
+    await expect(page.locator('#mobile-turn-banner')).toBeVisible();
     await expect(page.locator('#guidance-health')).toBeHidden();
     expect(state.errors).toEqual([]);
 });
@@ -1730,4 +1739,34 @@ test('tilted view style failure keeps the usable 2D route and navigation',async(
     await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();
     await expect.poll(()=>requested).toBeGreaterThan(0);
     await expect(page.locator('#driving-map canvas')).toHaveCount(0,{timeout:12000});await expect(page.locator('#map')).toBeVisible();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);expect(state.errors).toEqual([]);
+});
+
+
+test('map controls stay on the right edge and GPS uncertainty leaves the map clear', async ({page}) => {
+    const state = await fixtures(page,{initialAccuracy:150,holdWatchFix:true});
+    await page.goto('./');await selectDestination(page,'Alpha');
+    await page.locator('#btn-map-start-nav').click();
+    await expect(page.locator('#btn-recenter-gps')).toHaveClass(/gps-unavailable/);
+    await expect(page.locator('#btn-recenter-gps')).toHaveCSS('animation-name','gps-signal-pulse');
+    await expect(page.locator('#api-status-banner').filter({hasText:'GPS accuracy is low'})).toHaveCount(0);
+    await expect(page.locator('body')).toHaveClass(/live-driving/);
+    await expect(page.locator('.sidebar-panel')).not.toHaveClass(/active/);
+    for(const viewport of [{width:412,height:915},{width:320,height:740},{width:640,height:320}]) {
+        await page.setViewportSize(viewport);
+        await expect(page.locator('#mobile-turn-banner')).toBeHidden();
+        await expect(page.locator('#guidance-health')).toBeHidden();
+        await expect.poll(async()=>page.locator('#btn-driving-view').evaluate(el=>el.getBoundingClientRect().top)).toBeGreaterThanOrEqual(44);
+        const boxes=await page.locator('.map-controls-group .map-floating-btn').evaluateAll(els=>els.filter(e=>e.getBoundingClientRect().width).map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width};}));
+        expect(boxes).toHaveLength(5);
+        for(const b of boxes) {expect(b.x).toBeGreaterThanOrEqual(0);expect(b.y).toBeGreaterThanOrEqual(44);expect(b.right).toBeLessThanOrEqual(viewport.width);expect(b.bottom).toBeLessThan(viewport.height);expect(b.width).toBeGreaterThanOrEqual(44);}
+        if(viewport.height>viewport.width) {
+            expect(Math.max(...boxes.map(b=>b.right))-Math.min(...boxes.map(b=>b.right))).toBeLessThan(1);
+            for(let i=1;i<boxes.length;i++)expect(boxes[i].y).toBeGreaterThan(boxes[i-1].bottom);
+        }
+        await page.screenshot({path:test.info().outputPath('gps-controls-'+viewport.width+'.png')});
+    }
+    await page.evaluate(()=>{Object.defineProperty(navigator,'onLine',{configurable:true,value:false});window.dispatchEvent(new Event('offline'));});
+    await expect(page.locator('#guidance-health')).toContainText('Offline');
+    await expect(page.locator('#btn-recenter-gps')).toHaveClass(/gps-unavailable/);
+    expect(state.errors).toEqual([]);
 });

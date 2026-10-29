@@ -207,7 +207,7 @@ body {
 /* Main Body & Layout */
 .main-body {
     display: flex; flex: 1; height: calc(100vh - 60px); height: calc(100dvh - 60px);
-    position: relative; overflow: hidden;
+    position: relative; overflow: hidden; overflow: clip;
 }
 
 /* Start Search & About App Modal Overlay (Z-Index 9000 Front-Most Top Layer) */
@@ -853,8 +853,8 @@ body.pip-mode .map-attribution {
     transition: all 0.2s ease;
 }
 .map-floating-btn:active { transform: scale(0.92); }
-.map-controls-group .route-legend-btn { position: absolute; right: calc(100% + 8px); bottom: 0; }
-.map-controls-group .driving-view-btn { display:none; position:absolute; right:calc(100% + 8px); bottom:58px; font-weight:800; font-size:14px; }
+.map-controls-group .route-legend-btn { position: static; }
+.map-controls-group .driving-view-btn { display:none; position:static; font-weight:800; font-size:14px; }
 .live-navigation .map-controls-group .driving-view-btn { display:flex; }
 #driving-map { position:absolute; inset:0; visibility:hidden; pointer-events:none; z-index:401; background:#17263b; }
 #driving-map.ready { visibility:visible; pointer-events:auto; }
@@ -1413,4 +1413,14 @@ body.pip-mode #drive-lab-modal { display:none; }
     body.live-driving:not(.pip-mode) .speedometer-bottom-left { left:12px; bottom:26px; }
     body.live-driving:not(.pip-mode) .api-status-banner { padding:4px; font-size:10px; }
     body.live-driving:not(.pip-mode) .recenter-toast-banner { left:8px; transform:none; bottom:25px; max-width:44%; }
+}
+
+/* GPS status belongs to the recenter control, leaving the map unobstructed. */
+.mobile-turn-banner.gps-unavailable { display:none; }
+.map-floating-btn.GPS-btn.gps-unavailable {
+    color:#fbbf24; border-color:#fbbf24; animation:gps-signal-pulse 2s ease-in-out infinite;
+}
+@keyframes gps-signal-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+@media (prefers-reduced-motion:reduce) {
+    .map-floating-btn.GPS-btn.gps-unavailable, .map-floating-btn.GPS-btn.panned { animation:none; }
 }

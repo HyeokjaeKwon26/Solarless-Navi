@@ -188,7 +188,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastProcessedNavigationTimestamp = 0;
     let lastProcessedNavigationPosition = null;
     let lastProcessedNavigationAccuracy = Infinity;
-    let lastGpsUncertainNoticeAt = 0;
     const NAVIGATION_LOCATION_DEDUPE_WINDOW_MS = 1500;
     const LIVE_DESTINATION_ROUTE_TIMEOUT_MS = 15000;
     let routeAbortController = null;
@@ -284,6 +283,24 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
 
+    // Keep receiver health in one control; never imply a trustworthy turn from a stale fix.
+    function syncGpsControl() {
+        const unavailable = !!(isLiveNavActive && !navigationSessionArrived &&
+            (drivingFixRejected || !lastReliableFixAt || Date.now() - lastReliableFixAt > 10000 || navigationRouteNeedsReliableOrigin));
+        const button = document.getElementById('btn-recenter-gps');
+        const ko = I18n.getLanguage().startsWith('ko');
+        button.classList.toggle('gps-unavailable', unavailable);
+        button.querySelector('i').className = unavailable ? 'fa-solid fa-satellite-dish' : 'fa-solid fa-location-crosshairs';
+        button.querySelector('i').setAttribute('aria-hidden', 'true');
+        const label = unavailable
+            ? (ko ? 'GPS 수신 불안정 · 내 위치로 이동' : 'GPS signal weak · Recenter on my location')
+            : (ko ? '내 위치로 이동' : 'Recenter on my location');
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        document.getElementById('mobile-turn-banner').classList.toggle('gps-unavailable', unavailable);
+        return unavailable;
+    }
+
     function refreshGuidanceHealth() {
         if (document.visibilityState !== 'hidden') refreshRuntimeHealth();
         let status = document.getElementById('guidance-health');
@@ -294,21 +311,16 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('map-bottom-overlay-stack').appendChild(status);
         }
         const isKo = I18n.getLanguage().startsWith('ko');
+        const gpsUnavailable = syncGpsControl();
         let message = '';
         if (isLiveNavActive && !navigationSessionArrived) {
-            const gpsStale = !lastReliableFixAt || Date.now() - lastReliableFixAt > 10000;
-            if (gpsStale) message = isKo ? 'GPS 신호 확인 중 · 위치와 회전 안내가 갱신되지 않습니다' : 'Waiting for GPS · position and turn guidance are not updating';
-            else if (navigator.onLine === false) message = RoadPack.graph ? (isKo ? '오프라인 · 저장 지역 안에서 도로 재탐색 가능' : 'Offline · rerouting within saved roads') : isKo ? '오프라인 · 기존 경로 유지, 새 경로 탐색 대기' : 'Offline · keeping existing route; rerouting unavailable';
+            if (navigator.onLine === false) message = RoadPack.graph ? (isKo ? '오프라인 · 저장 지역 안에서 도로 재탐색 가능' : 'Offline · rerouting within saved roads') : isKo ? '오프라인 · 기존 경로 유지, 새 경로 탐색 대기' : 'Offline · keeping existing route; rerouting unavailable';
             else if (routingUnavailable) message = isKo ? '경로 서버 연결 대기 · 기존 경로 유지' : 'Routing service unavailable · keeping existing route';
             else if (offRouteEvidence.confirmed) message = isKo ? '경로 이탈 · 새 경로 확인 중' : 'Off route · waiting for a verified route';
             else if (automaticBatterySaver && isBatterySaverActive && !manualBatterySaver) message = isKo ? '기기 상태에 따라 자동 절전 중' : 'Automatic battery saver active';
-            if (gpsStale && !isFreeDriveMode) {
+            if (gpsUnavailable && !isFreeDriveMode) {
                 TTSVoice.pauseGuidance();
-                if (navigationRouteNeedsReliableOrigin) renderProvisionalGuidanceBanner();
-                else {
-                    document.getElementById('banner-dist').textContent = '—';
-                    document.getElementById('banner-desc').textContent = isKo ? 'GPS 신호 확인 중 · 회전 안내 대기' : 'Waiting for GPS · turn guidance paused';
-                }
+                renderProvisionalGuidanceBanner();
                 document.getElementById('banner-lanes').hidden = true;
                 const following = document.getElementById('banner-following');
                 if (following) following.hidden = true;
@@ -1034,6 +1046,7 @@ document.addEventListener('DOMContentLoaded', () => {
         button.setAttribute('aria-label',button.title);
     }
     function syncDrivingView(){
+        syncGpsControl();
         if(isLiveNavActive)DriveLab.close();
         if(!drivingView)return;
         const reliable=!!(!drivingFixRejected&&!liveDestinationBackup&&lastReliableFixAt&&Date.now()-lastReliableFixAt<=10000&&!navigationRouteNeedsReliableOrigin&&
@@ -1643,20 +1656,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* TURN BANNER WITH MANEUVER + ESTIMATED GLARE POSSIBILITY OVERLAY */
     function renderProvisionalGuidanceBanner() {
-        const ko = I18n.getLanguage().startsWith('ko');
-        const distance = ko ? 'GPS 보정 중' : 'Refining GPS';
-        const description = ko ? '정확한 위치가 확인되면 실제 도로 경로를 표시합니다.' : 'Road guidance will appear after a reliable location fix.';
-        const icon = '<i class="fa-solid fa-location-crosshairs fa-pulse"></i>';
-        document.getElementById('banner-turn-icon').innerHTML = icon;
-        document.getElementById('banner-dist').textContent = distance;
-        document.getElementById('banner-desc').textContent = description;
+        syncGpsControl();
         document.getElementById('banner-lanes').hidden = true;
         const following = document.getElementById('banner-following');
         if (following) following.hidden = true;
-        updatePipHud(description, document.getElementById('sum-time')?.innerText || '--', distance, icon, false, document.getElementById('sum-dist')?.innerText || '--');
+        const ko = I18n.getLanguage().startsWith('ko');
+        updatePipHud(ko ? 'GPS 수신 대기' : 'Waiting for GPS', document.getElementById('sum-time')?.innerText || '--',
+            '—', '<i class="fa-solid fa-satellite-dish"></i>', false, document.getElementById('sum-dist')?.innerText || '--');
     }
 
     function updateTurnBannerText(nextManeuver, glareRisk, presentationOnly = false) {
+        syncGpsControl();
         if (isLiveNavActive && !isFreeDriveMode && navigationRouteNeedsReliableOrigin) {
             lastTurnPresentation = { maneuver: null, glare: 0 };
             renderProvisionalGuidanceBanner();
@@ -3004,14 +3014,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const source = pos && pos.coords && Number.isFinite(Number(pos.coords.accuracy)) && Number(pos.coords.accuracy) < 100
                     ? 'high-accuracy' : 'last-known/network';
                 applyGpsFix(pos, source);
-                const initialAccuracy = Number(pos && pos.coords && pos.coords.accuracy);
-                if (Number.isFinite(initialAccuracy) && initialAccuracy > 50 && Date.now() - lastGpsUncertainNoticeAt > 30000) {
-                    lastGpsUncertainNoticeAt = Date.now();
-                    const isKo = I18n.getLanguage().startsWith('ko');
-                    showApiNotice(isKo
-                        ? `GPS 정확도가 낮아(약 ±${NavigationUnits.distance(initialAccuracy)}) 근사 위치에서 시작합니다. 더 정확한 신호가 들어오면 경로와 안내 위치를 자동 보정합니다.`
-                        : `GPS accuracy is low (about ±${NavigationUnits.distance(initialAccuracy)}). Starting from an approximate position and refining guidance when a better fix arrives.`);
-                }
+
                 const lat = currentStart.lat;
                 const lng = currentStart.lng;
                 // If a destination was already selected by a resume/GPS
@@ -5650,13 +5653,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 gpsLastFixAt = timestamp;
                 updateGpsAccuracyCircle(lat, lng, accuracy);
                 navigationConsecutiveOffRouteCount = 0;
-                if (Date.now() - lastGpsUncertainNoticeAt > 30000) {
-                    lastGpsUncertainNoticeAt = Date.now();
-                    const isKoGps = I18n.getLanguage().startsWith('ko');
-                    showApiNotice(isKoGps
-                        ? 'GPS 정확도가 낮아 현재 위치를 안내와 재탐색에 반영하지 않았습니다. 더 정확한 신호를 기다립니다.'
-                        : 'GPS accuracy is too low for guidance or rerouting. Waiting for a more reliable fix.');
-                }
+                syncGpsControl();
                 if (window.DebugLogger) window.DebugLogger.log('gps-fix-rejected', {
                     source,
                     reason: fixEvaluation.reason,

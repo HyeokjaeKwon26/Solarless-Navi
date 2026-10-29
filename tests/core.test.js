@@ -3154,7 +3154,6 @@ test('provisional route geometry is hidden until a reliable live GPS origin is r
     assert.ok(appSource.includes('if ((isLiveDrive || isLiveNavActive) && (verifiedRouteOriginProvisional || navigationRouteNeedsReliableOrigin)) return;'));
     assert.ok(appSource.includes('navigationRouteNeedsReliableOrigin = !isFreeDriveMode && (verifiedRouteOriginProvisional'));
     assert.ok(appSource.includes("updateRoute(true, { reason: 'gps-origin-refinement' })"));
-    assert.ok(appSource.includes("? 'GPS 보정 중' : 'Refining GPS'"));
 });
 
 test('high-speed vehicle rendering rebases moving targets and native GPS samples at navigation cadence', () => {
