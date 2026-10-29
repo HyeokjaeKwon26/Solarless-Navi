@@ -1770,3 +1770,61 @@ test('map controls stay on the right edge and GPS uncertainty leaves the map cle
     await expect(page.locator('#btn-recenter-gps')).toHaveClass(/gps-unavailable/);
     expect(state.errors).toEqual([]);
 });
+
+
+test('long tilted routes upload the far geometry once while the near chunk moves',async({page})=>{
+    const state=await startTilted(page);
+    const result=await page.evaluate(()=>{
+        const map=drivingTestMap,controller=drivingTestController,base={...drivingTestState};
+        const segments=Array.from({length:5000},(_,i)=>({p1:[42.36+i*.00001,-71.07],p2:[42.36+(i+1)*.00001,-71.07],glareRisk:0}));
+        const uploads={ahead:0,near:0,maxNearPoints:0};
+        for(const [name,key] of [['driving-route-ahead','ahead'],['driving-route','near']]){
+            const src=map.getSource(name),set=src.setData.bind(src);src.setData=data=>{uploads[key]++;if(key==='near')uploads.maxNearPoints=Math.max(uploads.maxNearPoints,data.features.reduce((n,f)=>n+f.geometry.coordinates.length,0));return set(data);};
+        }
+        const now=Date.now;let clock=now();Date.now=()=>clock;
+        try{for(let i=0;i<120;i++){clock+=501;controller.update({...base,reliable:true,segments,index:i,position:[-71.07,42.36+i*.00001],maneuver:null});}
+            controller.update({...base,reliable:false,segments,index:119});
+        }finally{Date.now=now;}
+        return {...uploads,filter:map.getFilter('driving-ahead-casing')};
+    });
+    expect(result.ahead).toBe(1);expect(result.near).toBeGreaterThanOrEqual(120);expect(result.maxNearPoints).toBeLessThanOrEqual(128);
+    expect(JSON.stringify(result.filter)).toContain('false');expect(state.errors).toEqual([]);
+});
+
+
+test('native GPS handover removes only duplicate web subscriptions and restores fallback on loss',async({page})=>{
+ const state=await fixtures(page,{brokenMap:true});
+ await page.addInitScript(()=>{window.nativeEvents={};window.Capacitor={Plugins:{Pip:{
+  addListener:async(name,fn)=>{nativeEvents[name]=fn;return {remove:async()=>{}};},
+  isPipSupported:async()=>({supported:true,allowed:true,inPip:false}),
+  setNavigationActive:async()=>({locationServiceStarted:true}),updatePipParams:async()=>({})
+ }}};});
+ await page.goto('./');await selectDestination(page,'Alpha');await page.locator('#btn-map-start-nav').click();await establishReliableGuidance(page);
+ const emit=()=>page.evaluate(async()=>{for(let i=0;i<4;i++){nativeEvents.locationUpdate({lat:42.36005,lng:-71.07,accuracy:5,speed:0,heading:0,timestamp:Date.now(),source:'gps'});await new Promise(r=>setTimeout(r,250));}});
+ await emit();await expect.poll(()=>page.evaluate(()=>testGps.watchers())).toBe(0);
+ await expect.poll(()=>page.evaluate(()=>testGps.watchers()),{timeout:2500}).toBe(1);
+ await emit();await expect.poll(()=>page.evaluate(()=>testGps.watchers())).toBe(0);
+ await page.evaluate(()=>nativeEvents.locationUpdate({lat:42.36005,lng:-71.07,accuracy:150,speed:0,heading:0,timestamp:Date.now(),source:'gps'}));
+ await expect.poll(()=>page.evaluate(()=>testGps.watchers())).toBe(1);
+ await emit();await expect.poll(()=>page.evaluate(()=>testGps.watchers())).toBe(0);
+ await page.evaluate(()=>nativeEvents.pipDebug({reason:'LOCATION_SERVICE_STOPPED'}));await expect.poll(()=>page.evaluate(()=>testGps.watchers())).toBe(1);
+ expect(state.errors).toEqual([]);
+});
+
+
+test('recording batches samples and flushes before export and deletion',async({page})=>{
+ const state=await fixtures(page,{brokenMap:true});await page.goto('./');
+ const result=await page.evaluate(async()=>{
+  await DriveArchive.setActive(true);
+  await DriveArchive.record('ready',{});
+  const original=IDBDatabase.prototype.transaction;let writes=0;
+  IDBDatabase.prototype.transaction=function(...args){if(args[1]==='readwrite')writes++;return original.apply(this,args);};
+  try{
+   const saved=Array.from({length:40},(_,i)=>DriveArchive.record('sample',{lat:42.36,lng:-71.07,sequence:i,timestamp:Date.now()}));
+   const before=writes;const exported=JSON.parse(await DriveArchive.exportRecording({}));await Promise.all(saved);
+   const after=writes;await DriveArchive.clear();const cleared=JSON.parse(await DriveArchive.exportRecording({}));
+   return {before,after,sequences:exported.samples.map(x=>x.sequence),remaining:cleared.samples.length+cleared.events.length};
+  }finally{IDBDatabase.prototype.transaction=original;}
+ });
+ expect(result).toEqual({before:0,after:1,sequences:Array.from({length:40},(_,i)=>i),remaining:0});expect(state.errors).toEqual([]);
+});

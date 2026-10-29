@@ -3061,7 +3061,7 @@ test('navigation lifecycle survives brief interruptions without recalculating th
     const resumeSource = appSource.slice(resumeStart, resumeEnd);
     assert.ok(resumeSource.includes('setNavigationActive(true)'));
     assert.ok(resumeSource.includes('applyNativeLastLocationOnResume()'));
-    assert.ok(resumeSource.includes('restartWebGpsWatchAfterInterruption()'));
+    assert.ok(resumeSource.includes('restartWebGpsWatchAfterInterruption(true)'));
     assert.equal(resumeSource.includes('updateRoute('), false);
     assert.ok(appSource.includes("window.__solarlessProcessNavigationPosition(position, 'web-watch-resumed')"));
     assert.ok(appSource.includes('navigationResumePromise'));

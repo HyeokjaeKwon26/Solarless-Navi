@@ -269,6 +269,22 @@ public class PipPlugin extends Plugin {
 
     @PluginMethod
     public void getLastNavigationLocation(PluginCall call) {
+        // Resume from the newest in-memory fix, not the two-second disk checkpoint.
+        android.location.Location latest = LocationForegroundService.getLatestLocation();
+        if (latest != null) {
+            long age = Math.max(0L, System.currentTimeMillis() - latest.getTime());
+            JSObject live = new JSObject();
+            live.put("available", latest.getTime() > 0 && age <= LocationForegroundService.LAST_LOCATION_TTL_MS);
+            live.put("timestamp", latest.getTime()); live.put("ageMs", age);
+            live.put("lat", latest.getLatitude()); live.put("lng", latest.getLongitude());
+            live.put("accuracy", latest.hasAccuracy() ? latest.getAccuracy() : -1f);
+            live.put("accuracyConfidenceLevel", LocationForegroundService.HORIZONTAL_ACCURACY_CONFIDENCE_LEVEL);
+            live.put("accuracySource", LocationForegroundService.HORIZONTAL_ACCURACY_SOURCE);
+            live.put("provider", latest.getProvider());
+            if (latest.hasSpeed()) live.put("speed", latest.getSpeed());
+            if (latest.hasBearing()) live.put("heading", latest.getBearing());
+            call.resolve(live); return;
+        }
         SharedPreferences prefs = getContext().getSharedPreferences(LocationForegroundService.PREFS, Context.MODE_PRIVATE);
         long timestamp = prefs.getLong("timestamp", 0L);
         long ageMs = timestamp > 0 ? Math.max(0L, System.currentTimeMillis() - timestamp) : Long.MAX_VALUE;

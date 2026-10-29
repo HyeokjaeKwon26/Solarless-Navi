@@ -284,11 +284,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Keep receiver health in one control; never imply a trustworthy turn from a stale fix.
+    let gpsControlPresentation = null;
     function syncGpsControl() {
         const unavailable = !!(isLiveNavActive && !navigationSessionArrived &&
             (drivingFixRejected || !lastReliableFixAt || Date.now() - lastReliableFixAt > 10000 || navigationRouteNeedsReliableOrigin));
         const button = document.getElementById('btn-recenter-gps');
         const ko = I18n.getLanguage().startsWith('ko');
+        const key = unavailable + ':' + ko;
+        if (gpsControlPresentation === key) return unavailable;
+        gpsControlPresentation = key;
         button.classList.toggle('gps-unavailable', unavailable);
         button.querySelector('i').className = unavailable ? 'fa-solid fa-satellite-dish' : 'fa-solid fa-location-crosshairs';
         button.querySelector('i').setAttribute('aria-hidden', 'true');
@@ -298,6 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
         button.title = label;
         button.setAttribute('aria-label', label);
         document.getElementById('mobile-turn-banner').classList.toggle('gps-unavailable', unavailable);
+        invalidateDrivingHud();
         return unavailable;
     }
 
@@ -1019,7 +1024,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('map-perspective-wrapper').classList.toggle('driving-map-active',active);
                 if(active){if(currentTileLayer&&map.hasLayer(currentTileLayer))map.removeLayer(currentTileLayer);}
                 else if(currentTileLayer&&!map.hasLayer(currentTileLayer))addBaseLayerSafely(currentTileLayer);
-                if(!active&&currentSmoothLat!==null){map.panTo([currentSmoothLat,currentSmoothLng],{animate:false});applyMapRotation(currentSmoothHeading);}
+                if(!active&&currentSmoothLat!==null){map.panTo([currentSmoothLat,currentSmoothLng],{animate:false});applyMapRotation(currentSmoothHeading);
+                    // Destroy finishes after onActive; restore the skipped 2D marker immediately after it.
+                    queueMicrotask(()=>{if(!drivingView?.active())renderVehicleMarker();});
+                }
                 updateDrivingViewButton();
             },onFailure:()=>{
                 updateDrivingViewButton();
@@ -1038,22 +1046,28 @@ document.addEventListener('DOMContentLoaded', () => {
         setInterval(()=>{if(isLiveNavActive)syncDrivingView();},1000);
         syncDrivingView();
     }
+    let drivingButtonPresentation = null;
     function updateDrivingViewButton(){
         const button=document.getElementById('btn-driving-view');if(!button)return;
         const active=drivingView?.active()===true,ko=I18n.getLanguage().startsWith('ko');
+        const key=active+':'+ko;if(drivingButtonPresentation===key)return;drivingButtonPresentation=key;
         button.textContent=active?'3D':'2D';button.setAttribute('aria-pressed',String(active));
         button.title=active?(ko?'조감도 · 눌러 2D 전환':'Tilted view · switch to 2D'):(ko?'2D · 눌러 조감도 전환':'2D · switch to tilted view');
         button.setAttribute('aria-label',button.title);
     }
+    let drivingHudBounds = null;
+    function invalidateDrivingHud(){drivingHudBounds=null;}
+    const drivingHudObserver=new ResizeObserver(invalidateDrivingHud);
+    for(const id of ['map-perspective-wrapper','mobile-turn-banner','map-bottom-overlay-stack'])drivingHudObserver.observe(document.getElementById(id));
+    window.addEventListener('resize',invalidateDrivingHud,{passive:true});
     function syncDrivingView(){
         syncGpsControl();
-        if(isLiveNavActive)DriveLab.close();
+        if(isLiveNavActive&&!document.getElementById('drive-lab-modal').classList.contains('hidden'))DriveLab.close();
         if(!drivingView)return;
         const reliable=!!(!drivingFixRejected&&!liveDestinationBackup&&lastReliableFixAt&&Date.now()-lastReliableFixAt<=10000&&!navigationRouteNeedsReliableOrigin&&
             (isFreeDriveMode||navigationRouteProgress.result?.isSnapped)&&!offRouteEvidence.confirmed);
-        const wrapper=document.getElementById('map-perspective-wrapper').getBoundingClientRect();
-        const banner=document.getElementById('mobile-turn-banner').getBoundingClientRect();
-        const bottom=document.getElementById('map-bottom-overlay-stack').getBoundingClientRect();
+        if(!drivingHudBounds)drivingHudBounds=['map-perspective-wrapper','mobile-turn-banner','map-bottom-overlay-stack'].map(id=>document.getElementById(id).getBoundingClientRect());
+        const [wrapper,banner,bottom]=drivingHudBounds;
         const landscape=window.matchMedia('(orientation: landscape) and (max-height: 540px)').matches;
         if(!reliable){document.getElementById('banner-road').hidden=true;document.getElementById('mobile-turn-banner').classList.remove('junction-close');}
         drivingView.update({live:isLiveNavActive,wanted:drivingViewWanted,saver:isBatterySaverActive,pip:isPipMode,
@@ -2306,7 +2320,25 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const gpsSources = GpsSourcePolicy.create();
+    let nativeGpsWatchdog = null, webGpsSuspended = false;
+    function resetGpsSources(){
+        gpsSources.reset();clearTimeout(nativeGpsWatchdog);nativeGpsWatchdog=null;webGpsSuspended=false;
+    }
+    function syncGpsSources(){
+        clearTimeout(nativeGpsWatchdog);nativeGpsWatchdog=null;
+        if(!isLiveNavActive){resetGpsSources();return;}
+        if(gpsSources.preferred(Date.now())){
+            if(gpsWatchId!==null){navigator.geolocation.clearWatch(gpsWatchId);gpsWatchId=null;}
+            webGpsSuspended=true;
+            // Native guidance still receives every 250ms fix; no smoothing or speech is delayed.
+            nativeGpsWatchdog=setTimeout(syncGpsSources,gpsSources.expiresIn(Date.now())+1);
+        }else if(webGpsSuspended){
+            webGpsSuspended=false;gpsSources.reset();restartWebGpsWatchAfterInterruption(true);
+        }
+    }
     function stopGpsWatch() {
+        resetGpsSources();
         if (gpsWatchId !== null && navigator.geolocation) {
             navigator.geolocation.clearWatch(gpsWatchId);
         }
@@ -2489,10 +2521,10 @@ document.addEventListener('DOMContentLoaded', () => {
             : (ko ? '지도·기상 기반 추정 지수이며 발생 확률이나 현장 측정값이 아닙니다.' : 'A map/weather estimate, not a probability or field measurement.');
     }
 
-    function restartWebGpsWatchAfterInterruption() {
+    function restartWebGpsWatchAfterInterruption(force = false) {
         if (!isLiveNavActive || !navigator.geolocation || typeof window.__solarlessProcessNavigationPosition !== 'function') return false;
         const now = Date.now();
-        if (now - lastGpsWatchRestartAt < 1500) return false;
+        if (!force && now - lastGpsWatchRestartAt < 1500) return false;
         lastGpsWatchRestartAt = now;
         if (gpsWatchId !== null) navigator.geolocation.clearWatch(gpsWatchId);
         gpsWatchId = navigator.geolocation.watchPosition(
@@ -2584,7 +2616,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!isLiveNavActive) return;
             if (map) map.invalidateSize({pan:false});
             await applyNativeLastLocationOnResume();
-            restartWebGpsWatchAfterInterruption();
+            resetGpsSources();
+            restartWebGpsWatchAfterInterruption(true);
             enableKeepAwake();
             if (targetSnapLat !== null) startVehicleMarkerAnimationLoop();
         })().finally(() => { navigationResumePromise = null; });
@@ -2711,6 +2744,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (window.DebugLogger) window.DebugLogger.log('pip-state', result || { reason: 'WEB_RUNTIME' });
         });
         if (typeof window.PipController.addListener === 'function') {
+            window.PipController.addListener('pipDebug', event => {
+                if (String(event?.reason || '').startsWith('LOCATION_')) { gpsSources.reset();syncGpsSources(); }
+            });
             window.PipController.addListener('locationUpdate', event => {
                 if (!isLiveNavActive || !event || !Number.isFinite(Number(event.lat)) || !Number.isFinite(Number(event.lng))) return;
                 const nativePosition = {
@@ -3134,6 +3170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderVehicleMarker() {
+        if(drivingView?.active()){syncDrivingView();if(drivingView?.active())return;}
         if (!map || currentSmoothLat === null || currentSmoothLng === null) return;
         if (!startMarker) {
             const vehicleIcon = L.divIcon({
@@ -5604,7 +5641,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Android can deliver the foreground-service GPS fix and the
             // WebView/network fix for the same moment. Prefer fresh hardware
             // GPS so the marker does not oscillate between two providers.
-            if (!incomingNativeGps && previousNativeGps && Date.now() - gpsLastFixAt < 1200) {
+            if (!incomingNativeGps && previousNativeGps && !drivingFixRejected && Date.now() - gpsLastFixAt < 1200) {
                 if (window.DebugLogger) window.DebugLogger.log('gps-secondary-provider-ignored', { source });
                 return true;
             }
@@ -5622,6 +5659,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const sourcePriority = String(source).startsWith('native') ? 2 : 1;
                 const priorSourcePriority = String(gpsLastFixSource).startsWith('native') ? 2 : 1;
                 if (!improvesAccuracy && (timestamp <= lastProcessedNavigationTimestamp || sourcePriority <= priorSourcePriority)) {
+                    if(incomingNativeGps){
+                        gpsSources.observe({source:sourceName,timestamp,accuracy:incomingAccuracy,accepted:!drivingFixRejected&&lastReliableFixAt>0&&timestamp-lastReliableFixAt<=1500},Date.now());
+                        syncGpsSources();
+                    }
                     if (window.DebugLogger) window.DebugLogger.log('gps-duplicate-ignored', { source, distanceMeters: Math.round(distanceFromLast) });
                     return true;
                 }
@@ -5643,6 +5684,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     { nowMs: Date.now() }
                 )
                 : { accepted: true };
+            gpsSources.observe({source:sourceName,timestamp,accuracy:incomingAccuracy,accepted:fixEvaluation.accepted},Date.now());
+            syncGpsSources();
             if (!fixEvaluation.accepted) {
                 drivingFixRejected=true;syncDrivingView();
                 offRouteEvidence = { lastAttempt: offRouteEvidence.lastAttempt };

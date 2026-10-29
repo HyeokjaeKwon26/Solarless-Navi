@@ -14,6 +14,8 @@ public class MainActivity extends BridgeActivity {
     }
     @Override public void onPause() {
         foreground = false; NativeGuidance.get(this).setBackground(true);
+        LocationForegroundService.flushLastLocation(this);
+        DriveJournal.get(this).flush();
         super.onPause();
     }
     @Override

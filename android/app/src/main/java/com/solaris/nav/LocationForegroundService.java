@@ -31,6 +31,8 @@ public final class LocationForegroundService extends Service implements Location
     public static final long LAST_LOCATION_TTL_MS = 2 * 60 * 1000L;
     private static final String CHANNEL_ID = "navigation_location";
     private static final int NOTIFICATION_ID = 1206;
+    private static Location latestLocation;
+    private static final CheckpointGate checkpoint = new CheckpointGate();
     private LocationManager locationManager;
     private boolean providerRegistered;
     private boolean updatesRequested;
@@ -159,20 +161,12 @@ public final class LocationForegroundService extends Service implements Location
                 .put("speedMps", location.hasSpeed() ? location.getSpeed() : -1));
         } catch (org.json.JSONException ignored) { }
         long timestamp = location.getTime() > 0 ? location.getTime() : System.currentTimeMillis();
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        long previousTimestamp = prefs.getLong("timestamp", 0L);
-        if (previousTimestamp > 0 && timestamp < previousTimestamp) return;
-        SharedPreferences.Editor editor = prefs.edit()
-            .putLong("timestamp", timestamp)
-            .putString("provider", location.getProvider() == null ? "native" : location.getProvider())
-            .putString("lat", Double.toString(location.getLatitude()))
-            .putString("lng", Double.toString(location.getLongitude()))
-            .putFloat("accuracy", location.hasAccuracy() ? location.getAccuracy() : -1f)
-            .remove("speed")
-            .remove("bearing");
-        if (location.hasSpeed()) editor.putFloat("speed", location.getSpeed());
-        if (location.hasBearing()) editor.putFloat("bearing", location.getBearing());
-        editor.apply();
+        synchronized (LocationForegroundService.class) {
+            if (latestLocation != null && timestamp < latestLocation.getTime()) return;
+            latestLocation = new Location(location);
+            latestLocation.setTime(timestamp);
+            if (checkpoint.due(android.os.SystemClock.elapsedRealtime())) flushLastLocation(this);
+        }
         Intent event = new Intent(ACTION_LOCATION_UPDATE)
             .setPackage(getPackageName())
             .putExtra("lat", location.getLatitude())
@@ -194,7 +188,29 @@ public final class LocationForegroundService extends Service implements Location
         sendBroadcast(event);
     }
 
-    public static void clearLastLocation(Context context) {
+    public static synchronized Location getLatestLocation() {
+        return latestLocation == null ? null : new Location(latestLocation);
+    }
+
+    public static synchronized void flushLastLocation(Context context) {
+        if (context == null || latestLocation == null) return;
+        Location location = latestLocation;
+        SharedPreferences.Editor editor = context.getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putLong("timestamp", location.getTime())
+            .putString("provider", location.getProvider() == null ? "native" : location.getProvider())
+            .putString("lat", Double.toString(location.getLatitude()))
+            .putString("lng", Double.toString(location.getLongitude()))
+            .putFloat("accuracy", location.hasAccuracy() ? location.getAccuracy() : -1f)
+            .remove("speed").remove("bearing");
+        if (location.hasSpeed()) editor.putFloat("speed", location.getSpeed());
+        if (location.hasBearing()) editor.putFloat("bearing", location.getBearing());
+        editor.apply();
+        checkpoint.saved(android.os.SystemClock.elapsedRealtime());
+    }
+
+    public static synchronized void clearLastLocation(Context context) {
+        latestLocation = null;
+        checkpoint.reset();
         if (context == null) return;
         context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().clear().apply();
     }
@@ -210,6 +226,8 @@ public final class LocationForegroundService extends Service implements Location
 
     @Override
     public void onDestroy() {
+        flushLastLocation(this);
+        DriveJournal.get(this).flush();
         if (locationManager != null) {
             try { locationManager.removeUpdates(this); } catch (SecurityException ignored) { }
         }

@@ -19,3 +19,19 @@ test('driving geometry preserves geographic coordinates, current progress and un
     assert.equal(routeData([{p1:[NaN,0],p2:[1,1]}],0,null,...args).features.length,0);
     assert.equal(routeData(segments,4,null,...args).features.length,0);
 });
+
+
+test('chunked route retains every segment, color and uncertainty across boundaries',()=>{
+    const {routeChunks,CHUNK_SIZE}=require('../js/driving-view');
+    const segments=Array.from({length:5000},(_,i)=>({p1:[42+i*.00001,-71],p2:[42+(i+1)*.00001,-71],shade:i%3}));
+    const color=s=>['red','blue','green'][s.shade],uncertain=s=>s.shade===2;
+    const full=routeChunks(segments,color,uncertain);
+    for(const index of [0,63,64,65,4999]){
+        const chunk=Math.floor(index/CHUNK_SIZE);
+        const current=routeData(segments,index,[-71,segments[index].p1[0]+.000005],color,uncertain,(chunk+1)*CHUNK_SIZE);
+        const rest=full.features.filter(f=>f.properties.chunk>chunk);
+        const flatten=features=>features.flatMap(f=>f.geometry.coordinates.slice(1).map(p=>({p,color:f.properties.color,uncertain:f.properties.uncertain})));
+        assert.deepEqual(flatten([...current.features,...rest]),flatten(routeData(segments,index,[-71,segments[index].p1[0]+.000005],color,uncertain).features));
+        assert.ok(current.features.length<=CHUNK_SIZE);
+    }
+});
