@@ -24,4 +24,19 @@
 
 ## 자동 검사 및 공개 APK
 
-검사 완료 후 결과와 공개 APK 검증을 아래에 기록한다.
+- Node 단위 테스트 382개, Android JVM 38개(실패/오류 0), 합성 주행 회귀 게이트 2개 통과.
+- 변경 음성 화면 브라우저 검사 12개 통과. 320px·가로 화면 확인 포함. root/www 웹 자산 85개가 SHA-256 일치한다.
+- Android `testDebugUnitTest`, `assembleDebug`, `lintDebug` 성공. lint 오류 0·기존 경고 19개. 의존성 감사 취약점 0.
+- [main 전체 검사](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40952156255) 성공: Node/Android와 root/www 각 110개, 총 220개 브라우저 검사 통과.
+- [APK 배포 검사](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40952162051)의 Node/Android 및 root/www 브라우저 전체 검사 통과. 공개 파일 검증은 아래에 기록한다.
+- 배포 소스 커밋: `7911e06ef085bfd96aa77dd200cce69531032049`. 실제 폰 연결이 없어 스피커 발음·화자 동일성·Android 설치/데이터 유지·실제 배터리 소모는 검증하지 못했다.
+
+
+## 공개 파일 확인 완료
+
+- [1.3.29 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.29)의 서명/공개 작업까지 성공. versionCode 33, 패키지 `com.solaris.nav`, minSDK 22.
+- 공개 APK 직접 다운로드 크기 **4,520,702 bytes (약 4.52 MB)**. 1.3.28 대비 **1,077 bytes** 증가. 추가 음성 모델·지도 DB 없음.
+- SHA-256 `0b7f88cfd5f8c3df9bc4d21ce69db4a902d6194a686576c1f8303634d25feee4`. manifest 크기/체크섬과 일치. 기존 인증서 `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977` 일치 및 APK 서명/비디버그 속성 검증 완료.
+- APK 웹 자산 85개가 배포 소스 www와 바이트 단위 일치. 새 기기용 기본 선택 정책과 기존 네이티브 주행·음성 코드 포함 확인.
+- 실제 공개 GitHub 응답과 배포 updater로 code 9, 17~29, 32에 업데이트 표시 및 code 33에 최신 버전 표시 확인. 설치 버전 식별 정보는 Chromium 모의값이며 같은 공개 응답을 재사용했다. 실제 Android 설치/기존 데이터 유지 검증은 아니다.
+- [검증 영수증](data/app-release-1.3.29-verification.json)에 전체 검사 결과와 미확인 범위를 기록했다.
