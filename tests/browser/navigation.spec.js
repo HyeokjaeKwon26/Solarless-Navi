@@ -1198,16 +1198,23 @@ test('a delayed destination response cannot replace newer live guidance', async 
 
 test('uncertain GPS preserves guidance and local recording exports the sample', async ({ page }) => {
     const state = await fixtures(page);
+    await captureDrivingMap(page);
     await page.goto('./');
     await selectDestination(page, 'Alpha');
     await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
     await page.locator('#btn-map-start-nav').click();
+    // Finish the initial accepted-GPS replacement before measuring whether a
+    // later rejected fix starts any new routing request.
+    await establishReliableGuidance(page);
     await page.locator('#mobile-toggle-panel').click();
     await page.locator('#btn-drive-record').click();
     await page.waitForTimeout(300);
+    await expect.poll(()=>page.evaluate(()=>drivingTestState.reliable)).toBe(true);
     const before = state.routes.length;
     await page.evaluate(() => window.testGps.emit({ latitude: 42.365, longitude: -71.06, accuracy: 180 }));
-    await expect(page.locator('#api-status-banner')).toContainText('GPS accuracy');
+    // The generic notice is rate-limited and can be replaced by road-data
+    // status. Assert the rejected guidance state rather than transient copy.
+    await expect.poll(()=>page.evaluate(()=>drivingTestState.reliable)).toBe(false);
     expect(state.routes.length).toBe(before);
     await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);
     const downloadPromise = page.waitForEvent('download');
