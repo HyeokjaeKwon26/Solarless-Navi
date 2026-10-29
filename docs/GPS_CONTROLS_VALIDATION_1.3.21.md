@@ -10,7 +10,17 @@
 
 ## 자동 검증
 
-최종 결과는 배포 완료 후 이 문서에 기록한다. GPS 초기 대기·저정확도·신호 중단·복구, 단위 및 언어 변경, 동작 줄이기, 오프라인 병행 표시, 작은 세로 화면과 가로 화면의 버튼 위치를 검증한다.
+2026-10-29 배포 및 공개 파일 검증 완료.
+
+- Node 테스트 331개, 전체 브라우저 테스트 170개 통과.
+- Android testDebugUnitTest, assembleDebug, lintDebug 및 정식 assembleRelease 통과.
+- 의존성 감사 취약점 0건, root/www 웹 파일 68개 SHA-256 일치.
+- GPS 초기 대기·저정확도·신호 중단·복구, 단위 및 언어 변경, 동작 줄이기, 오프라인 병행 표시를 검증했다. 세로 320×740·412×915 및 가로 640×320에서 버튼 위치를 확인했다.
+- 공개 APK 크기 4468633바이트, 버전 1.3.21/code 25, minSdk 22, 디버그 비활성 상태와 기존 인증서 일치를 검증했다. APK 내 웹 파일 68개가 태그 소스와 바이트 단위로 일치한다.
+- APK SHA-256: `9dc726bd0bea7966a691d67bc41fa69d1f9f60f04ad010e4b242ea191f1c00b0`.
+- 실제 공개 GitHub 응답과 배포 앱의 업데이트 코드로 구버전(code 9, 17–24)에서 새 버전을 표시하고 code 25에서는 최신 버전으로 표시하는 것을 확인했다. 설치된 앱 정보는 모의 입력이며 Android 설치 화면을 실행한 것은 아니다.
+- [릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.21), [배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40820692031), [검증 영수증](data/app-release-1.3.21-verification.json).
+
 
 ## 실제 폰에서 확인할 항목
 
