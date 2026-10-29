@@ -2097,11 +2097,23 @@ test('map upgrades render bounded buildings, route arrows, shade and arrival wit
 test('map cache serves real vector resources offline and can be cleared',async({page})=>{
     const state=await detailedMapFixture(page);
     await expect.poll(()=>page.evaluate(async()=>(await MapCache.stats()).count)).toBeGreaterThan(1);
+    // Auto-night mode can load /dark. Reading an unrelated /liberty URL after
+    // cutting the network tests an uncached resource, not offline cache reuse.
+    const style=await page.evaluate(()=>mapDetailBase.theme);
+    expect(style).toMatch(/^https:\/\/tiles\.openfreemap\.org\/styles\/(liberty|dark)$/);
+    await expect.poll(()=>page.evaluate(url=>new Promise((resolve,reject)=>{
+        const open=indexedDB.open('solarless-map-cache-v1',1);
+        open.onerror=()=>reject(open.error);open.onsuccess=()=>{
+            const db=open.result,tx=db.transaction('data'),read=tx.objectStore('data').get(url);
+            let exists=false;read.onsuccess=()=>{exists=!!read.result;};
+            tx.oncomplete=()=>{db.close();resolve(exists);};tx.onerror=()=>{db.close();reject(tx.error);};
+        };
+    }),style)).toBe(true);
     const before=state.count();state.block();
-    const result=await page.evaluate(async()=>{
-        const first=await MapCache.resource('https://tiles.openfreemap.org/styles/liberty',new AbortController().signal);
+    const result=await page.evaluate(async url=>{
+        const first=await MapCache.resource(url,new AbortController().signal);
         const json=JSON.parse(new TextDecoder().decode(first));return {version:json.version,bytes:(await MapCache.stats()).bytes};
-    });
+    },style);
     expect(result.version).toBe(8);expect(result.bytes).toBeLessThanOrEqual(32*1048576);expect(state.count()).toBe(before);
     expect(await page.evaluate(()=>MapCache.clear())).toBe(false);
     await page.evaluate(()=>journeyTestApi.stop());

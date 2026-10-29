@@ -1,4 +1,4 @@
-SolarLess Navi 1.3.30
+SolarLess Navi 1.3.31
 
 기존 TTS 엔진을 사용하는 한영 혼합 안내 경로를 수정하고, 기본·선택 목소리 비교 미리 듣기를 추가했습니다.
 
@@ -11,4 +11,6 @@ SolarLess Navi 1.3.30
 실제 엔진이 언어 정보를 반영하는지, 동일 화자로 자연스러운 영어를 발음하는지는 폰 청취가 필요합니다. 이번 검증은 코드·모의 엔진·자동 테스트이며 실제 폰의 발음 개선 완료를 의미하지 않습니다.
 
 검증과 폰 확인 방법:
-https://github.com/HyeokjaeKwon26/Solarless-Navi/blob/main/docs/VOICE_COMPARISON_VALIDATION_1.3.30.md
+https://github.com/HyeokjaeKwon26/Solarless-Navi/blob/main/docs/VOICE_COMPARISON_VALIDATION_1.3.31.md
+
+배포 검사에서 발견한 지도 캐시 테스트의 낮/밤 지도 파일 불일치도 수정했습니다. 앱의 지도 캐시 동작은 변경하지 않았습니다. 1.3.30은 검사에서 중단되어 APK가 공개되지 않았습니다.

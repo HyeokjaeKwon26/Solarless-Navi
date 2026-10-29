@@ -2070,7 +2070,7 @@ document.addEventListener('DOMContentLoaded', () => {
             runtimeHealth = health;
             if(driveRecorder.active&&Date.now()-lastPerformanceRecordAt>=30000){
                 lastPerformanceRecordAt=Date.now();
-                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.30',
+                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.31',
                     visible:!document.hidden,pip:isPipMode,live:isLiveNavActive,saver:isBatterySaverActive,map3d:!!drivingView?.active()});
             }
             automaticBatterySaver = NavigationGuidance.shouldConserve(runtimeHealth, automaticBatterySaver);
