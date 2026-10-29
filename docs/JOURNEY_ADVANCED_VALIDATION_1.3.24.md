@@ -33,6 +33,20 @@ Android 주 GPS 250ms/1m, 네트워크 위치 요청, 기존 음성 단계와 �
 - 전체 CI에서 자동 접기 이전의 3D 버튼 노출 조건을 발견해 더보기 접근성 검사로 갱신했다. 이어 버튼 포커스와 화면 회전 시 지도 컨테이너가 스크롤되는 문제를 재현해 스크롤을 막고, 지도 위치·버튼 조작·가로 배치를 함께 검사한다. 테스트 종료 중 초기화 대화상자의 닫힌 페이지 오류도 테스트 정리 단계에서만 처리한다.
 - 웹 자산 77개 root/www SHA-256 일치, 버전 단조 증가 확인, npm audit 취약점 0개. 전체 브라우저 검사는 배포 CI에서 실행한다.
 
+## 공개 APK 검증 결과
+
+- 공개 버전: **1.3.24 / versionCode 28**, 패키지 `com.solaris.nav`, minSdk 22.
+- 소스: `2effeec304a60b828e5ad3d8d900d92e8203991d`.
+- [서명 APK 다운로드](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.24/SolarLessNavi-1.3.24.apk): **4,494,173 bytes**. 1.3.23 대비 13,623 bytes 증가했으며 지역 지도 DB는 포함하지 않는다.
+- APK SHA-256: `13d1baae825cbbf570efd66eb3e78988e357e10e1026e0e2a5964dbc3be1dd57`.
+- 기존 정식 인증서 SHA-256 `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977` 일치. 공개 APK의 암호학적 서명 검증 성공, debuggable 아님.
+- [배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40893503583): Node **357개**, 브라우저 **196개** 통과. Android JVM·debug 빌드·lint 및 정식 서명 빌드 성공.
+- [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40893504053)도 Node 357개·브라우저 196개·Android 빌드를 통과했다.
+- APK 내부 웹 파일 **77개**가 배포 커밋과 바이트 단위로 일치한다.
+- 실제 공개 GitHub 응답으로 앱 업데이트 코드를 실행했다. 설치 정보만 모의한 code 9 및 17–27에는 업데이트 제공, code 28에는 최신 상태를 확인했다. Android 설치 프로그램 실행·폰 데이터 유지 검사는 아니다.
+- 좁은 화면의 더보기 접근과 세로→가로 전환, 지도·페이지 스크롤 0 유지 검사를 root/www에서 각각 반복 통과했다.
+- 기계 판독 기록: [app-release-1.3.24-verification.json](data/app-release-1.3.24-verification.json).
+
 ## 실제 폰과 주행에서 확인할 항목 — 아직 미실시
 
 | 항목 | 방법과 판단 기준 |
