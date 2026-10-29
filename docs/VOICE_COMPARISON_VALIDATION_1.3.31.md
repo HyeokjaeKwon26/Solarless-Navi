@@ -43,3 +43,13 @@
 1.3.30(3be9dfc)의 main/배포 CI는 음성 검사를 포함해 브라우저 110개씩 통과했으나 지도 캐시 1개가 실패하여 APK를 공개하지 않았다. 야간 자동 테마가 /styles/dark를 저장했는데 테스트는 /styles/liberty를 고정해서 조회한 문제다. 모든 외부 응답은 테스트 fixture이며 실제 지도 서버 장애가 아니다.
 
 1.3.31은 현재 렌더러의 theme URL 및 해당 캐시 저장 완료를 확인한 뒤 네트워크 차단/동일 데이터 재사용을 검사한다. 검사 생략이나 임의 재시도가 아니며 앱 지도 캐시 코드 변경은 없다. 기존 1.3.30 태그는 이동하지 않았다.
+
+## 공개 APK 검증 완료
+
+- [1.3.31 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.31), versionCode 35, minSDK 22. 소스 커밋 470be901839bfdedb07b2ac86ea22ce88db4091b.
+- [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40974919467) 및 [APK 배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40974921838) 모두 성공. 각 전체 브라우저 검사 root/www 111개씩 총 222개 통과.
+- 공개 APK 직접 다운로드 4,523,302 bytes, 이전 1.3.29 대비 2,600 bytes 증가. 새 음성 엔진·모델 없음.
+- SHA-256 aacd93b53c03f32cc1fa4b573d537c45a2e9ae1a242fbc3571fd3374a4ac91d4. 공개 update.json/체크섬과 일치. 기존 인증서 59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977 및 암호학적 서명/비디버그 속성 확인.
+- APK 웹 자산 85개와 배포 소스 www 바이트 일치, 네이티브 SpeechDispatch 및 비교 미리 듣기 코드 포함 확인.
+- 공개 응답을 실제 updater로 읽어 code 9, 17~29, 32~33 업데이트 표시, code 35 최신 버전 표시 확인. 설치 정보만 모의값이며 실제 폰 설치 검사는 아님.
+- [검증 영수증](data/app-release-1.3.31-verification.json)에 자동 검사와 미확인 범위를 기록. 실제 폰 청취 및 동일 화자·영어 발음 개선 여부는 미확인.
