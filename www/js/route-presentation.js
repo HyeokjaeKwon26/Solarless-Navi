@@ -23,11 +23,13 @@
         const ko = String(language).startsWith('ko');
         const text = ko ? {
             'no-candidates': '비교 가능한 다른 경로를 받지 못했습니다.',
+            incomparable: '후보는 있지만 같은 기준의 기상·차폐 자료가 부족해 비교할 수 없습니다.',
             budget: '눈부심 감소 후보가 설정한 추가 시간 한도를 넘었습니다.',
             ratio: '받은 우회 후보가 최단시간 대비 35% 한도를 넘었습니다.',
             'no-improvement': '비교 가능한 후보 중 눈부심 감소 기준과 우회 한도를 함께 충족한 경로가 없습니다.'
         } : {
             'no-candidates': 'No comparable alternative was returned.',
+            incomparable: 'Alternatives exist, but compatible weather/shade data is missing.',
             budget: 'Glare-reducing alternatives exceed your extra-time limit.',
             ratio: 'Returned alternatives exceed the 35% detour limit.',
             'no-improvement': 'No comparable alternative met both the glare-reduction and detour limits.'

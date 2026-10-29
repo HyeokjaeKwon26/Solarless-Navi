@@ -1433,7 +1433,7 @@ window.ShadowRouter = (function () {
         if (!fastest || !selected || selected.id !== fastest.id) return 'alternative';
         const alternatives = (routes.all || []).filter(r => r.id !== fastest.id && !r.traffic?.blocked &&
             r.analysisMode === fastest.analysisMode && r.weatherMode === fastest.weatherMode);
-        if (!alternatives.length) return 'no-candidates';
+        if (!alternatives.length) return (routes.all||[]).some(r=>r.id!==fastest.id&&!r.traffic?.blocked)?'incomparable':'no-candidates';
         const cap = Math.max(0, Number(budgetMinutes) || 0) * 60;
         const useful = alternatives.filter(r => isMeaningfulGlareAlternative(calculateRouteTradeoff(fastest, r)));
         if (useful.length && useful.every(r => r.durationSec > fastest.durationSec + cap)) return 'budget';

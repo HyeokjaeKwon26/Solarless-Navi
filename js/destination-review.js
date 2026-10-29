@@ -1,6 +1,6 @@
 (function (root) {
     'use strict';
-    let map, marker, approach, endpoint, previewBounds, pending = null, selected, original, returnFocus, restoreSearch = false, preview = false, searchGeneration=0;
+    let map, marker, approach, endpoint, previewBounds, pending = null, selected, original, returnFocus, restoreSearch = false, preview = false, searchGeneration=0, destinationName='';
     const el = id => document.getElementById(id);
     function fitApproach() {
         if (preview && previewBounds && !el('destination-review-modal').classList.contains('hidden'))
@@ -25,9 +25,20 @@
         if (pending) finish(null);
         const ko = root.I18n.getLanguage().startsWith('ko');
         original = { lat: Number(coords.lat), lng: Number(coords.lng), source: coords.source }; selected = { lat: original.lat, lng: original.lng };
-        preview = !!options.route;
+        preview = !!options.route; destinationName=name;
         searchGeneration++;
         el('entrance-results').replaceChildren();
+        let remembered=el('remembered-entrance');
+        if(!remembered){remembered=document.createElement('div');remembered.id='remembered-entrance';el('entrance-results').before(remembered);}
+        remembered.replaceChildren();remembered.hidden=preview;
+        const saved=!preview&&root.EntranceMemory.find(root.localStorage,name,original);
+        if(saved){
+            const offer=document.createElement('button');offer.type='button';offer.className='nav-btn secondary';
+            offer.textContent=ko?'이전에 직접 확인한 차량 입구 사용':'Use your previously confirmed entrance';
+            const note=document.createElement('small');note.textContent=(ko?'기기에 저장된 확인일: ':'Confirmed on this device: ')+new Date(saved.at).toLocaleDateString(root.I18n.getLanguage())+(ko?' · 현재 진입 가능 여부를 다시 확인하세요.':' · Recheck current access.');
+            offer.addEventListener('click',()=>{selected={...saved.pin};marker.setLatLng(selected);map.setView(selected,18);el('destination-entrance-confirmed').checked=true;updatePosition();offer.setAttribute('aria-pressed','true');});
+            remembered.append(offer,note);
+        }
         el('btn-find-entrances').disabled=false;
         el('btn-find-entrances').hidden=preview;
         el('btn-find-entrances').textContent=ko?'주변 차량·주차장 입구 찾기':'Find nearby vehicle / parking entrances';
@@ -102,10 +113,14 @@
         }catch(error){if(token===searchGeneration)list.textContent=error.message==='COOLDOWN'?(ko?'잠시 후 다시 확인하세요 (요청 간격 1분).':'Please wait one minute between requests.'):(ko?'입구 자료를 확인하지 못했습니다. 핀을 직접 조정할 수 있습니다.':'Entrance data unavailable. You can adjust the pin manually.');}
         finally{if(token===searchGeneration)button.disabled=false;}
     });
-    el('btn-review-confirm').addEventListener('click', () => finish(preview ? null : { ...selected,
-        entranceConfirmed: el('destination-entrance-confirmed').checked,
-        saveFavorite: el('destination-save-favorite').checked,
-        source: el('destination-entrance-confirmed').checked || original.source === 'user-pin' || selected.lat !== original.lat || selected.lng !== original.lng ? 'user-pin' : 'search' }));
+    el('btn-review-confirm').addEventListener('click', () => {
+        if(preview){finish(null);return;}
+        const value={...selected,entranceConfirmed:el('destination-entrance-confirmed').checked,
+            saveFavorite:el('destination-save-favorite').checked,
+            source:el('destination-entrance-confirmed').checked||original.source==='user-pin'||selected.lat!==original.lat||selected.lng!==original.lng?'user-pin':'search'};
+        if(value.entranceConfirmed)root.EntranceMemory.save(root.localStorage,destinationName,original,value);
+        finish(value);
+    });
     el('btn-review-cancel').addEventListener('click', () => finish(null));
     el('btn-review-adjust').addEventListener('click', () => {
         const enable = !marker.dragging.enabled();

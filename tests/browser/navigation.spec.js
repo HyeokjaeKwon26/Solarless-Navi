@@ -1620,7 +1620,7 @@ async function captureDrivingMap(page){
         const response=await route.fetch();await route.fulfill({response,body:await response.text()+`\nconst createDrivingRoads=MapProvider.createRoadLayers;MapProvider.createRoadLayers=(...args)=>window.drivingRoadLayers=createDrivingRoads(...args);`});
     });
     await page.route('**/js/driving-view.js',async route=>{
-        const response=await route.fetch();await route.fulfill({response,body:await response.text()+`\nconst createDrivingView=DrivingView.create;DrivingView.create=options=>{const NativeMap=options.library.Map; options.library={...options.library,Map:class extends NativeMap{constructor(config){super(config);window.drivingTestMap=this;}}};const controller=createDrivingView(options);window.drivingTestController=controller;const update=controller.update;controller.update=s=>{window.drivingTestState=s;return update(s);};return controller;};`});
+        const response=await route.fetch();await route.fulfill({response,body:await response.text()+`\nconst createDrivingView=DrivingView.create;DrivingView.create=options=>{const NativeMap=options.library.Map; options.library={...options.library,Map:class extends NativeMap{constructor(config){super(config);window.drivingTestMap=this;window.drivingMapErrors=[];this.on('error',e=>drivingMapErrors.push(String(e.error?.message||e.error)));}}};const controller=createDrivingView(options);window.drivingTestController=controller;const update=controller.update;controller.update=s=>{window.drivingTestState=s;return update(s);};return controller;};`});
     });
 }
 test('queued vector resize cannot access a removed or replaced Leaflet map',async({page})=>{
@@ -1788,7 +1788,7 @@ test('long tilted routes upload the far geometry once while the near chunk moves
         return {...uploads,filter:map.getFilter('driving-ahead-casing')};
     });
     expect(result.ahead).toBe(1);expect(result.near).toBeGreaterThanOrEqual(120);expect(result.maxNearPoints).toBeLessThanOrEqual(128);
-    expect(JSON.stringify(result.filter)).toContain('false');expect(state.errors).toEqual([]);
+    expect(JSON.stringify(result.filter)).toContain('false');expect(await page.evaluate(()=>drivingMapErrors.filter(x=>x.includes('filter')))).toEqual([]);expect(state.errors).toEqual([]);
 });
 
 
@@ -1827,4 +1827,61 @@ test('recording batches samples and flushes before export and deletion',async({p
   }finally{IDBDatabase.prototype.transaction=original;}
  });
  expect(result).toEqual({before:0,after:1,sequences:Array.from({length:40},(_,i)=>i),remaining:0});expect(state.errors).toEqual([]);
+});
+
+test('compact controls persist, expand accessibly and retain recenter on narrow driving screens',async({page})=>{
+    const state=await startTilted(page);
+    await page.locator('#mobile-toggle-panel').click();await page.locator('label.toggle-switch:has(#toggle-compact-controls)').click();await expect(page.locator('#toggle-compact-controls')).toBeChecked();await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#btn-recenter-gps')).toBeVisible();await expect(page.locator('#btn-driving-view')).toBeHidden();await expect(page.locator('#btn-map-tools')).toBeVisible();
+    await page.locator('#btn-map-tools').click();await expect(page.locator('#btn-map-tools')).toHaveAttribute('aria-expanded','true');await expect(page.locator('#btn-driving-view')).toBeVisible();
+    await page.locator('#btn-map-tools').press('Escape');await expect(page.locator('#btn-driving-view')).toBeHidden();await expect(page.locator('#btn-map-tools')).toBeFocused();
+    await page.setViewportSize({width:320,height:740});await page.screenshot({path:test.info().outputPath('compact-driving-320.png')});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await expect.poll(()=>page.evaluate(()=>drivingTestController.metrics().samples)).toBeGreaterThan(0);
+    const cadence=await page.evaluate(()=>{drivingTestController.update({...drivingTestState,speed:0});return drivingTestController.metrics().interval;});expect(cadence).toBe(200);
+    await page.reload();expect(await page.evaluate(()=>document.body.classList.contains('compact-controls'))).toBe(true);expect(state.errors).toEqual([]);
+});
+
+test('confirmed entrance is offered on repeat search, never silently selected, and can be deleted',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');
+    await page.evaluate(()=>{DestinationReview.show({lat:42.36,lng:-71.07},'84 Gerry Road, Brookline',null).then(v=>window.chosenEntrance=v);});
+    await page.locator('#destination-entrance-confirmed').check();await page.locator('#btn-review-confirm').click();
+    await page.reload();
+    await page.evaluate(()=>{DestinationReview.show({lat:42.36,lng:-71.07},'84 Gerry Road, Brookline',null).then(v=>window.chosenEntrance=v);});
+    await expect(page.locator('#remembered-entrance button')).toBeVisible();await expect(page.locator('#destination-entrance-confirmed')).not.toBeChecked();
+    await page.locator('#remembered-entrance button').click();await expect(page.locator('#destination-entrance-confirmed')).toBeChecked();await page.locator('#btn-review-confirm').click();
+    expect(await page.evaluate(()=>chosenEntrance)).toMatchObject({source:'user-pin',entranceConfirmed:true});
+    await page.evaluate(()=>{DestinationReview.show({lat:42.36,lng:-71.07},'94 Gerry Road, Brookline',null);});await expect(page.locator('#remembered-entrance button')).toHaveCount(0);await page.locator('#btn-review-cancel').click();
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-clear-entrances').click();expect(await page.evaluate(()=>EntranceMemory.read(localStorage).length)).toBe(0);expect(state.errors).toEqual([]);
+});
+
+test('route choices group identical geometry and disclose unavailable comparison data',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.evaluate(()=>{const r=journeyTestApi.state().route;window.presentationFixture=r;DriveExperience.routeSummary({routes:{fastest:r,glareFree:{...r},shade:{...r},all:[r]},preferenceBudgetMinutes:5});});
+    await expect(page.locator('.route-choice-group')).toHaveCount(1);await expect(page.locator('.shared-route-role')).toHaveCount(2);await expect(page.locator('.route-choice-summary')).toContainText('Same route');
+    await page.evaluate(()=>{const a=presentationFixture,b={...a,id:'other',durationSec:a.durationSec+120,analysisMode:'unknown',analyzed:{...a.analyzed,coordinates:a.analyzed.coordinates.map(([x,y],i)=>[x+(i===1?.0001:0),y])}};DriveExperience.routeSummary({routes:{fastest:a,glareFree:b,shade:b,all:[a,b]},preferenceBudgetMinutes:5});});
+    await expect(page.locator('.route-choice-group')).toHaveCount(2);await expect(page.locator('.route-choice-summary').last()).toContainText('+2 min');await expect(page.locator('.route-choice-summary').last()).toContainText('Insufficient comparable sun data');
+    await page.locator('#mobile-toggle-panel').click();await page.locator('.route-choice-group').last().scrollIntoViewIfNeeded();await page.screenshot({path:test.info().outputPath('grouped-routes.png')});expect(state.errors).toEqual([]);
+});
+
+test('alert modes persist and mute only selected warning speech while preserving turns',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#alert-mode-glare').selectOption('off');await page.locator('#alert-mode-speeding').selectOption('visual');await page.reload();
+    expect(await page.evaluate(()=>AlertSettings.get())).toEqual({glare:'off',speeding:'visual',road:'both'});
+    const result=await page.evaluate(async()=>{
+        window.spokenAlerts=[];window.Capacitor={Plugins:{Pip:{stopFocusedSpeech:async()=>{},speakFocused:async a=>{spokenAlerts.push(a.text);return {accepted:true};}}}};
+        if(TTSVoice.isMuted())TTSVoice.toggleMute();TTSVoice.resetGuidance();
+        const disabled=await TTSVoice.speak('Glare off',true,'glare');const visual=await TTSVoice.speak('Speed visual',true,'speeding');
+        await TTSVoice.speak('Turn right now',true,null,2);const blocked=await TTSVoice.speak('Road status',true,null,0,[],{alertType:'road'});
+        return {disabled,visual,blocked,spoken:spokenAlerts};
+    });
+    expect(result).toEqual({disabled:false,visual:true,blocked:false,spoken:['Turn right now']});expect(state.errors).toEqual([]);
+});
+
+test('arrival pin note discloses access uncertainty and endpoint gap without changing route',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');
+    const text=await page.evaluate(()=>{const route={analyzed:{coordinates:[[-71,42],[-71.001,42]]}};DriveExperience.arrival(true,200,{lat:42,lng:-71.002,entranceConfirmed:false},route);return document.getElementById('arrival-pin-note').textContent;});
+    expect(text).toContain('vehicle entrance unverified');expect(text).toContain('from pin');
+    await page.evaluate(()=>DriveExperience.arrival(false,100,null,null));await expect(page.locator('#arrival-pin-note')).toBeHidden();
+    await expect(page.locator('#search-model-details')).not.toHaveAttribute('open');await page.locator('#search-model-heading').click();await expect(page.locator('#search-modal-sub')).toBeVisible();expect(state.errors).toEqual([]);
 });

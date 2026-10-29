@@ -365,6 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let lastSessionCheckpointAt = 0;
     function refreshDrivingFocus() {
+        DriveExperience.closeTools();
         document.body.classList.toggle('driving-focus', drivingFocus && isLiveNavActive && !isFreeDriveMode);
         document.getElementById('toggle-driving-focus').checked = drivingFocus;
         if (isLiveNavActive && !isFreeDriveMode) ensureRouteSummaryCycling();
@@ -1406,6 +1407,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('btn-close-journey-detail').textContent = ko ? '닫기' : 'Close';
         document.getElementById('btn-preview-voice').textContent = ko ? '한영 혼합 안내 미리 듣기' : 'Preview mixed-language guidance';
         VoiceSettings.render();
+        DriveExperience.render();
         selector.querySelector('[value="auto"]').textContent = ko ? '현재 위치에 따라 자동' : 'Automatic by current location';
         renderSpeedDisplay();
         document.querySelectorAll('[data-distance-meters]').forEach(element => setDistanceLabel(element, Number(element.dataset.distanceMeters), element.dataset.distanceLong === 'true', element.dataset.distancePrefix));
@@ -1422,6 +1424,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setupFeatureListeners() {
+        DriveExperience.init();
+        window.addEventListener('solarless:alerts',()=>{isSpeedingWarningActive=false;document.getElementById('speeding-warning-overlay').classList.add('hidden');updateTurnBannerText(lastTurnPresentation.maneuver,lastTurnPresentation.glare,true);});
         refreshDrivingFocus();
         document.getElementById('toggle-driving-focus').addEventListener('change', event => {
             drivingFocus = event.target.checked;
@@ -1691,6 +1695,8 @@ document.addEventListener('DOMContentLoaded', () => {
             (!lastReliableFixAt || Date.now() - lastReliableFixAt > 10000 || offRouteEvidence.confirmed ||
                 (navigationRouteProgress.result && !navigationRouteProgress.result.isSnapped))) return;
         lastTurnPresentation = { maneuver: nextManeuver, glare: glareRisk };
+        document.body.classList.toggle('near-turn',!!nextManeuver&&nextManeuver.type!=='arrive'&&nextManeuver.distanceFromCar<=400);
+        if(!AlertSettings.allows('glare','visual'))glareRisk=0;
         const banner = document.getElementById('mobile-turn-banner');
         if (!banner) return;
 
@@ -1771,7 +1777,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 banner.classList.remove('hazard');
             }
 
-            if (liveGlareAssessment.uncertain) descText += isKo ? ' · 눈부심 가능 · 차폐/기상 미확인' : ' · Possible glare · shade/weather unverified';
+            if (liveGlareAssessment.uncertain&&AlertSettings.allows('glare','visual')) descText += isKo ? ' · 눈부심 가능 · 차폐/기상 미확인' : ' · Possible glare · shade/weather unverified';
             if (bannerDesc) bannerDesc.innerText = descText;
             if (bannerIcon) bannerIcon.innerHTML = getManeuverIcon(nextManeuver.type, nextManeuver.modifier);
             updatePipHud(
@@ -1792,7 +1798,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 banner.classList.add('hazard');
                 if (bannerIcon) bannerIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
             } else {
-                if (bannerDesc) bannerDesc.innerText = liveGlareAssessment.uncertain
+                if (bannerDesc) bannerDesc.innerText = liveGlareAssessment.uncertain&&AlertSettings.allows('glare','visual')
                     ? (isKo ? '눈부심 가능 · 차폐/기상 미확인' : 'Possible glare · shade/weather unverified')
                     : (isKo ? '전방 도로를 확인하세요' : 'Observe the road ahead');
                 banner.classList.remove('hazard');
@@ -3831,6 +3837,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateRemainingSummary(remainingSec, remainingMeters) {
+        DriveExperience.arrival(isLiveNavActive&&!isFreeDriveMode,remainingMeters,currentEnd,selectedRouteObj);
         const isKo = I18n.getLanguage().startsWith('ko');
         const forecast = selectedRouteObj?.remainingForecast, snap = navigationRouteProgress.snap;
         if (forecast && snap?.isSnapped && snap.progressMeters >= forecast.progressMeters && Date.now() - forecast.at <= 10 * 60000) {
@@ -4516,6 +4523,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (route !== fst) element.innerText += ` · ${PublicTraffic.label(route.traffic, isKo)}`;
         });
+        DriveExperience.routeSummary(routeData);
     }
 
     function getRouteRequestKeyFor(start, end, mode, tollFree, dateObj) {
@@ -4843,11 +4851,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     const distTag = document.createElement('span');
                     distTag.className = 'dist-tag';
                     distTag.style.cssText = 'color:#fbbf24; font-size:11px; font-weight:700;';
-                    setDistanceLabel(distTag, res.distKm * 1000, false, '📍 ');
+                    setDistanceLabel(distTag, res.distKm * 1000, false, isKo?'직선 ':'Direct ');
                     titleRow.appendChild(distTag);
                 }
                 const address = document.createElement('div');
-                address.style.cssText = 'font-size:11px; color:#94a3b8; white-space:normal; overflow-wrap:anywhere;';
+                address.className='search-full-address';
                 address.textContent = res.displayName;
                 content.append(titleRow, address);
                 item.append(icon, content);
@@ -5263,6 +5271,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 3-Tier Highway / Toll Entry & Toll Booth Voice Guidance Announcement
+        if(!AlertSettings.allows('road','visual'))[badgeToll,badgeHwy,badgeBooth].forEach(b=>b?.classList.add('hidden'));
         if (TTSVoice && typeof TTSVoice.announceRoadEnvironment === 'function') {
             TTSVoice.announceRoadEnvironment(roadData);
         }
@@ -5303,6 +5312,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function checkSpeedingHazard(currentSpeedKmh) {
         const warningOverlay = document.getElementById('speeding-warning-overlay');
+        if(!AlertSettings.allows('speeding','visual')){warningOverlay?.classList.add('hidden');isSpeedingWarningActive=false;return;}
         const isKo = I18n.getLanguage().startsWith('ko');
         const now = Date.now();
         const unitText = currentSpeedUnit;
@@ -5315,7 +5325,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (warningOverlay) warningOverlay.classList.remove('hidden');
                 lastSpeedingAnnounceTime = now;
                 TTSVoice.speak(isKo ? `과속 위험! 제한속도 ${displayLimit}${unitText}를 초과했습니다. 속도를 줄이세요.` : `Speed warning! Speed limit is ${displayLimit} ${unitText}. Please reduce speed.`, true, 'speeding');
-            } else if (now - lastSpeedingAnnounceTime > 8000) {
+            } else if (now - lastSpeedingAnnounceTime > 30000) {
                 lastSpeedingAnnounceTime = now;
                 TTSVoice.speak(isKo ? `속도 경고! 제한속도 ${displayLimit}${unitText} 감속하세요.` : `Speed warning! Please reduce speed below ${displayLimit} ${unitText}.`, true, 'speeding');
             }
@@ -5848,7 +5858,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const nextManeuver = findNextManeuver(lat, lng);
             updateTurnBannerText(nextManeuver, glareRisk);
             if (nextManeuver) TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar, lastNavigationSpeedKmh);
-            if (glareRisk > 0.45) TTSVoice.announceProactiveGlareWarning(currentHeading, glareRisk);
+            if(glareRisk>0.45)TTSVoice.announceProactiveGlareWarning(currentHeading,glareRisk);else TTSVoice.observeGlareRecovery(glareRisk);
             // Do not let the generic "continue straight" hazard message
             // overwrite a real upcoming left/right turn announcement.
             if (!nextManeuver) TTSVoice.announceNavHazard(200, currentHeading, glareRisk);
@@ -5967,9 +5977,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar, lastNavigationSpeedKmh);
                 }
 
-                if (glareRisk > 0.45) {
-                    TTSVoice.announceProactiveGlareWarning(currentHeading, glareRisk);
-                }
+                if(glareRisk>0.45)TTSVoice.announceProactiveGlareWarning(currentHeading,glareRisk);else TTSVoice.observeGlareRecovery(glareRisk);
 
                 // The turn engine owns voice prompts whenever a maneuver is
                 // ahead; the generic hazard engine is only a no-maneuver

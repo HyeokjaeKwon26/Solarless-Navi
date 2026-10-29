@@ -105,6 +105,7 @@ function voice(native = null) {
     if (native) context.Capacitor = { Plugins: { TextToSpeech: native } };
     vm.createContext(context);
     vm.runInContext(fs.readFileSync(require.resolve('../js/navigation-units.js'), 'utf8'), context);
+    vm.runInContext(fs.readFileSync(require.resolve('../js/alert-settings.js'), 'utf8'), context);
     vm.runInContext(fs.readFileSync(require.resolve('../js/tts-voice.js'), 'utf8'), context);
     return { api: context.TTSVoice, units: context.NavigationUnits, spoken, advance: ms => { now += ms; } };
 }

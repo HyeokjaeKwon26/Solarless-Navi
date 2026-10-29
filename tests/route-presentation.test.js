@@ -15,7 +15,7 @@ test('route colors preserve priority and distinguish modeled from estimated shad
 });
 
 test('fallback explanations distinguish no candidates, limits, and no modeled improvement', () => {
-    for (const lang of ['ko','en']) for (const reason of ['no-candidates','budget','ratio','no-improvement']) {
+    for (const lang of ['ko','en']) for (const reason of ['no-candidates','budget','ratio','no-improvement','incomparable']) {
         assert.ok(presentation.fallbackText(reason,lang).length > 20);
         assert.ok(!presentation.fallbackText(reason,lang).includes('undefined'));
     }

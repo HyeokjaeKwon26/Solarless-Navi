@@ -1424,3 +1424,26 @@ body.pip-mode #drive-lab-modal { display:none; }
 @media (prefers-reduced-motion:reduce) {
     .map-floating-btn.GPS-btn.gps-unavailable, .map-floating-btn.GPS-btn.panned { animation:none; }
 }
+
+/* Optional compact controls retain the GPS status and one-tap recenter. */
+#btn-map-tools { display:none; font-size:11px; font-weight:700; order:4; }
+#btn-recenter-gps { order:5; }
+body.live-driving.compact-controls #btn-map-tools { display:flex; }
+body.live-driving.compact-controls:not(.map-tools-open) .map-controls-group .map-aux-tool { display:none; }
+body.live-driving.compact-controls:not(.near-turn) #route-summary-box .stat-val { font-size:18px; }
+body.live-driving.compact-controls.near-turn #banner-dist { font-size:26px; }
+#search-model-details { margin-top:6px; font-size:12px; color:#cbd5e1; }
+#search-model-details summary { cursor:pointer; min-height:32px; padding:6px 0; }
+#search-model-details p { margin-top:6px; }
+.alert-setting-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(100px,1fr); gap:10px; align-items:center; margin:12px 0; }
+.alert-setting-row select { width:100%; min-width:0; min-height:44px; background:#0f172a; color:#e2e8f0; border:1px solid #475569; border-radius:8px; padding:8px; }
+.route-choice-group { border:1px solid #475569; border-radius:12px; padding:8px; display:flex; flex-direction:column; gap:6px; }
+.route-choice-summary { margin:0 0 4px; color:#7dd3fc; font-weight:700; font-size:13px; overflow-wrap:anywhere; }
+.route-choice-reason { color:#cbd5e1; font-size:12px; }
+.mode-options .shared-route-role { min-height:44px; padding:8px 12px; }
+.shared-route-role .mode-icon,.shared-route-role .mode-sub-row,.shared-route-role .mode-eta-val { display:none; }
+#arrival-pin-note { color:#bae6fd; margin:8px 0 0; font-size:12px; overflow-wrap:anywhere; }
+body.pip-mode #arrival-pin-note { display:none; }
+#remembered-entrance { margin:8px 0; }
+#remembered-entrance button { width:100%; }
+.search-results-dropdown .result-item .search-full-address { white-space:normal; overflow-wrap:anywhere; font-size:12px; color:#cbd5e1; }

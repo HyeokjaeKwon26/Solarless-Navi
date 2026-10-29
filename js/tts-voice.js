@@ -11,7 +11,8 @@ window.TTSVoice = (function () {
     let lastSpokenText = '';
     let lastSpokenTime = 0;
     let lastAnnouncedBucket = "";
-    let lastProactiveGlareTime = 0;
+    const glareEpisodes = window.AlertSettings?.glareGate();
+    let glarePending=false,nearTurnUntil=0;
     let lastTurnAnnounceTime = 0;
     let audioCtx = null;
     let interruptionActive = false;
@@ -25,6 +26,7 @@ window.TTSVoice = (function () {
 
     function resetGuidance() {
         guidancePaused = false;
+        glareEpisodes?.reset();nearTurnUntil=0;
         stopSpeech();
         spokenStages.clear();
         turnProtectedUntil = 0;
@@ -177,13 +179,16 @@ window.TTSVoice = (function () {
     }
 
     async function speak(text, force = false, playChimeType = null, priority = 0, roadNames = [], options = {}) {
-        if (!text || isMuted || interruptionActive) return false;
-        const now = Date.now();
-        if (priority < 2 && now < turnProtectedUntil) return false;
+        if (!text || interruptionActive) return false;
+        const now = Date.now(),alertType=options.alertType||playChimeType;
+        if (priority < 2 && now < Math.max(turnProtectedUntil,nearTurnUntil)) return false;
+        if(alertType&&window.AlertSettings&&!window.AlertSettings.allows(alertType,'visual'))return false;
+        if(alertType&&(isMuted||window.AlertSettings&&!window.AlertSettings.allows(alertType,'voice'))){showVoiceToast(text);return true;}
+        if(isMuted)return false;
         if (!force && text === lastSpokenText && now - lastSpokenTime < 4000) return false;
         lastSpokenText = text;
         lastSpokenTime = now;
-        if (priority === 2) turnProtectedUntil = now + 6000;
+        if (priority === 2) turnProtectedUntil = now + Math.min(12000,Math.max(6000,text.length*65));
         const stopped = stopSpeech();
         const generation = speechGeneration;
         const utteranceId = `web-${now}-${generation}`;
@@ -265,95 +270,35 @@ window.TTSVoice = (function () {
 
     /* Proactive 200m Sun Glare Chime Warning */
     function announceProactiveGlareWarning(heading, glareRisk) {
-        if (isMuted || glareRisk <= 0.45) return;
-        const now = Date.now();
-        if ((now - lastProactiveGlareTime) < 15000) return;
-        lastProactiveGlareTime = now;
-
-        const isKorean = currentLang.startsWith('ko');
-        const msg = isKorean ? '현재 구간에 눈부심이 예상됩니다. 전방 시야를 확인하세요.' : 'Sun glare is predicted on this section. Check visibility ahead.';
-
-        speak(msg, true, 'glare');
+        const now=Date.now(),eligible=glareEpisodes?.observe(glareRisk,now);
+        if(!eligible||glarePending||!window.AlertSettings?.allows('glare','visual'))return;
+        const text=currentLang.startsWith('ko')?'현재 구간에 눈부심이 예상됩니다. 전방 시야를 확인하세요.':'Sun glare is predicted on this section. Check visibility ahead.';
+        glarePending=true;
+        Promise.resolve(speak(text,true,'glare')).then(accepted=>{if(accepted)glareEpisodes?.sent(glareRisk,Date.now());}).finally(()=>{glarePending=false;});
     }
-
-    function announceNavHazard(distanceMeters, heading, glareRisk, stepName = "") {
-        if (isMuted) return;
-
-        let bucket = "far";
-        if (distanceMeters <= 50) bucket = "now";
-        else if (distanceMeters <= 150) bucket = "near";
-        else if (distanceMeters <= 350) bucket = "mid";
-
-        const isKorean = currentLang.startsWith('ko');
-        const bucketKey = `${currentLang}_${bucket}_${stepName}_${Math.round(glareRisk * 10)}`;
-        if (bucketKey === lastAnnouncedBucket) return;
-        lastAnnouncedBucket = bucketKey;
-
-        let msg = "";
-
-        // Do not invent a distance, westbound road, avoidance turn or safe
-        // shaded section from a scalar current-segment estimate.
-        if (glareRisk <= 0.45) return;
-        msg = isKorean ? '현재 구간에 눈부심이 예상됩니다. 전방 시야를 확인하세요.' : 'Sun glare is predicted on this section. Check visibility ahead.';
-
-        speak(msg, false, glareRisk > 0.45 ? 'glare' : null);
-    }
+    function announceNavHazard(distanceMeters,heading,glareRisk,stepName=''){announceProactiveGlareWarning(heading,glareRisk);}
 
     let lastRoadTypeState = 'normal'; // 'normal' | 'free_highway' | 'toll_road' | 'toll_highway'
     let lastRoadAnnounceTime = 0;
     let lastTollBoothAnnounceTime = 0;
 
     /* 3-Tier Highway & Toll Road Entry & Toll Booth Voice Engine */
+    let roadPending=false;
     function announceRoadEnvironment(roadData) {
-        if (isMuted || !roadData) return;
-        const now = Date.now();
-        const isKorean = currentLang.startsWith('ko');
-
-        // 1. Toll Booth (요금소/톨게이트) 80~100m Ahead Alert
-        if (roadData.isTollBoothAhead) {
-            if (now - lastTollBoothAnnounceTime > 60000) {
-                lastTollBoothAnnounceTime = now;
-                const msg = isKorean ?
-                    "잠시 후 요금소(톨게이트)가 있습니다." :
-                    "Toll booth ahead. Please prepare toll payment.";
-                speak(msg, true, 'glare');
-                return;
-            }
-        }
-
-        // 2. 3-Tier Classification
-        const isMotorway = !!roadData.isMotorway;
-        const isToll = !!roadData.isToll;
-
-        let currentType = 'normal';
-        if (isMotorway && isToll) {
-            currentType = 'toll_highway'; // 3. 유료 고속도로
-        } else if (isMotorway && !isToll) {
-            currentType = 'free_highway'; // 1. 무료 고속도로
-        } else if (!isMotorway && isToll) {
-            currentType = 'toll_road';    // 2. 일반 유료도로
-        }
-
-        // Only announce on entry transition (진입 시점 1회 안내 with 90s cooldown)
-        if (currentType !== 'normal' && currentType !== lastRoadTypeState) {
-            if (now - lastRoadAnnounceTime > 90000) {
-                lastRoadAnnounceTime = now;
-                lastRoadTypeState = currentType;
-
-                let msg = "";
-                if (currentType === 'toll_highway') {
-                    msg = isKorean ? "유료 고속도로에 진입합니다." : "Entering toll highway.";
-                } else if (currentType === 'free_highway') {
-                    msg = isKorean ? "고속도로에 진입합니다. 안전 운전하세요." : "Entering highway. Drive safely.";
-                } else if (currentType === 'toll_road') {
-                    msg = isKorean ? "유료 도로에 진입합니다." : "Entering toll road.";
-                }
-
-                speak(msg, true);
-            }
-        } else if (currentType === 'normal') {
-            lastRoadTypeState = 'normal'; // Reset state so next highway/toll entry triggers cleanly
-        }
+        if(!roadData||roadPending||!window.AlertSettings?.allows('road','visual'))return;
+        const now=Date.now(),ko=currentLang.startsWith('ko');
+        const type=roadData.isMotorway?(roadData.isToll?'toll_highway':'free_highway'):(roadData.isToll?'toll_road':'normal');
+        if(type==='normal')lastRoadTypeState='normal';
+        const booth=roadData.isTollBoothAhead&&now-lastTollBoothAnnounceTime>60000;
+        if(!booth&&(type==='normal'||type===lastRoadTypeState||now-lastRoadAnnounceTime<=90000))return;
+        const text=booth?(ko?'잠시 후 요금소가 있습니다.':'Toll booth ahead.'):
+            type==='toll_highway'?(ko?'유료 고속도로에 진입합니다.':'Entering toll highway.'):
+            type==='free_highway'?(ko?'고속도로에 진입합니다.':'Entering highway.'):(ko?'유료 도로에 진입합니다.':'Entering toll road.');
+        roadPending=true;
+        Promise.resolve(speak(text,true,booth?'glare':null,0,[],{alertType:'road'})).then(accepted=>{
+            if(!accepted)return;
+            if(booth)lastTollBoothAnnounceTime=Date.now();else{lastRoadAnnounceTime=Date.now();lastRoadTypeState=type;}
+        }).finally(()=>{roadPending=false;});
     }
 
     /**
@@ -417,6 +362,7 @@ window.TTSVoice = (function () {
         guidancePaused = false;
         const limits = window.NavigationGuidance.thresholds(speedKmh, maneuver);
         const stage = distanceMeters <= limits.execute ? 3 : distanceMeters <= limits.prepare ? 2 : distanceMeters <= limits.preview ? 1 : 0;
+        if(stage>=2)nearTurnUntil=now+2000;
         if (!stage) return;
         const key = `${maneuver.sequence ?? ''}|${maneuver.location}|${maneuver.type}|${maneuver.modifier}`;
         if ((spokenStages.get(key) || 0) >= stage) return;
@@ -465,6 +411,7 @@ window.TTSVoice = (function () {
         handleInterruptionStart: handleInterruptionStart,
         handleInterruptionEnd: handleInterruptionEnd,
         playWarningChime: playWarningChime,
+        observeGlareRecovery: risk=>glareEpisodes?.observe(risk,Date.now()),
         announceProactiveGlareWarning: announceProactiveGlareWarning,
         announceNavHazard: announceNavHazard,
         announceRoadEnvironment: announceRoadEnvironment,
