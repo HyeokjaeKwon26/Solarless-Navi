@@ -12,7 +12,21 @@ Android 주 GPS 250ms/1m 및 네트워크 위치 요청은 그대로 유지한�
 
 ## 자동 검증
 
-최종 테스트·배포 파일 검증 결과는 공개 후 기록한다.
+- 로컬 단위 테스트 341개, Android JVM 35개 통과. testDebugUnitTest·assembleDebug·lintDebug 성공, lint 오류 0개·기존 경고 19개. npm audit 취약점 0개, root/www 자산 72개 일치.
+- 신규 간결 도구·입구 재사용/삭제·동일 경로 그룹·경고별 음성 차단·도착 상태와 기존 3D 전환·긴 경로·눈부심 표시를 root/www에서 검사했다. 320px 간결 화면과 경로 그룹 화면을 렌더링해 확인했다.
+- 첫 전체 CI는 184개 통과, 2개 실패였다. 실패는 집중 화면 해제 시 중복 역할의 설명이 다시 표시된다는 이전 기대값이었다. 새 그룹 동작에 맞춰 중복 설명은 접히고 대표 경로 설명과 별도 분석 창은 접근 가능한지 검사하도록 수정했다. 수정한 root/www 두 검사는 로컬 통과했으며 앱 코드는 바꾸지 않았다.
+- 기존 먼 경로 필터에서 boolean 비교의 표현식 문법 오류를 발견해 literal 표현으로 수정했다. MapLibre 필터 오류를 감시하는 검사를 추가했다.
+
+### 공개 파일 최종 검증 (2026-10-29)
+
+- 소스 커밋: ed81dc7c25d9d91b7acfe7124f8d36d497fa2a05 / app-v1.3.23. [배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40875571159)와 [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40875567819)가 모두 성공했다. Node 341개, 브라우저 186개 및 Android 테스트·빌드·lint·서명 빌드를 통과했다.
+- [공개 APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.23/SolarLessNavi-1.3.23.apk)를 다시 다운로드했다. package com.solaris.nav, versionName 1.3.23, versionCode 27, minSdk 22, non-debuggable이다. 크기는 4,480,550바이트다.
+- APK SHA-256: 54e1df3638e7f008be0b4c4a7c2eddb2583435900ecf760808a375aee87dbf54
+- 기존 서명 인증서 SHA-256: 59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977. apksigner 검증과 배포 manifest·checksum·실제 파일 대조를 통과했다.
+- APK 웹 파일 72개가 태그의 www 파일과 바이트 단위로 일치한다. 오프라인 지리 DB는 포함하지 않았다.
+- 공개 GitHub HTTP 응답을 사용한 앱 업데이트 코드 검사에서 설치 code 9 및 17–26은 업데이트 가능, code 27은 최신으로 인식됐다. 같은 공개 응답을 설치 버전별 모의 검사에서 재사용했다. 실제 Android 설치/데이터 유지 검증은 아니다.
+- 기계 판독 기록: [app-release-1.3.23-verification.json](data/app-release-1.3.23-verification.json). 실제 폰·주행·배터리 측정은 아래 목록으로 남아 있다.
+
 
 ## 실제 폰·주행에서 확인 — 미실시
 
