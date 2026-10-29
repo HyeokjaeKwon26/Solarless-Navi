@@ -6,6 +6,7 @@
   "scripts": {
     "start": "serve -p 8080",
     "test": "node --test tests/*.test.js",
+    "test:drive-regression": "node tools/check-drive-regressions.cjs tests/fixtures/drive-regressions.json",
     "replay:drive": "node tools/replay-drive.cjs",
     "vendor:maplibre": "node tools/vendor-maplibre.mjs",
     "simulate:us": "node tools/simulate-us-solar-routes.mjs",

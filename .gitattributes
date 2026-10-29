@@ -1,0 +1,3 @@
+# These recordings are byte-pinned by the release regression manifest.
+tests/fixtures/drive-evaluation-synthetic.json text eol=lf
+tests/fixtures/drive-release-synthetic.json text eol=lf

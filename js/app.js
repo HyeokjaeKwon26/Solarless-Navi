@@ -245,12 +245,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         finally { document.getElementById('btn-road-pack').disabled = false; }
     });
-    document.getElementById('btn-road-pack-clear').addEventListener('click', () => RoadPack.clear().catch(() => showApiNotice('삭제 실패 / Delete failed')));
+    document.getElementById('btn-road-pack-clear').addEventListener('click', () => RoadPack.clear().then(ok=>{if(ok===false)showApiNotice('안내 종료 후 삭제하세요 / End guidance before deleting');}).catch(() => showApiNotice('삭제 실패 / Delete failed')));
     let lastSolarStaleNotice = 0;
 
     DriveArchive.init().then(active => { if (active) { driveRecorder.start(); setDriveRecordLabel(true); } }).catch(() => {});
     document.getElementById('btn-drive-clear').addEventListener('click', async () => {
-        try { await DriveArchive.clear(); } catch (e) { showApiNotice('삭제하지 못했습니다 / Could not delete recording'); return; }
+        try { if(await DriveArchive.clear()===false){showApiNotice('안내 종료 후 삭제하세요 / End guidance before deleting');return;} } catch (e) { showApiNotice('삭제하지 못했습니다 / Could not delete recording'); return; }
         DriveLab.clear();
         driveRecorder.stop();
         setDriveRecordLabel(false);
@@ -260,6 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
         button.dataset.recording = String(active);
         document.getElementById('drive-record-label').textContent = I18n.getText(active ? 'recordStop' : 'recordStart');
     }
+    window.addEventListener('solarless:recordings-cleared',()=>{DriveLab.clear();driveRecorder.stop();setDriveRecordLabel(false);});
     document.getElementById('btn-drive-record').addEventListener('click', async () => {
         try { await DriveArchive.setActive(!driveRecorder.active); } catch (e) { showApiNotice('기록을 시작하지 못했습니다 / Recording unavailable'); return; }
         if (driveRecorder.active) driveRecorder.stop();
@@ -442,6 +443,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-compare-routes').addEventListener('click',()=>{
         const ko=I18n.getLanguage().startsWith('ko'),baseline=routeData?.routes?.fastest;
         if(!baseline){showApiNotice(ko?'경로를 먼저 계산해 주세요.':'Calculate a route first.');return;}
+        if(!isLiveNavActive){RouteCompareView.show(routeData.routes.all,baseline,selectedRouteObj);return;}
         const rows=RouteComparison.rows(routeData.routes.all,baseline,ShadowRouter.routeDrivingQuality);
         const text=rows.map((row,i)=>{
             const selected=row.id===selectedRouteObj?.id;
@@ -1088,6 +1090,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function syncDrivingView(){
         syncGpsControl();
         if(isLiveNavActive&&!document.getElementById('drive-lab-modal').classList.contains('hidden'))DriveLab.close();
+        if(isLiveNavActive&&document.getElementById('route-compare-modal'))RouteCompareView.close();
         if(!drivingView)return;
         const reliable=!!(!drivingFixRejected&&!liveDestinationBackup&&lastReliableFixAt&&Date.now()-lastReliableFixAt<=10000&&!navigationRouteNeedsReliableOrigin&&
             (isFreeDriveMode||navigationRouteProgress.result?.isSnapped)&&!offRouteEvidence.confirmed);
@@ -1101,6 +1104,7 @@ document.addEventListener('DOMContentLoaded', () => {
             reliable,segments:drivingSceneSegments||selectedRouteObj?.analyzed?.segments,index:navigationRouteProgress.segmentIndex||0,
             model:selectedRouteObj?.analyzed?.coordinates&&!isFreeDriveMode?NavigationGuidance.model(selectedRouteObj):null,
             details:MapDetailSettings.get(),language:I18n.getLanguage(),
+            progress:navigationRouteProgress.result?.progressMeters,
             remaining:navigationRouteProgress.result?.remainingMeters,
             destination:currentEnd&&!isFreeDriveMode?[currentEnd.lng,currentEnd.lat]:null,entranceConfirmed:currentEnd?.entranceConfirmed===true,
             end:selectedRouteObj&&!isFreeDriveMode?selectedRouteObj.analyzed?.coordinates?.at(-1):null,
@@ -1455,6 +1459,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function setupFeatureListeners() {
         DriveExperience.init();
         JourneyUI.init();
+        StorageBudget.init(()=>isLiveNavActive||!!routeAbortController);
         MapDetailSettings.init(()=>{
             for(const [name,layer] of Object.entries(roadLayerSet?.primary||{}))if(layer?._glMap?.isStyleLoaded())NavigationMap.style(layer._glMap,name==='dark',NavigationMap.settings(localStorage).style);
             syncDrivingView();updateMapAttribution();
@@ -2065,7 +2070,7 @@ document.addEventListener('DOMContentLoaded', () => {
             runtimeHealth = health;
             if(driveRecorder.active&&Date.now()-lastPerformanceRecordAt>=30000){
                 lastPerformanceRecordAt=Date.now();
-                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.25',
+                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.26',
                     visible:!document.hidden,pip:isPipMode,live:isLiveNavActive,saver:isBatterySaverActive,map3d:!!drivingView?.active()});
             }
             automaticBatterySaver = NavigationGuidance.shouldConserve(runtimeHealth, automaticBatterySaver);
@@ -2444,7 +2449,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const userIsEditing = Date.now() - lastDestinationEditingAt < AUTO_FREE_DRIVE_EDITING_GRACE_MS;
             const sidebar = document.getElementById('sidebar-panel');
             const blockingModal = document.querySelector(
-                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden), #destination-review-modal:not(.hidden), #journey-detail-modal:not(.hidden), #trip-preview-modal:not(.hidden)'
+                '#about-app-modal:not(.hidden), #update-modal:not(.hidden), #arrival-modal:not(.hidden), #route-legend-modal:not(.hidden), #destination-review-modal:not(.hidden), #journey-detail-modal:not(.hidden), #trip-preview-modal:not(.hidden), #route-compare-modal'
             );
             if (userIsEditing || (sidebar && sidebar.classList.contains('active')) || blockingModal) {
                 autoFreeDriveMotionState = {};
@@ -2898,6 +2903,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleHardwareBackButton() {
+        if(document.getElementById('route-compare-modal')){RouteCompareView.close();return;}
         if (!document.getElementById('trip-preview-modal').classList.contains('hidden')) { journeyControls?.closePreview(); return; }
         const isKo = I18n.getLanguage().startsWith('ko');
         if (!document.getElementById('journey-detail-modal').classList.contains('hidden')) {

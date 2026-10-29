@@ -1809,7 +1809,11 @@ window.ShadowRouter = (function () {
             // available. These are optional enrichment, not a prerequisite
             // for displaying or starting the verified direct route.
             const fastestRaw = rawCandidates.slice().sort((a, b) => a.duration - b.duration)[0];
-            const offsets = fastestRaw?.offline ? [] : [...buildExplorationViaPoints(fastestRaw),
+            const connected = fastestRaw?.offline || !window.SolarExploration || !['shade','glareFree'].includes(options.preferredRouteRole) ? [] : window.SolarExploration.select(window.RoadPack?.graph,fastestRaw,(a,b,fraction)=>{
+                const at=new Date(dateObj.getTime()+fraction*(fastestRaw.duration||0)*1000),sun=SunCalc.getPosition(at,a[1],a[0]);
+                return options.preferredRouteRole==='shade'?calculateSolarUvIntensity(sun.altitude):calculateSegmentGlare(window.RoadGraph.bearing(a,b),sun,window.SolarPhysics?.birdClearSky(sun,at,{}),null);
+            },{tollFree:isTollFreeOnly});
+            const offsets = fastestRaw?.offline ? [] : [...connected,...buildExplorationViaPoints(fastestRaw),
                 buildExplorationViaPoints(fastestRaw, .3)[0], buildExplorationViaPoints(fastestRaw, .7)[1]].filter(Boolean);
             const directDistinct = rawCandidates.filter((route, index) => rawCandidates.slice(0, index).every(previous => !areRoutesGeometricallySimilar(previous, route))).length;
             const requestedBudget = options.viaRequestBudget === undefined ? 2 : Number(options.viaRequestBudget);
@@ -1833,8 +1837,9 @@ window.ShadowRouter = (function () {
                 timeoutMs: options.viaTimeoutMs || 10000
             })));
             if (window.DebugLogger) window.DebugLogger.log('osrm-via-end', { requested: viaUrls.slice(0, viaBudget).length, fulfilled: responses.filter(result => result.status === 'fulfilled').length });
-            responses.forEach(res => {
+            responses.forEach((res,responseIndex) => {
                 if (res.status === 'fulfilled' && res.value && res.value.routes) {
+                    if(offsets[responseIndex]?.connectedRoad&&(!Number.isFinite(res.value.waypoints?.[1]?.distance)||res.value.waypoints[1].distance>30))return;
                     res.value.routes.forEach(route => assignRoadDestination(route, res.value.waypoints, end.source === 'user-pin'));
                     rawCandidates.push(...res.value.routes);
                 }

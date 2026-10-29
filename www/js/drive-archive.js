@@ -65,11 +65,25 @@
             samples: events.filter(e => e.type === 'sample').map(e => e.data), events: events.filter(e => e.type !== 'sample') });
     }
     async function clear() {
+        if (root.StorageBudget?.protected()) return false;
         await setActive(false);
         await flushRecords();
+        if (root.StorageBudget?.protected()) return false;
         if (plugin()?.clearDriveRecording) await plugin().clearDriveRecording();
         else if (db) await request(db.transaction('events', 'readwrite').objectStore('events').clear());
+        root.dispatchEvent(new Event('solarless:recordings-cleared'));
     }
-    root.DriveArchive = { init, setActive, record, exportRecording, clear };
+    async function storageStats() {
+        if (plugin()?.getDriveRecording) {
+            const value=await plugin().getDriveRecording({statusOnly:true});return {bytes:Number.isFinite(value.bytes)?value.bytes:null};
+        }
+        if(!db)return {bytes:null,unknown:true};await flushRecords();
+        return new Promise((resolve,reject)=>{
+            const tx=db.transaction('events'),r=tx.objectStore('events').openCursor();let bytes=0,count=0;
+            r.onsuccess=()=>{const c=r.result;if(c){bytes+=new TextEncoder().encode(JSON.stringify(c.value)).byteLength;count++;c.continue();}};
+            tx.oncomplete=()=>resolve({bytes,count});tx.onerror=tx.onabort=()=>reject(tx.error);
+        });
+    }
+    root.DriveArchive = { init, setActive, record, exportRecording, clear, storageStats };
     root.addEventListener('solarless:voice', event => record('voice', event.detail));
 })(window);

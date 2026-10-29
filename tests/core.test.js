@@ -180,6 +180,12 @@ function createMemoryIndexedDb() {
         return {
             indexNames: { contains: () => false },
             createIndex: () => {},
+            count: () => request(() => values.size),
+            clear: () => values.clear(),
+            index: field => ({openKeyCursor: () => {
+                const result={},entries=[...values].filter(([,v])=>v[field]!==undefined);let i=0;
+                const next=()=>queueMicrotask(()=>{const entry=entries[i++];result.result=entry?{primaryKey:entry[0],key:entry[1][field],continue:next}:null;result.onsuccess?.();});next();return result;
+            }}),
             put: (value, key) => values.set(key, structuredClone(value)),
             get: key => request(() => values.has(key) ? structuredClone(values.get(key)) : undefined),
             getAll: () => request(() => [...values.values()].map(value => structuredClone(value))),
@@ -191,7 +197,7 @@ function createMemoryIndexedDb() {
         objectStoreNames: { contains: name => stores.has(name) },
         createObjectStore: makeStore,
         transaction(name) {
-            const transaction = { objectStore: () => makeStore(name) };
+            const transaction = { objectStore: key => makeStore(key || name) };
             setTimeout(() => { if (transaction.oncomplete) transaction.oncomplete(); }, 0);
             return transaction;
         }
@@ -3483,4 +3489,13 @@ test('identical purpose routes explain the fastest fallback and explored-candida
     assert.ok(appSource.includes('No explored alternative met the sun-exposure and detour limits.'));
     assert.ok(appSource.includes('glr.id === fst.id'));
     assert.ok(appSource.includes('shd.id === fst.id'));
+});
+
+test('connected solar via candidates retain the two-request quota and reject distant snaps',async()=>{
+    const saved={fetch:sandbox.fetch,explore:sandbox.SolarExploration,roads:sandbox.RoadGraph,scene:sandbox.SceneShadow};const urls=[];
+    sandbox.SolarExploration={select:()=>[{lat:0.001,lng:0.003,connectedRoad:true},{lat:0.001,lng:0.007,connectedRoad:true}]};sandbox.SceneShadow=null;
+    sandbox.fetch=async url=>{urls.push(String(url));return {ok:true,json:async()=>({routes:[{distance:1000,duration:100,geometry:{coordinates:[[0,0],[.01,0]]},legs:[{steps:[]}]}],waypoints:[{distance:0},{distance:100},{distance:0}]})};};
+    try{const result=await ShadowRouter.fetchAndAnalyzeRoutes({lat:0,lng:0},{lat:0,lng:.01},new Date(0),false,{viaRequestBudget:2,preferredRouteRole:'glareFree',disableWeatherRefinement:true});
+        assert.equal(urls.length,3);assert.ok(urls[1].includes('0.003000,0.001000'));assert.equal(result.routes.all.length,1);
+    }finally{sandbox.fetch=saved.fetch;sandbox.SolarExploration=saved.explore;sandbox.RoadGraph=saved.roads;sandbox.SceneShadow=saved.scene;}
 });

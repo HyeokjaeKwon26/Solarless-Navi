@@ -91,7 +91,9 @@ public class PipPlugin extends Plugin {
     public void getDriveRecording(PluginCall call) {
         DriveJournal journal = DriveJournal.get(getContext());
         if (call.getBoolean("statusOnly", false)) {
-            JSObject result = new JSObject(); result.put("active", journal.isActive()); call.resolve(result); return;
+            journal.storageBytes(bytes -> {
+                JSObject result = new JSObject(); result.put("active", journal.isActive()); result.put("bytes", bytes); call.resolve(result);
+            }); return;
         }
         journal.export(json -> {
             if (json == null) { call.reject("Unable to read recording"); return; }

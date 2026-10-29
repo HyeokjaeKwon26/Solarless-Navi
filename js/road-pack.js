@@ -15,6 +15,7 @@
         if(saved){try{if(bytes(saved).length>MAX_BYTES||saved.sha256&&saved.sha256!==await digest(saved))throw Error('CORRUPT_PACK');graph=RoadGraph.build(saved);catalog=OfflineCatalog.build(saved);pack=saved;}catch(e){status(localized('도로 자료 만료 또는 손상 · 다시 저장하세요','Road pack expired or damaged. Save it again.'));return;}}show();
     }
     async function save(center,diameterKm=3){
+        if(root.StorageBudget?.protected())throw Error('STORAGE_IN_USE');
         if(!db)throw Error('STORAGE_UNAVAILABLE');
         if(!Number.isFinite(center?.lat)||!Number.isFinite(center?.lng)||Math.abs(center.lat)>75)throw Error('LOCATION_UNAVAILABLE');
         if (Date.now()-lastDownload<60000) throw Error('DOWNLOAD_COOLDOWN');
@@ -38,12 +39,12 @@
         const built=RoadGraph.build(next);
         const nextCatalog=OfflineCatalog.build(next);next.sha256=await digest(next);
         if(bytes(next).length>MAX_BYTES)throw Error('ROAD_PACK_TOO_LARGE');
-        if(token!==generation)throw Error('DOWNLOAD_CANCELLED');
+        if(token!==generation||root.StorageBudget?.protected())throw Error('DOWNLOAD_CANCELLED');
         await new Promise((resolve,reject)=>{const tx=db.transaction('packs','readwrite');tx.objectStore('packs').put(next,'local');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});
         if(token!==generation)throw Error('DOWNLOAD_CANCELLED');
         pack=next;graph=built;catalog=nextCatalog;show();return graph;
     }
-    async function clear(){generation++;if(db)await new Promise((resolve,reject)=>{const tx=db.transaction('packs','readwrite');tx.objectStore('packs').clear();tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error);});pack=graph=null;catalog=[];if(layer){layer.remove();layer=null;}show();}
+    async function clear(){if(root.StorageBudget?.protected())return false;generation++;if(db)await new Promise((resolve,reject)=>{const tx=db.transaction('packs','readwrite');tx.objectStore('packs').clear();tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error);});pack=graph=null;catalog=[];if(layer){layer.remove();layer=null;}show();}
     function route(start,end,options={}){
         if(!valid())return Promise.reject(Error('NO_OFFLINE_ROAD_PACK'));
         options={simpler:localStorage.getItem('solarless_offline_simpler')==='true',...options};
@@ -59,5 +60,5 @@
         layer=L.geoJSON({type:'FeatureCollection',features:graph.edges.filter((e,i,all)=>{const key=[Math.min(e.from,e.to),Math.max(e.from,e.to),e.way].join('|');if(seen.has(key))return false;seen.add(key);return true;}).map(e=>({type:'Feature',properties:{name:e.name},geometry:{type:'LineString',coordinates:[e.a,e.b]}}))},{style:{color:'#8594a5',weight:3,opacity:.8},onEachFeature:(feature,item)=>{const label=document.createElement('span');label.textContent=feature.properties.name||localized('저장 도로','Saved road');item.bindTooltip(label);}}).addTo(map);
         for(const item of catalog.filter(i=>i.amenity).slice(0,500)){const label=document.createElement('span');label.textContent=item.displayName;L.circleMarker([item.lat,item.lng],{radius:4,color:'#fbbf24'}).bindTooltip(label).addTo(layer);}
     }
-    root.RoadPack={init,save,clear,route,draw,show,search:(query,origin)=>valid()?OfflineCatalog.search(catalog,query,origin):[],along:(coordinates,kind,progress)=>valid()?OfflineCatalog.along(catalog,coordinates,kind,progress):[],get pack(){return valid()?pack:null;},get catalog(){return valid()?catalog:[];},get graph(){return valid()?graph:null;}};
+    root.RoadPack={init,save,clear,storageStats:async()=>{const saved=db?await req(db.transaction('packs').objectStore('packs').get('local')):null;return {bytes:saved?bytes(saved).length:0,count:saved?1:0,unknown:!db};},route,draw,show,search:(query,origin)=>valid()?OfflineCatalog.search(catalog,query,origin):[],along:(coordinates,kind,progress)=>valid()?OfflineCatalog.along(catalog,coordinates,kind,progress):[],get pack(){return valid()?pack:null;},get catalog(){return valid()?catalog:[];},get graph(){return valid()?graph:null;}};
 })(window);

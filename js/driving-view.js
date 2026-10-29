@@ -61,7 +61,7 @@
         const {container,library:gl,onActive=()=>{},onPan=()=>{},onFailure=()=>{}}=options;
         let map=null,vehicle=null,end=null,ready=false,failed=false,state=null,timer=null,theme='',generation=0;
         let lastDataAt=0,lastSegments=null,lastIndex=-1,lastReliable=null,lastFrame=0,lastCameraAt=0,errors=[],fitKey='',fitCeiling=20;
-        let active=false,viewSize=null,lastChunk=-1,lastJunctionKey='';
+        let active=false,viewSize=null,lastChunk=-1,lastJunctionKey='',roadLabels=[],labelAt=0,labelKey='';
         let performanceState={},appliedRatio=0,heldBearing=null,pendingRender=null,renderLatencies=[],lastSpeed=null,lastTurn='',cameraKey='',lastRenderAt=0,details=null;
         function markRender(){if(pendingRender===null)pendingRender=performance.now();}
         function rendered(){
@@ -71,6 +71,7 @@
         }
         const activate=value=>{if(active===value)return;active=value;container.classList.toggle('ready',value);onActive(value);};
         function destroy(){
+            roadLabels.forEach(m=>m.remove());roadLabels=[];labelAt=0;labelKey='';
             details?.dispose();details=null;options.onDetailStatus?.({});
             pendingRender=null;renderLatencies=[];performanceState={};lastSpeed=null;lastTurn='';cameraKey='';heldBearing=null;appliedRatio=0;
             generation++;clearTimeout(timer);ready=false;activate(false);
@@ -125,6 +126,13 @@
             const latency=Math.max(samples.length>=4?samples[Math.floor((samples.length-1)*.9)]:0,pendingRender===null?0:performance.now()-pendingRender);
             performanceState=quality(performanceState,{now,latency,thermalStatus:state.thermalStatus});
             details?.update(state,performanceState.reduced,force);
+            const nextLabelKey=JSON.stringify([state.details?.style,state.reliable,state.maneuver?.sequence,state.language,state.panning]);
+            if(force||nextLabelKey!==labelKey||now-labelAt>=1000){
+                labelAt=now;labelKey=nextLabelKey;
+                const labels=state.details?.style!==false&&!state.panning?window.NavigationMap?.focusLabels(state)||[]:[];
+                while(roadLabels.length<labels.length)roadLabels.push(new gl.Marker({element:makeMarker('driving-road-label',''),anchor:'bottom',offset:[0,-12]}).setLngLat(state.position).addTo(map));
+                roadLabels.forEach((m,i)=>{const l=labels[i],el=m.getElement();el.hidden=!l;el.textContent=l?.name||'';if(l){el.classList.toggle('next-road',l.kind==='next');m.setLngLat(l.position);}});
+            }
             const interval=cadence(state,performanceState),turn=JSON.stringify([state.maneuver?.location,p.close]);
             const urgent=state.reliable!==lastReliable||turn!==lastTurn||lastSpeed<3&&state.speed>=3;
             if(!force&&!urgent&&now-lastFrame<interval)return;
@@ -185,6 +193,16 @@
                 while(z>13.5&&points.some(pos=>{const v=map.project(pos);return v.x<left||v.x>size.width-right||v.y<top+12||v.y>size.height-bottom-12;})){
                     z-=.25;fitCeiling=z;markRender();map.jumpTo({zoom:z});
                 }
+            }
+            // Project at the current camera; keep names clear of HUD/controls
+            // and prefer the next road when the two labels would collide.
+            let occupied=null;
+            for(const marker of roadLabels.slice().reverse()){
+                const el=marker.getElement();if(!el.textContent)continue;const pos=map.project(marker.getLngLat()),w=el.offsetWidth||180,h=el.offsetHeight||44;
+                const box={x:pos.x-w/2,y:pos.y-h-12,w,h};
+                const collides=occupied&&box.x<occupied.x+occupied.w&&box.x+box.w>occupied.x&&box.y<occupied.y+occupied.h&&box.y+box.h>occupied.y;
+                el.hidden=!state.reliable||state.details?.style===false||box.x<left||box.x+w>size.width-right||box.y<top+12||box.y+h>size.height-bottom-12||!!collides;
+                if(!el.hidden)occupied=box;
             }
         }
         function update(next){

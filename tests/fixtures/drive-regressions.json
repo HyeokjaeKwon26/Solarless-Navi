@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "id": "labelled-position",
+      "recording": "drive-evaluation-synthetic.json",
+      "sha256": "f5a0d9da6f59d5b7bce4f13f1a51d7458bf976199e3c82784323d00a541c52cf",
+      "limits": {
+        "min": {
+          "labelledFixes": 3,
+          "matched": 2
+        },
+        "max": {
+          "fixErrors": 1,
+          "positionJumps": 0
+        }
+      }
+    },
+    {
+      "id": "turn-and-reroute",
+      "recording": "drive-release-synthetic.json",
+      "sha256": "084d695b5d20526e8780a24c906d28876dd9d3dc396a682558a442e792d8fbc2",
+      "limits": {
+        "min": {
+          "labelledFixes": 15,
+          "guidanceLabels": 1,
+          "rerouteLabels": 1,
+          "matched": 15
+        },
+        "max": {
+          "fixErrors": 0,
+          "lateGuidance": 0,
+          "falseRerouteProposals": 0,
+          "positionJumps": 0
+        }
+      }
+    }
+  ]
+}

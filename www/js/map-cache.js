@@ -5,6 +5,7 @@
     let dbPromise,disabled=false,generation=0,active=0,pendingWrites=0,offline=false,storageFailed=false,installed=false;const queue=[];
     function allowed(url){try{const u=new URL(url);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&['tiles.openfreemap.org','tiles.mapterhorn.com'].includes(u.hostname);}catch{return false;}}
     function native(){return root.Capacitor?.isNativePlatform?.()===true;}
+    const byteLimit=()=>root.StorageBudget?.limit('map')||MAX_BYTES;
     function setOffline(value){if(offline===value)return;offline=value;root.dispatchEvent?.(new Event('map-cache-status'));}
     function enabled(){return native()&&!disabled&&(root.MapDetailSettings?.get()||root.NavigationMap?.settings(root.localStorage))?.cache!==false;}
     function expiry(headers,now){
@@ -33,7 +34,7 @@
         try{const db=await database();return await new Promise((resolve,reject)=>{
             const tx=db.transaction(['meta','data'],'readwrite'),meta=tx.objectStore('meta'),r=meta.get(key);let result=null;
             const timer=setTimeout(()=>{try{tx.abort();}catch{}resolve(null);},500);
-            r.onsuccess=()=>{try{const row=r.result;if(!row)return;if(row.expires<=Date.now()){meta.delete(key);tx.objectStore('data').delete(key);return;}
+            r.onsuccess=()=>{try{const row=r.result;if(!row)return;if(row.expires<=Date.now()){if(!root.StorageBudget?.protected()){meta.delete(key);tx.objectStore('data').delete(key);}return;}
                 const body=tx.objectStore('data').get(key);body.onsuccess=()=>{try{if(body.result){result={...row,body:body.result};meta.put({...row,used:Date.now()});}}catch{tx.abort();}};}catch{tx.abort();}};
             tx.oncomplete=()=>{clearTimeout(timer);resolve(result);};tx.onerror=tx.onabort=()=>{clearTimeout(timer);reject(tx.error);};
         });}catch{storageFailed=true;return null;}
@@ -45,7 +46,7 @@
         body=body.slice(0);pendingWrites++;
         try{const db=await database();if(token!==generation||!enabled())return;await new Promise((resolve,reject)=>{
             const tx=db.transaction(['meta','data'],'readwrite'),meta=tx.objectStore('meta'),data=tx.objectStore('data'),r=meta.getAll();
-            r.onsuccess=()=>{try{for(const k of eviction(r.result,key,body.byteLength)){meta.delete(k);data.delete(k);}meta.put({key,size:body.byteLength,used:Date.now(),...times});data.put(body,key);}catch{tx.abort();}};
+            r.onsuccess=()=>{try{const removes=eviction(r.result,key,body.byteLength,byteLimit());if(body.byteLength>byteLimit()||root.StorageBudget?.protected()&&removes.length)return;for(const k of removes){meta.delete(k);data.delete(k);}meta.put({key,size:body.byteLength,used:Date.now(),...times});data.put(body,key);}catch{tx.abort();}};
             tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
         });}catch{storageFailed=true;}finally{pendingWrites--;}
     }
@@ -82,7 +83,8 @@
         });
     }
     function transformRequest(url){return {url:installed&&enabled()&&allowed(url)?'solarless-map://'+encodeURIComponent(url):url};}
-    async function stats(){try{const db=await database();return await new Promise((resolve,reject)=>{const r=db.transaction('meta').objectStore('meta').getAll();r.onsuccess=()=>resolve({bytes:r.result.reduce((n,x)=>n+x.size,0),count:r.result.length,maxBytes:MAX_BYTES,offline,storageFailed,native:native()});r.onerror=()=>reject(r.error);});}catch{return {bytes:0,count:0,maxBytes:MAX_BYTES,offline,storageFailed:true,native:native()};}}
-    async function clear(){generation++;try{const db=await database();await new Promise((resolve,reject)=>{const tx=db.transaction(['meta','data'],'readwrite');tx.objectStore('meta').clear();tx.objectStore('data').clear();tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});offline=false;return true;}catch{return false;}}
-    return {MAX_BYTES,MAX_ENTRIES,MAX_AGE,allowed,expiry,eviction,configure,transformRequest,resource,stats,clear,enabled,setDisabled(value){disabled=!!value;generation++;},status:()=>({offline,storageFailed})};
+    async function stats(){try{const db=await database();return await new Promise((resolve,reject)=>{const r=db.transaction('meta').objectStore('meta').getAll();r.onsuccess=()=>resolve({bytes:r.result.reduce((n,x)=>n+x.size,0),count:r.result.length,maxBytes:byteLimit(),offline,storageFailed,native:native()});r.onerror=()=>reject(r.error);});}catch{return {bytes:0,count:0,maxBytes:byteLimit(),offline,storageFailed:true,native:native()};}}
+    async function trim(){if(root.StorageBudget?.protected())return false;const db=await database();await new Promise((resolve,reject)=>{const tx=db.transaction(['meta','data'],'readwrite'),r=tx.objectStore('meta').getAll();r.onsuccess=()=>{if(root.StorageBudget?.protected())return;for(const key of eviction(r.result,'',0,byteLimit())){tx.objectStore('meta').delete(key);tx.objectStore('data').delete(key);}};tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error);});return true;}
+    async function clear(){if(root.StorageBudget?.protected())return false;generation++;try{const db=await database();if(root.StorageBudget?.protected())return false;await new Promise((resolve,reject)=>{const tx=db.transaction(['meta','data'],'readwrite');tx.objectStore('meta').clear();tx.objectStore('data').clear();tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});setOffline(false);storageFailed=false;return true;}catch{return false;}}
+    return {MAX_BYTES,MAX_ENTRIES,MAX_AGE,allowed,expiry,eviction,configure,transformRequest,resource,stats,clear,trim,enabled,setDisabled(value){disabled=!!value;generation++;},status:()=>({offline,storageFailed})};
 });

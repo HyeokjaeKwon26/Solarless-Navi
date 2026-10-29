@@ -31,6 +31,9 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm test
+
+      - name: Labelled drive regression gate
+        run: npm run test:drive-regression
       - run: npm run check:mirrors
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser

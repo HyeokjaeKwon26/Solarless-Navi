@@ -600,6 +600,7 @@
     }
 
     async function writeStoredSceneValue(storeName, key, value) {
+        if (storeName === 'tiles') return storeSceneEntries([{key,value}]);
         const db = await openPrecomputedDb();
         if (!db) return;
         try {
@@ -611,6 +612,7 @@
     }
 
     async function writeStoredSceneValues(storeName, values) {
+        if (storeName === 'tiles') return storeSceneEntries(values);
         const db = await openPrecomputedDb();
         if (!db || !Array.isArray(values) || !values.length) return;
         try {
@@ -631,51 +633,49 @@
         await writeStoredSceneValue('tiles', key, { ...record, key, lastAccess: now });
     }
 
-    async function pruneStoredSceneTiles() {
-        const db = await openPrecomputedDb();
-        if (!db) return;
-        const records = await new Promise(resolve => {
-            try {
-                const store = db.transaction('tiles', 'readonly').objectStore('tiles');
-                const valuesRequest = store.getAll();
-                const keysRequest = store.getAllKeys();
-                let values = null;
-                let keys = null;
-                const finish = () => {
-                    if (!values || !keys) return;
-                    resolve(values.map((value, index) => ({ ...(value || {}), key: value && value.key !== undefined ? value.key : keys[index] })));
-                };
-                valuesRequest.onsuccess = () => { values = valuesRequest.result || []; finish(); };
-                keysRequest.onsuccess = () => { keys = keysRequest.result || []; finish(); };
-                valuesRequest.onerror = () => resolve([]);
-                keysRequest.onerror = () => resolve([]);
-            } catch (error) {
-                resolve([]);
-            }
-        });
-        const now = Date.now();
-        const live = records.filter(record => record && (!record.expiresAt || record.expiresAt > now));
-        const expired = records.filter(record => record && record.expiresAt && record.expiresAt <= now);
-        let totalBytes = live.reduce((sum, record) => sum + (Number(record.bytes) || estimateCacheBytes(record.value)), 0);
-        const remove = expired.concat(live.sort((a, b) => Number(a.lastAccess || 0) - Number(b.lastAccess || 0)));
-        const toDelete = [];
-        for (const record of remove) {
-            if (!expired.includes(record) && live.length - toDelete.length <= PRECOMPUTED_CACHE_MAX_ENTRIES && totalBytes <= PRECOMPUTED_PERSISTENT_CACHE_MAX_BYTES) break;
-            const bytes = Number(record.bytes) || estimateCacheBytes(record.value);
-            totalBytes = Math.max(0, totalBytes - bytes);
-            toDelete.push(record);
-        }
-        if (!toDelete.length) return;
-        try {
-            const transaction = db.transaction('tiles', 'readwrite');
-            const store = transaction.objectStore('tiles');
-            for (const record of toDelete) {
-                if (record && record.key !== undefined) store.delete(record.key);
-            }
-        } catch (error) {
-            // Best-effort byte bound; memory cache remains authoritative.
-        }
+    // Read index keys only: checking space must not deserialize all scene payloads.
+    let sceneStoreTail = Promise.resolve();
+    function sceneTransaction(db, action) {
+        return new Promise(resolve => {try {const tx=db.transaction(['tiles','manifests'],'readwrite');action(tx);tx.oncomplete=()=>resolve(true);tx.onerror=tx.onabort=()=>resolve(false);}catch{resolve(false);}});
     }
+    function sceneSerial(action) {const job=sceneStoreTail.then(action);sceneStoreTail=job.catch(()=>false);return sceneStoreTail;}
+    async function sceneStorageRows() {
+        const db=await openPrecomputedDb();if(!db)return {rows:[],unknown:true};
+        return new Promise(resolve=>{try{
+            const tx=db.transaction('tiles'),store=tx.objectStore('tiles'),rows=new Map();let count=0;
+            const c=store.count();c.onsuccess=()=>{count=c.result;};
+            for(const [index,field] of [['bytes','bytes'],['lastAccess','used']]){
+                const req=store.index(index).openKeyCursor();req.onsuccess=()=>{const cursor=req.result;if(!cursor)return;const row=rows.get(cursor.primaryKey)||{key:cursor.primaryKey,used:0};row[field]=cursor.key;rows.set(row.key,row);cursor.continue();};
+            }
+            tx.oncomplete=()=>resolve({rows:[...rows.values()],unknown:rows.size!==count||[...rows.values()].some(r=>!Number.isFinite(r.bytes))});
+            tx.onerror=tx.onabort=()=>resolve({rows:[],unknown:true});
+        }catch{resolve({rows:[],unknown:true});}});
+    }
+    async function sceneStorageStats(){const data=await sceneStorageRows();return {bytes:data.rows.reduce((n,r)=>n+(Number(r.bytes)||0),0),count:data.rows.length,unknown:data.unknown};}
+    function scenePlan(rows,incoming,limit,protectedData){
+        if(root.StorageBudget)return root.StorageBudget.plan(rows,incoming,limit,protectedData);
+        const keys=new Set(incoming.map(r=>r.key)),kept=rows.filter(r=>!keys.has(r.key)).sort((a,b)=>a.used-b.used);let bytes=kept.reduce((n,r)=>n+r.bytes,0)+incoming.reduce((n,r)=>n+r.bytes,0);const remove=[];
+        for(const r of kept){if(bytes<=limit)break;remove.push(r.key);bytes-=r.bytes;}return {admit:bytes<=limit,remove};
+    }
+    function storeSceneEntries(values){return sceneSerial(async()=>{
+        if(!values?.length)return true;const db=await openPrecomputedDb();if(!db)return false;
+        const data=await sceneStorageRows();if(data.unknown)return false;
+        const incoming=values.map(e=>({key:e.key,bytes:estimateCacheBytes(e.value.value,e.value.bytes)}));
+        const plan=scenePlan(data.rows,incoming,root.StorageBudget?.limit('scene')||PRECOMPUTED_PERSISTENT_CACHE_MAX_BYTES,!!root.StorageBudget?.protected());
+        if(!plan.admit)return false;
+        return sceneTransaction(db,tx=>{const store=tx.objectStore('tiles');for(const key of plan.remove)store.delete(key);values.forEach((e,i)=>store.put({...e.value,bytes:incoming[i].bytes},e.key));});
+    });}
+    function pruneStoredSceneTiles(){return sceneSerial(async()=>{
+        if(root.StorageBudget?.protected())return false;const db=await openPrecomputedDb();if(!db)return false;
+        const data=await sceneStorageRows();if(data.unknown||root.StorageBudget?.protected())return false;
+        const plan=scenePlan(data.rows,[],root.StorageBudget?.limit('scene')||PRECOMPUTED_PERSISTENT_CACHE_MAX_BYTES,false);
+        return sceneTransaction(db,tx=>{for(const key of plan.remove)tx.objectStore('tiles').delete(key);});
+    });}
+    function clearSceneStorage(){return sceneSerial(async()=>{
+        if(root.StorageBudget?.protected())return false;const db=await openPrecomputedDb();if(!db||root.StorageBudget?.protected())return false;
+        const ok=await sceneTransaction(db,tx=>{tx.objectStore('tiles').clear();tx.objectStore('manifests').clear();});
+        if(ok){precomputedTileCache.clear();precomputedTileCacheBytes=0;precomputedManifestCache.clear();persistentTouchAt.clear();}return ok;
+    });}
 
     async function loadPrecomputedManifest(options = {}) {
         const manifestUrl = options.precomputedManifestUrl;
@@ -2118,7 +2118,7 @@
     }
 
     return {
-        statusAt, repairTile,
+        statusAt, repairTile, storageStats:sceneStorageStats, trimStorage:pruneStoredSceneTiles, clearStorage:clearSceneStorage,
         projectPoint,
         unprojectPoint,
         pointInPolygon,

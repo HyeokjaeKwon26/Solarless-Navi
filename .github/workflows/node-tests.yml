@@ -28,6 +28,9 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Labelled drive regression gate
+        run: npm run test:drive-regression
+
       - name: Install browser for regression tests
         run: npx playwright install --with-deps chromium
 

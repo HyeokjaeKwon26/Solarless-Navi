@@ -31,7 +31,9 @@
             const route=routes[ri]._model||(routes[ri]._model={analyzed:{coordinates:data.coordinates},maneuvers:data.maneuvers||[],distanceMeters:data.distanceMeters});
             const confirmed=guidance.confirmMatch(guidance.match(route,fix,state.snap),fix,state);
             const snap=confirmed.result;state={...state,...confirmed};
-            Object.assign(frame,{snapped:snap.isSnapped,reason:snap.reason,progressMeters:snap.progressMeters,matched:snap.isSnapped?[snap.lng,snap.lat]:null});
+            Object.assign(frame,{snapped:snap.isSnapped,reason:snap.reason,progressMeters:snap.progressMeters,rawDistanceMeters:snap.rawDistanceMeters??snap.distMeters,matched:snap.isSnapped?[snap.lng,snap.lat]:null});
+            const turn=guidance.next(route,snap);
+            if(turn){const limits=guidance.thresholds(fix.speedKmh,turn);frame.guidance={progressMeters:turn.progressMeters,sequence:turn.sequence,stage:turn.distanceFromCar<=limits.execute?'execute':turn.distanceFromCar<=limits.prepare?'prepare':turn.distanceFromCar<=limits.preview?'preview':null};}
             if(snap.isSnapped){
                 report.matched++;state.snap=snap;
                 if(lastSnap&&fix.timestamp-lastSnap.timestamp<=5000&&Math.abs(snap.progressMeters-lastSnap.progressMeters)>Math.max(60,(fix.speedKmh||0)/3.6*(fix.timestamp-lastSnap.timestamp)/1000*2))report.positionJumps++;

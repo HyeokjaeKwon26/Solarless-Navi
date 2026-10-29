@@ -4,6 +4,8 @@
     const empty=()=>({type:'FeatureCollection',features:[]});
     const valid=p=>Array.isArray(p)&&p.length>=2&&p.slice(0,2).every(Number.isFinite)&&Math.abs(p[0])<=180&&Math.abs(p[1])<85;
     const defaults={style:true,arrows:true,buildings:true,arrival:true,cache:true,shade:false,terrain:false};
+    const presets={basic:{...defaults},detailed:{...defaults,shade:true,terrain:true},low:{...defaults,buildings:false}};
+    function presetName(prefs){return Object.keys(presets).find(name=>Object.keys(defaults).every(key=>presets[name][key]===prefs[key]))||'custom';}
     function settings(storage){try{const raw=JSON.parse(storage?.getItem('solarless_map_details')||'{}');return Object.fromEntries(Object.entries(defaults).map(([k,v])=>[k,typeof raw[k]==='boolean'?raw[k]:v]));}catch{return {...defaults};}}
     function meters(a,b){if(!valid(a)||!valid(b))return Infinity;return Math.hypot((a[0]-b[0])*Math.cos((a[1]+b[1])*Math.PI/360),a[1]-b[1])*111195;}
     function offset(p,x,y){return [p[0]+x/(111195*Math.cos(p[1]*Math.PI/180)),p[1]+y/111195];}
@@ -69,6 +71,17 @@
         return data;
     }
     const originalStyles=new WeakMap();
+    function focusLabels(s){
+        if(!s.reliable||!s.model||!Number.isFinite(s.progress))return [];
+        const current=(s.model.maneuvers||[]).filter(m=>m.progressMeters<=s.progress+5).at(-1),next=s.maneuver;
+        const labels=[];
+        for(const [kind,m,at] of [['current',current,s.progress+45],['next',next,(next?.progressMeters||0)+45]]){
+            if(!m||kind==='next'&&(!(next.distanceFromCar<=500)||m.type==='arrive'))continue;
+            const name=[m.name||m.ref,m.exits?(String(s.language).startsWith('ko')?m.exits+'번 출구':'Exit '+m.exits):''].filter(Boolean).join(' · ');
+            const points=slice(s.model,Math.max(0,at-1),at);if(!name||!points.length)continue;
+            labels.push({kind,name:name.slice(0,100),position:points.at(-1)});
+        }return labels;
+    }
     function style(map,dark,enabled=true){
         const saved=originalStyles.get(map);
         if(!enabled){if(saved){for(const [id,type,key,value] of saved)if(map.getLayer(id))map[type](id,key,value??null);originalStyles.delete(map);}return;}
@@ -80,6 +93,7 @@
             const source=layer['source-layer'];
             if(layer.type==='symbol'&&source==='poi')setLayout(layer.id,'visibility','none');
             if(layer.type==='symbol'&&source==='transportation_name'&&map.getLayoutProperty(layer.id,'text-field')){
+                setPaint(layer.id,'text-opacity',.65);
                 setPaint(layer.id,'text-color',dark?'#f1f5f9':'#17263b');setPaint(layer.id,'text-halo-color',dark?'#17263b':'#ffffff');setPaint(layer.id,'text-halo-width',2);
                 if(!/shield/.test(layer.id))setLayout(layer.id,'text-size',['interpolate',['linear'],['zoom'],12,12,16,16,19,19]);
             }
@@ -143,5 +157,5 @@
         }
         return {update,arrival:()=>lastArrival,terrain:()=>terrainOn,dispose(){if(disposed)return;setTerrain(false);disposed=true;map.off('error',terrainError);}};
     }
-    return {defaults,settings,valid,meters,offset,slice,arrowData,shadeData,arrivalData,corridor,roadLines,style,create};
+    return {defaults,presets,presetName,settings,valid,meters,offset,slice,arrowData,shadeData,arrivalData,corridor,roadLines,focusLabels,style,create};
 });

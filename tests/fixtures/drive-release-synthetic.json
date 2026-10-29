@@ -1,0 +1,222 @@
+{
+  "version": 2,
+  "synthetic": true,
+  "samples": [
+    {
+      "lat": 0,
+      "lng": 0.001,
+      "timestamp": 10000,
+      "receivedAt": 10000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 111.19500000000001
+    },
+    {
+      "lat": 0,
+      "lng": 0.0011,
+      "timestamp": 11000,
+      "receivedAt": 11000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 122.31450000000001
+    },
+    {
+      "lat": 0,
+      "lng": 0.0012000000000000001,
+      "timestamp": 12000,
+      "receivedAt": 12000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 133.43400000000003
+    },
+    {
+      "lat": 0,
+      "lng": 0.0013,
+      "timestamp": 13000,
+      "receivedAt": 13000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 144.55349999999999
+    },
+    {
+      "lat": 0,
+      "lng": 0.0014,
+      "timestamp": 14000,
+      "receivedAt": 14000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 155.673
+    },
+    {
+      "lat": 0,
+      "lng": 0.0015,
+      "timestamp": 15000,
+      "receivedAt": 15000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 166.7925
+    },
+    {
+      "lat": 0,
+      "lng": 0.0016,
+      "timestamp": 16000,
+      "receivedAt": 16000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 177.912
+    },
+    {
+      "lat": 0,
+      "lng": 0.0017000000000000001,
+      "timestamp": 17000,
+      "receivedAt": 17000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 189.03150000000002
+    },
+    {
+      "lat": 0,
+      "lng": 0.0018,
+      "timestamp": 18000,
+      "receivedAt": 18000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 200.15099999999998
+    },
+    {
+      "lat": 0,
+      "lng": 0.0019000000000000002,
+      "timestamp": 19000,
+      "receivedAt": 19000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 211.27050000000003
+    },
+    {
+      "lat": 0,
+      "lng": 0.002,
+      "timestamp": 20000,
+      "receivedAt": 20000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 222.39000000000001
+    },
+    {
+      "lat": 0,
+      "lng": 0.0021000000000000003,
+      "timestamp": 21000,
+      "receivedAt": 21000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 233.50950000000003
+    },
+    {
+      "lat": 0,
+      "lng": 0.0022,
+      "timestamp": 22000,
+      "receivedAt": 22000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 244.62900000000002
+    },
+    {
+      "lat": 0,
+      "lng": 0.0023,
+      "timestamp": 23000,
+      "receivedAt": 23000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 255.7485
+    },
+    {
+      "lat": 0,
+      "lng": 0.0024000000000000002,
+      "timestamp": 24000,
+      "receivedAt": 24000,
+      "accuracy": 5,
+      "reportedSpeedKmh": 40,
+      "heading": 90,
+      "expectedMatched": true,
+      "expectedProgressMeters": 266.86800000000005
+    }
+  ],
+  "events": [
+    {
+      "type": "route",
+      "recordedAt": 9000,
+      "data": {
+        "coordinates": [
+          [
+            0,
+            0
+          ],
+          [
+            0.003,
+            0
+          ],
+          [
+            0.01,
+            0
+          ]
+        ],
+        "distanceMeters": 1112,
+        "maneuvers": [
+          {
+            "type": "turn",
+            "location": [
+              0.003,
+              0
+            ],
+            "cumulativeDistance": 333.6
+          }
+        ]
+      }
+    },
+    {
+      "type": "guidance-ground-truth",
+      "recordedAt": 24000,
+      "data": {
+        "progressMeters": 333.585,
+        "stage": "prepare",
+        "latestAt": 21000
+      }
+    },
+    {
+      "type": "reroute-ground-truth",
+      "recordedAt": 24000,
+      "data": {
+        "start": 10000,
+        "end": 24000,
+        "allowed": false
+      }
+    }
+  ]
+}

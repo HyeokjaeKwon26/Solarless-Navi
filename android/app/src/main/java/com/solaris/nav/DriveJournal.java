@@ -30,6 +30,15 @@ final class DriveJournal {
         active = context.getSharedPreferences("drive-journal", 0).getBoolean("active", false);
     }
     boolean isActive() { return active; }
+    interface StatsCallback { void accept(long bytes); }
+    void storageBytes(StatsCallback callback) {
+        io.execute(() -> {
+            flushBuffer();
+            long bytes = 0;
+            for (int i = 0; i < 4; i++) bytes += new File(directory, i + ".jsonl").length();
+            callback.accept(bytes);
+        });
+    }
     synchronized void setActive(boolean value) {
         active = value;
         context.getSharedPreferences("drive-journal", 0).edit().putBoolean("active", value).apply();

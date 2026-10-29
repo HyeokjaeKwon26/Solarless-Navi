@@ -398,8 +398,9 @@ test('system voice destination requires address selection and remembers recognit
 test('manual stops keep the final destination and comparison controls fit a narrow phone',async({page})=>{
     const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');
     await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#mobile-toggle-panel').click();
-    await page.locator('#btn-compare-routes').click();await expect(page.locator('#journey-detail-body')).toContainText('Estimated route overlap');
-    await page.locator('#btn-close-journey-detail').click();
+    await page.locator('#btn-compare-routes').click();await expect(page.locator('#route-compare-modal')).toBeVisible();
+    await expect(page.locator('#route-compare-map .leaflet-overlay-pane path')).not.toHaveCount(0);
+    await page.locator('#route-compare-close').click();
     await page.locator('#btn-add-stop').click();await selectDestination(page,'Bravo');
     await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
     const plan=await page.evaluate(()=>TripTools.get());expect(plan.current.name).toContain('Bravo');expect(plan.pending[0].name).toContain('Alpha');
@@ -2036,6 +2037,8 @@ test('map cache serves real vector resources offline and can be cleared',async({
         const json=JSON.parse(new TextDecoder().decode(first));return {version:json.version,bytes:(await MapCache.stats()).bytes};
     });
     expect(result.version).toBe(8);expect(result.bytes).toBeLessThanOrEqual(32*1048576);expect(state.count()).toBe(before);
+    expect(await page.evaluate(()=>MapCache.clear())).toBe(false);
+    await page.evaluate(()=>journeyTestApi.stop());
     await page.evaluate(async()=>{if(!await MapCache.clear())throw Error('clear failed');});expect(await page.evaluate(async()=>(await MapCache.stats()).count)).toBe(0);expect(state.errors).toEqual([]);
 });
 
@@ -2090,4 +2093,50 @@ test('terrain request failure leaves the base map and guidance alive',async({pag
     expect(await page.evaluate(()=>drivingTestMap.getTerrain())).toBeNull();
     await expect(page.locator('#driving-map')).toHaveClass(/ready/);
     expect(await page.evaluate(()=>!!drivingTestMap.getSource('driving-route'))).toBe(true);expect(state.errors).toEqual([]);
+});
+
+test('refinement presets and managed budget persist without changing guidance preferences',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.setViewportSize({width:320,height:740});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#map-detail-preset').selectOption('detailed');await expect(page.locator('#map-detail-terrain')).toBeChecked();await expect(page.locator('#map-detail-shade')).toBeChecked();
+    await page.locator('#map-detail-preset').selectOption('low');await expect(page.locator('#map-detail-buildings')).not.toBeChecked();await expect(page.locator('#map-detail-arrows')).toBeChecked();
+    await page.locator('#storage-limit').selectOption('160');await expect(page.locator('#storage-message')).toContainText('Done');
+    await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#map-detail-preset')).toHaveValue('low');await expect(page.locator('#storage-limit')).toHaveValue('160');
+    await page.locator('#storage-refresh').click();await expect(page.locator('#storage-summary')).toContainText('Known total');
+    await page.locator('#btn-drive-record').click();await expect(page.locator('#btn-drive-record')).toHaveAttribute('data-recording','true');
+    await page.locator('#storage-clear-recordings').click();await expect(page.locator('#btn-drive-record')).toHaveAttribute('data-recording','false');
+    const box=await page.locator('#storage-settings').evaluate(e=>({width:e.clientWidth,scroll:e.scrollWidth}));expect(box.scroll).toBeLessThanOrEqual(box.width+1);
+    await page.screenshot({path:test.info().outputPath('storage-presets-320.png')});expect(state.errors).toEqual([]);
+});
+
+test('refinement scene budget trims LRU metadata while active sessions protect every category',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');
+    const result=await page.evaluate(async()=>{
+        await SceneShadow.storageStats();
+        const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('solarless-scene-cache',2);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+        await new Promise((resolve,reject)=>{const tx=db.transaction('tiles','readwrite');for(const [key,used]of [['old',1],['new',2]])tx.objectStore('tiles').put({value:'{}',bytes:20*1048576,lastAccess:used},key);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});
+        let busy=true;StorageBudget.init(()=>busy);const protectedResults=await Promise.all(['map','scene','roads','recordings'].map(kind=>StorageBudget.clear(kind).then(()=>false,e=>e.message==='STORAGE_IN_USE')));
+        const setting=await StorageBudget.set(160).then(()=>false,e=>e.message==='STORAGE_IN_USE');const before=await SceneShadow.storageStats();busy=false;await StorageBudget.set(160);const after=await SceneShadow.storageStats();
+        const keys=await new Promise(resolve=>{const r=db.transaction('tiles').objectStore('tiles').getAllKeys();r.onsuccess=()=>resolve(r.result);});
+        await StorageBudget.clear('scene');const cleared=await SceneShadow.storageStats();db.close();return {protectedResults,setting,before,after,keys,cleared};
+    });
+    expect(result.protectedResults).toEqual([true,true,true,true]);expect(result.setting).toBe(true);expect(result.before.bytes).toBe(40*1048576);expect(result.after.bytes).toBe(20*1048576);expect(result.keys).toEqual(['new']);expect(result.cleared.bytes).toBe(0);expect(state.errors).toEqual([]);
+});
+
+test('refinement road labels stay bounded and disappear with uncertain GPS',async({page})=>{
+    const state=await detailedMapFixture(page);
+    await expect.poll(()=>page.evaluate(()=>{
+        const s=mapDetailBase;mapDetailUpdate({...s,reliable:true,progress:0,model:{...s.model,maneuvers:[{name:'Current road',progressMeters:0}]},maneuver:{...s.maneuver,name:'Next road',distanceFromCar:200}});
+        return [...document.querySelectorAll('.driving-road-label')].filter(e=>!e.hidden).length;
+    })).toBeGreaterThan(0);
+    expect(await page.locator('.driving-road-label').count()).toBeLessThanOrEqual(2);
+    await page.screenshot({path:test.info().outputPath('road-labels.png')});
+    await page.evaluate(()=>mapDetailUpdate({...mapDetailBase,reliable:false}));await expect(page.locator('.driving-road-label:visible')).toHaveCount(0);expect(state.errors).toEqual([]);
+});
+
+test('refinement visual comparison groups identical geometry and closes without changing selection',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-compare-routes').click();await expect(page.locator('#route-compare-modal')).toBeVisible();await expect(page.locator('#route-compare-summary')).toContainText('Time vs baseline');
+    await page.setViewportSize({width:320,height:740});const size=await page.locator('.map-review-card').evaluate(e=>({client:e.clientWidth,scroll:e.scrollWidth}));expect(size.scroll).toBeLessThanOrEqual(size.client+1);
+    await page.screenshot({path:test.info().outputPath('route-differences-320.png')});await page.keyboard.press('Escape');await expect(page.locator('#route-compare-modal')).toHaveCount(0);
+    await page.locator('#btn-compare-routes').click();await page.evaluate(()=>window.dispatchEvent(new PopStateEvent('popstate')));await expect(page.locator('#route-compare-modal')).toHaveCount(0);await expect(page.locator('#btn-compare-routes')).toBeFocused();expect(state.errors).toEqual([]);
 });

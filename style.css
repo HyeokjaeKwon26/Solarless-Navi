@@ -1485,3 +1485,15 @@ body.constrained-controls.map-tools-open #btn-map-tools { position:sticky; botto
 #map-detail-status { margin:6px 8px; color:#bae6fd; font-size:11px; line-height:1.35; overflow-wrap:anywhere; }
 body.pip-mode #map-detail-status { display:none; }
 @media (orientation:landscape) and (max-height:540px) { #map-detail-status { font-size:9px; max-height:38px; overflow:auto; } }
+.driving-road-label { max-width:180px; padding:4px 7px; border:1px solid #475569; border-radius:6px; background:#f8faf2; color:#172033; font:600 13px/1.3 sans-serif; box-shadow:0 1px 3px #0005; white-space:normal; overflow-wrap:anywhere; pointer-events:none; text-align:center; }
+.driving-road-label.next-road { border:2px solid #0284c7; }
+.driving-road-label[hidden] { display:none!important; }
+.map-review-modal { position:fixed; inset:0; z-index:11000; background:#020617d9; display:flex; align-items:center; justify-content:center; padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom)); }
+.map-review-card { width:min(620px,100%); max-height:92dvh; overflow:auto; padding:16px; border:2px solid #38bdf8; border-radius:18px; background:#0f172a; color:#e2e8f0; }
+.map-review-card h3 { margin:0 0 12px; }
+#route-compare-map { height:clamp(220px,43dvh,420px); border-radius:10px; }
+#route-compare-select, #map-detail-preset, #storage-limit { display:block; width:100%; min-height:46px; margin:10px 0; border:1px solid #38bdf8; border-radius:10px; background:#172b40; color:#e2e8f0; padding:8px; font:inherit; }
+#storage-settings .nav-btn { margin-top:8px; }
+#storage-summary, #storage-note { overflow-wrap:anywhere; font-size:.9rem; line-height:1.5; }
+
+.driving-road-label { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
