@@ -530,7 +530,11 @@ const style = {
 async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false, initialAccuracy = 5, holdWatchFix = false, pitched = false, nearTurns = false } = {}) {
     const state = { routes: [], errors: [], releaseBravo: null, bravoFinished: false };
     page.on('pageerror', error => state.errors.push(error.stack || error.message));
-    page.on('dialog', dialog => dialog.accept());
+    page.on('dialog', dialog => dialog.accept().catch(error => {
+        // Reload can emit an initialization dialog while Playwright tears down
+        // the page. Keep real dialog errors; ignore only a closed test target.
+        if(!page.isClosed()&&!/Test ended|Target page, context or browser has been closed/.test(error.message))state.errors.push(error.message);
+    }));
     await page.addInitScript(({initialAccuracy, holdWatchFix,pitched}) => {
         // Existing Leaflet interaction cases explicitly retain the 2D renderer.
         if(!localStorage.getItem('solarless_driving_3d'))localStorage.setItem('solarless_driving_3d',String(pitched));
@@ -1702,7 +1706,18 @@ test('tilted junction camera fits consecutive turns and changes geometry colors 
     expect(result.points.length).toBe(2);for(const p of result.points){expect(p.x).toBeGreaterThan(10);expect(p.x).toBeLessThan(result.width-10);expect(p.y).toBeGreaterThan(result.top);expect(p.y).toBeLessThan(result.bottom);}
     await page.screenshot({path:test.info().outputPath('tilted-junction.png')});
     for(const size of [{width:320,height:740},{width:640,height:320}]){
-        await page.setViewportSize(size);await expect(page.locator('#btn-driving-view')).toBeVisible();
+        await page.setViewportSize(size);
+        if(size.width===320){
+            // A tall junction banner leaves too little room for the full tool
+            // stack. The automatic fold must keep 3D reachable through More.
+            await expect(page.locator('#btn-map-tools')).toBeVisible();
+            await page.locator('#btn-map-tools').click();
+            await expect(page.locator('#btn-map-tools')).toHaveAttribute('aria-expanded','true');
+        }
+        await expect(page.locator('#btn-driving-view')).toBeVisible();
+        await page.locator('#btn-driving-view').click({trial:true});
+        expect(await page.locator('#map-perspective-wrapper').evaluate(el=>[el.scrollLeft,el.scrollTop])).toEqual([0,0]);
+        expect(await page.evaluate(()=>[scrollX,scrollY])).toEqual([0,0]);
         const box=await page.locator('#btn-driving-view').boundingBox();expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(size.width);expect(box.height).toBeGreaterThanOrEqual(44);
         if(size.width===640){
             await expect.poll(()=>page.evaluate(()=>drivingTestMap.getPadding().left)).toBeGreaterThan(250);
