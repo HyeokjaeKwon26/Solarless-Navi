@@ -11,6 +11,7 @@
 - 기존 기록의 매칭 성공 여부를 정답으로 사용하지 않는다. 현재 GPS 검증·경로 매칭 규칙으로 다시 계산한다. 경로 없는 구간과 거부된 위치도 집계한다.
 - 명시적 정답 위치 `expectedProgressMeters`/`expectedToleranceMeters`, 회전 안내 기준 이벤트 `turn-ground-truth`(`utteranceId`, `latestRequestAt`)가 있을 때만 오류율을 계산한다. 라벨이 없으면 `null`이다. 음성 요청 시각은 실제 스피커 재생 시각이 아니다.
 - CLI: `node tools/replay-drive.cjs drive.json before.json`, 업데이트 후 `node tools/replay-drive.cjs drive.json after.json before.json`. 원본 파일 SHA-256이 같아야 비교한다. GPS 거부·불확실·진행 급변, 라벨이 있는 오매칭/안내 지연, 기존 재탐색 및 ETA 지표를 확인할 수 있다.
+- ETA 오차는 기록 당시 예측과 실제 도착의 차이이며 새 버전으로 ETA를 다시 예측한 결과가 아니다. 같은 기록의 ETA 오차 차이는 정상적으로 0이다. Android GPS도 JS 매칭 규칙으로 재생하므로 Java 엔진 전체의 동일 실행을 뜻하지 않는다.
 - 화면 입력은 최대 16 MiB, 재생은 최대 50,000개 샘플/60,000개 이벤트 및 2,500만 기하 비교로 제한한다. 주변 도로 전체 그래프와 실제 음성·지도 영상은 기록에 포함되지 않으므로 재생은 GPS/선택 경로 알고리즘 평가이며 전체 실행 환경 복제는 아니다.
 
 ### 2. 주변 도로 후보 검증
@@ -55,6 +56,17 @@
 - 고정된 릴리스 소스의 전체 브라우저 및 배포 검증은 아래 최종 결과에 기록한다.
 - 의존성 audit: 취약점 0. root/www 68개 자산 SHA-256 일치.
 - 실제 공개 manifest 조회에서 Boston 타일 `160:96`의 출처·원본 날짜·ZIP 크기를 확인했다. 입구 검색 공개 서버는 이번 실행 환경에서 429 또는 시간초과를 반환했다. 따라서 온라인 실자료 입구 검색의 성공은 확인하지 못했으며, 후보 필터링·선택 화면·Android HTTP 인자는 모의 응답으로 검증했다. 서비스 사용 불가 시 저장 자료 또는 수동 도착 핀을 사용한다.
+
+## 최종 배포 검증
+
+- 릴리스 소스: `a4ae7f2a98d70eb77f693cd0f16e925fc344a560` / `app-v1.3.20`.
+- [APK 배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40817531540) 성공: Node 331개, 브라우저 168개, Android 단위 테스트·debug 빌드·lint 및 서명 release 빌드 통과. [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40817527034)도 성공.
+- [공개 APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.20/SolarLessNavi-1.3.20.apk)를 직접 다운로드해 검증했다. 크기 4,468,882 bytes, packageName `com.solaris.nav`, versionName `1.3.20`, versionCode `24`, minSdk `22`, non-debuggable.
+- SHA-256: `8fce77507689788ae838dbd1a0d297b1a1feb971026efbc6004f0e9a5f757101`.
+- 서명 인증서 SHA-256: `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`. 기존 정식 키와 동일하며 apksigner 검증 통과.
+- APK의 웹 자산 68개를 태그의 `www` 파일과 바이트 단위로 비교해 일치했다. APK 안에 지도 DB를 추가하지 않았다.
+- 공개 `update.json`·APK·`SHA256SUMS.txt`의 버전·크기·해시·서명이 일치했다. 배포된 업데이트 코드로 실제 GitHub HTTP 응답을 읽어 설치 코드 9, 17~23은 `available`, 24는 `idle`임을 확인했다. 설치 정보는 모의 값이며 Android 설치기 실행·실제 폰 데이터 유지는 검증하지 않았다.
+- [검증 결과 JSON](data/app-release-1.3.20-verification.json).
 
 ## 실제 폰에서 확인할 항목 — 개발 환경 테스트로 대체하지 않음
 
