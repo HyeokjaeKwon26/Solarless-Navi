@@ -1031,7 +1031,11 @@ test('driving focus keeps three journey totals visible and exposes analysis sepa
     await page.locator('#driving-focus-label').click();
     await expect(page.locator('#toggle-driving-focus')).not.toBeChecked();
     await expect(page.locator('body')).not.toHaveClass(/driving-focus/);
-    await expect(page.locator('#desc-glare')).toBeVisible();
+    // Duplicate route roles stay compact even outside focus mode; their full
+    // explanation remains available in the analysis dialog checked above.
+    await expect(page.locator('#desc-fastest')).toBeVisible();
+    if(await page.locator('#desc-glare').evaluate(el=>!!el.closest('.shared-route-role')))await expect(page.locator('#desc-glare')).toBeHidden();
+    else await expect(page.locator('#desc-glare')).toBeVisible();
     expect(await page.evaluate(()=>localStorage.getItem('solarless_driving_focus'))).toBe('false');
     expect(state.errors).toEqual([]);
 });
