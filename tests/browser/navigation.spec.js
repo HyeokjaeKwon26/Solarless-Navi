@@ -1638,6 +1638,9 @@ test('tilted junction camera fits consecutive turns and changes geometry colors 
 test('tilted view releases its renderer for saver and PiP, resumes and recovers context loss to 2D',async({page})=>{
     const state=await startTilted(page);
     await page.locator('#btn-toggle-battery-saver').click();await expect(page.locator('#driving-map canvas')).toHaveCount(0);await expect(page.locator('#map')).toBeVisible();
+    await page.locator('#btn-driving-view').click();
+    expect(await page.evaluate(()=>localStorage.getItem('solarless_driving_3d'))).toBe('true');
+    await expect(page.locator('#driving-map canvas')).toHaveCount(0);
     await page.locator('#btn-toggle-battery-saver').click();await expect(page.locator('#driving-map')).toHaveClass(/ready/);
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('solarless:pipmode',{detail:{inPip:true}})));await expect(page.locator('#driving-map canvas')).toHaveCount(0);
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('solarless:pipmode',{detail:{inPip:false}})));await expect(page.locator('#driving-map')).toHaveClass(/ready/);

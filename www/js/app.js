@@ -1007,7 +1007,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showApiNotice(I18n.getLanguage().startsWith('ko')?'조감도 지도를 불러오지 못해 2D로 전환했습니다.':'Tilted map unavailable. Switched to 2D.');
             }});
         document.getElementById('btn-driving-view').addEventListener('click',()=>{
-            drivingViewWanted=drivingView.failed()?true:!drivingViewWanted;drivingView.retry();
+            drivingViewWanted=!drivingView.active();drivingView.retry();
             try{localStorage.setItem('solarless_driving_3d',String(drivingViewWanted));}catch{}
             syncDrivingView();
             if(drivingViewWanted&&(isBatterySaverActive||isPipMode||isSatelliteViewActive||isRasterMapFallbackActive))showApiNotice(I18n.getLanguage().startsWith('ko')
