@@ -7,10 +7,28 @@
     'use strict';
     const empty=()=>({type:'FeatureCollection',features:[]});
     const valid=p=>Array.isArray(p)&&p.length>=2&&p.slice(0,2).every(Number.isFinite)&&Math.abs(p[0])<=180&&Math.abs(p[1])<=85;
+    function quality(previous={},sample={}){
+        const now=sample.now||0,thermal=Number(sample.thermalStatus)||0;
+        const pressure=thermal>=2||(Number.isFinite(sample.fps)&&sample.fps<24);
+        const healthy=thermal<2&&(!Number.isFinite(sample.fps)||sample.fps>=40);
+        const badSince=pressure?(previous.badSince??now):null;
+        const goodSince=healthy?(previous.goodSince??now):null;
+        const reduced=thermal>=2||(pressure&&now-badSince>=3000)||!!previous.reduced&&!(healthy&&now-goodSince>=15000);
+        return {reduced,badSince,goodSince,interval:reduced?66:33,pixelRatio:reduced?1:1.5};
+    }
+    function curve(s){
+        const items=(s.segments||[]).slice(s.index||0,(s.index||0)+5);
+        const bearings=items.map(e=>{
+            if(!e.p1||!e.p2)return null;
+            return Math.atan2((e.p2[1]-e.p1[1])*Math.cos((e.p1[0]+e.p2[0])*Math.PI/360),e.p2[0]-e.p1[0])*180/Math.PI;
+        }).filter(Number.isFinite);
+        return bearings.some((b,i)=>i>0&&Math.abs((b-bearings[i-1]+540)%360-180)>30);
+    }
     function policy(s){
         const m=s.maneuver, distance=m?.distanceFromCar;
         const close=!!(s.reliable&&s.autoZoom&&m&&m.type!=='arrive'&&Number.isFinite(distance)&&distance>=0&&distance<=Math.max(150,Math.min(500,(s.speed||0)/3.6*12)));
-        return {pitch:close?32:50,zoom:close?(s.speed>=80?16.7:17.8):(s.speed>=80?16:17),close,
+        const bending=s.reliable&&curve(s),stopped=s.reliable&&Number.isFinite(s.speed)&&s.speed<3;
+        return {pitch:close?32:bending||stopped?42:50,zoom:close?(s.speed>=80?16.7:17.8):(s.speed>=80?16:bending?16.7:stopped?17.2:17),close,
             points:close?[m.location,m.following?.distanceAfter<=180?m.following.location:null].filter(valid):[]};
     }
     function routeData(segments,index,position,color,uncertain){
@@ -30,8 +48,19 @@
         let map=null,vehicle=null,end=null,ready=false,failed=false,state=null,timer=null,theme='',generation=0;
         let lastDataAt=0,lastSegments=null,lastIndex=-1,lastReliable=null,lastFrame=0,lastCameraAt=0,errors=[],fitKey='',fitCeiling=20;
         let active=false;
+        let performanceState={},raf=0,frameCount=0,frameStarted=0,lastFps=null,appliedRatio=0,heldBearing=null;
+        function measure(at){
+            if(!active)return;
+            if(state?.speed>3&&!state.panning){
+                if(!frameStarted)frameStarted=at;
+                frameCount++;
+                if(at-frameStarted>=2000){lastFps=frameCount*1000/(at-frameStarted);frameCount=0;frameStarted=at;}
+            }else {frameCount=0;frameStarted=0;lastFps=null;}
+            raf=requestAnimationFrame(measure);
+        }
         const activate=value=>{if(active===value)return;active=value;container.classList.toggle('ready',value);onActive(value);};
         function destroy(){
+            cancelAnimationFrame(raf);frameCount=0;frameStarted=0;lastFps=null;heldBearing=null;appliedRatio=0;
             generation++;clearTimeout(timer);ready=false;activate(false);
             if(map){vehicle?.remove();end?.remove();map.remove();}
             map=null;vehicle=null;end=null;lastSegments=null;lastIndex=-1;lastDataAt=0;lastFrame=0;lastCameraAt=0;container.replaceChildren();
@@ -65,14 +94,17 @@
                     map.addLayer({id:'driving-junctions',type:'circle',source:'driving-junctions',paint:{'circle-radius':8,'circle-color':'#f8fafc','circle-stroke-color':'#0369a1','circle-stroke-width':3}});
                     vehicle=new gl.Marker({element:makeMarker('driving-vehicle','▲'),rotationAlignment:'map',pitchAlignment:'map'}).setLngLat(state.position).addTo(map);
                     end=new gl.Marker({element:makeMarker('driving-end','⚑')}).setLngLat(state.position).addTo(map);
-                    ready=true;activate(true);draw(true);
+                    ready=true;activate(true);raf=requestAnimationFrame(measure);draw(true);
                     }catch{fail();}
                 });
             }catch{fail();}
         }
         function draw(force=false){
             if(!ready||!map||!state)return;
-            const now=Date.now();if(!force&&now-lastFrame<33)return;lastFrame=now;
+            const now=Date.now();performanceState=quality(performanceState,{now,fps:lastFps,thermalStatus:state.thermalStatus});
+            if(!force&&now-lastFrame<performanceState.interval)return;lastFrame=now;
+            const ratio=Math.min(performanceState.pixelRatio,window.devicePixelRatio||1);
+            if(ratio!==appliedRatio){map.setPixelRatio(ratio);appliedRatio=ratio;options.onQuality?.(performanceState.reduced);}
             vehicle.setLngLat(state.position).setRotation(Number.isFinite(state.heading)?state.heading:0);
             vehicle.getElement().classList.toggle('uncertain',!state.reliable);
             end.getElement().hidden=!valid(state.end);if(valid(state.end))end.setLngLat(state.end);
@@ -91,7 +123,10 @@
             const room=Math.max(0,size.height-top-bottom);
             const left=Math.min(size.width*.48,Math.max(24,state.left||32)),right=state.left>32?24:Math.min(88,size.width*.2);
             const padding={top:top+room*.3,bottom,left,right};
-            const camera={center:state.position,bearing:state.bearing||0,pitch:p.pitch,padding};
+            const desired=state.bearing||0;
+            if(heldBearing===null||state.speed>=3||state.bearing===0)heldBearing=desired;
+            const delta=(heldBearing-map.getBearing()+540)%360-180;
+            const camera={center:state.position,bearing:force?heldBearing:map.getBearing()+delta*Math.min(1,Math.max(.05,(now-lastCameraAt)/350)),pitch:p.pitch,padding};
             // Smooth the camera's zoom/pitch rather than starting overlapping
             // easeTo animations on every GPS interpolation frame.
             const dt=Math.min(1,(now-lastCameraAt)/500);lastCameraAt=now;
@@ -123,5 +158,5 @@
         return {update,resize,recenter:()=>{if(state){state.panning=false;draw(true);}},retry:()=>{failed=false;},
             active:()=>active,failed:()=>failed,dispose:()=>{observer.disconnect();destroy();}};
     }
-    return {policy,routeData,create};
+    return {policy,routeData,create,quality};
 });

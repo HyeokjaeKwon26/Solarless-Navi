@@ -182,6 +182,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let routingUnavailable = false;
     let lastReliableFixAt = 0;
     const driveRecorder = DriveQuality.createRecorder();
+    DriveLab.init({live:()=>isLiveNavActive,notice:message=>showApiNotice(message),
+        recording:async()=>JSON.parse(await DriveArchive.exportRecording(driveRecorder.export())),
+        point:()=>{const c=map.getCenter();return [c.lng,c.lat];}});
     let lastProcessedNavigationTimestamp = 0;
     let lastProcessedNavigationPosition = null;
     let lastProcessedNavigationAccuracy = Infinity;
@@ -240,6 +243,7 @@ document.addEventListener('DOMContentLoaded', () => {
     DriveArchive.init().then(active => { if (active) { driveRecorder.start(); setDriveRecordLabel(true); } }).catch(() => {});
     document.getElementById('btn-drive-clear').addEventListener('click', async () => {
         try { await DriveArchive.clear(); } catch (e) { showApiNotice('삭제하지 못했습니다 / Could not delete recording'); return; }
+        DriveLab.clear();
         driveRecorder.stop();
         setDriveRecordLabel(false);
     });
@@ -262,6 +266,8 @@ document.addEventListener('DOMContentLoaded', () => {
         try { json = await DriveArchive.exportRecording(driveRecorder.export()); } catch (e) { showApiNotice('기록 읽기 실패 / Could not read recording'); return; }
         const recording = JSON.parse(json);
         recording.review = DriveQuality.review(recording);
+        recording.glareObservations = DriveLab.feedback();
+        recording.glareReview = GlareFeedback.summarize(recording.glareObservations);
         json = JSON.stringify(recording);
         const nativePlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Pip;
         if (window.Capacitor && window.Capacitor.isNativePlatform() && nativePlugin) {
@@ -566,7 +572,8 @@ document.addEventListener('DOMContentLoaded', () => {
             speedKmh: lastNavigationSpeedKmh, accuracy: lastProcessedNavigationAccuracy,
             timestamp: lastGpsTimestamp || Date.now() };
         let candidate = NavigationGuidance.match(route, fix, previous.snap);
-        if (candidate.isSnapped && window.RoadPack?.graph?.conflictingRoad([lng, lat], heading, candidate.distMeters)) {
+        const nearby = NearbyRoads.assess(window.RoadPack?.graph, fix, candidate, previous.nearby);
+        if (candidate.isSnapped && nearby.hold) {
             Object.assign(candidate, { isSnapped: false, lat, lng, reason: 'nearby-road-conflict' });
         }
         const confirmed = NavigationGuidance.confirmMatch(candidate, fix, previous);
@@ -575,7 +582,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Keep raw route distance independent of continuity/heading rejection.
         candidate.rawDistanceMeters = candidate.isSnapped ? candidate.distMeters :
             ShadowRouter.distanceToRoute(lat, lng, route.analyzed.coordinates);
-        navigationRouteProgress = { ...previous, fixKey: key, result: candidate, pending: confirmed.pending, recovering: confirmed.recovering };
+        navigationRouteProgress = { ...previous, nearby, fixKey: key, result: candidate, pending: confirmed.pending, recovering: confirmed.recovering };
         if (candidate.isSnapped) Object.assign(navigationRouteProgress, {
             value: candidate.segmentIndex + candidate.t, segmentIndex: candidate.segmentIndex,
             t: candidate.t, snap: candidate
@@ -1027,6 +1034,7 @@ document.addEventListener('DOMContentLoaded', () => {
         button.setAttribute('aria-label',button.title);
     }
     function syncDrivingView(){
+        if(isLiveNavActive)DriveLab.close();
         if(!drivingView)return;
         const reliable=!!(!drivingFixRejected&&!liveDestinationBackup&&lastReliableFixAt&&Date.now()-lastReliableFixAt<=10000&&!navigationRouteNeedsReliableOrigin&&
             (isFreeDriveMode||navigationRouteProgress.result?.isSnapped)&&!offRouteEvidence.confirmed);
@@ -1041,6 +1049,7 @@ document.addEventListener('DOMContentLoaded', () => {
             reliable,segments:drivingSceneSegments||selectedRouteObj?.analyzed?.segments,index:navigationRouteProgress.segmentIndex||0,
             end:selectedRouteObj&&!isFreeDriveMode?selectedRouteObj.analyzed?.coordinates?.at(-1):null,
             maneuver:!isFreeDriveMode&&reliable?lastTurnPresentation.maneuver:null,speed:lastNavigationSpeedKmh,
+            thermalStatus:runtimeHealth?.thermalStatus,
             autoZoom:autoZoomToggle.checked,panning:isUserMapPanning,reducedMotion:prefersReducedMotion(),
             top:landscape?62:banner.bottom-wrapper.top,left:landscape?banner.right-wrapper.left+12:32,
             bottom:Math.max(0,wrapper.bottom-bottom.top),
@@ -1349,6 +1358,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('driving-focus-label').textContent = ko ? '주행 집중 화면' : 'Focused driving display';
         document.getElementById('btn-route-analysis').textContent = ko ? '경로 분석 보기' : 'View route analysis';
         document.getElementById('btn-drive-report').textContent = ko ? '주행 품질 요약' : 'Drive quality summary';
+        document.getElementById('btn-drive-replay').textContent = ko ? '주행 재생·눈부심 평가' : 'Drive replay & glare review';
+        document.getElementById('btn-scene-status').textContent = ko ? '정밀 자료 상태·복구' : 'Scene data & repair';
         document.getElementById('btn-arrival-preview').textContent = ko ? '도착 구간 미리보기' : 'Preview arrival approach';
         document.getElementById('btn-voice-destination').textContent=ko?'음성으로 목적지 검색':'Search by voice';
         document.getElementById('voice-search-status').textContent=ko?'시스템 음성 입력 · 제공자에 따라 인터넷 필요':'System voice input · may require internet';
@@ -5692,9 +5703,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const markerOptions = navigationSnap
                 ? { knownSnap: navigationSnap, sampleTimestampMs: timestamp }
                 : { snapToRoute: false, sampleTimestampMs: timestamp };
+            const recordedSegment = driveRecorder.active && navigationSnap?.isSnapped && currentGlareSegments(selectedRouteObj,navigationSnap)[navigationSnap.segmentIndex];
             if (navigationSnap) driveRecorder.annotate(timestamp, {
                 snapReason: navigationSnap.reason, snapped: navigationSnap.isSnapped,
                 progressMeters: navigationSnap.progressMeters,
+                nearbyRoad: navigationRouteProgress.nearby?.status,
+                nearbyWay: navigationRouteProgress.nearby?.way,
+                glarePrediction: recordedSegment ? {...RoutePresentation.assessment(recordedSegment),
+                    computedAt:selectedRouteObj.glareSnapshot?.at,occlusionRatio:recordedSegment.occlusionRatio,
+                    evidenceKnown:recordedSegment.irradiance?.model==='OPEN_METEO_FORECAST'&&Number.isFinite(recordedSegment.occlusionRatio),
+                    roadHeading:recordedSegment.heading,passTime:recordedSegment.passTime,dni:recordedSegment.irradiance?.dni,
+                    occlusionAt:recordedSegment.occlusionAt,weatherModel:recordedSegment.irradiance?.model||null,shadeState:recordedSegment.shadeState||null} : null,
                 oppositeDirection: navigationSnap.reason === 'opposite-direction'
             });
 

@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "type": "solarless-drive-quality",
+  "synthetic": true,
+  "samples": [
+    {"lat": 0, "lng": 0.0001, "timestamp": 1000000, "receivedAt": 1000000, "accuracy": 5, "reportedSpeedKmh": 20, "heading": 90, "expectedProgressMeters": 11},
+    {"lat": 0, "lng": 0.00015, "timestamp": 1001000, "receivedAt": 1001000, "accuracy": 5, "reportedSpeedKmh": 20, "heading": 90, "expectedProgressMeters": 17},
+    {"lat": 0, "lng": 0.0002, "timestamp": 1002000, "receivedAt": 1002000, "accuracy": 100, "reportedSpeedKmh": 20, "heading": 90},
+    {"lat": 0, "lng": 0.00025, "timestamp": 1003000, "receivedAt": 1003000, "accuracy": 5, "reportedSpeedKmh": 20, "heading": 90, "expectedProgressMeters": 28}
+  ],
+  "events": [
+    {"type": "route", "recordedAt": 999000, "data": {"coordinates": [[0,0],[0.01,0]], "maneuvers": [], "distanceMeters": 1112}},
+    {"type": "voice", "recordedAt": 1001000, "data": {"utteranceId": "synthetic-turn-1", "status": "requested"}},
+    {"type": "turn-ground-truth", "recordedAt": 1003000, "data": {"utteranceId": "synthetic-turn-1", "latestRequestAt": 1001500}}
+  ]
+}

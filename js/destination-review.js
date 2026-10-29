@@ -1,12 +1,13 @@
 (function (root) {
     'use strict';
-    let map, marker, approach, endpoint, previewBounds, pending = null, selected, original, returnFocus, restoreSearch = false, preview = false;
+    let map, marker, approach, endpoint, previewBounds, pending = null, selected, original, returnFocus, restoreSearch = false, preview = false, searchGeneration=0;
     const el = id => document.getElementById(id);
     function fitApproach() {
         if (preview && previewBounds && !el('destination-review-modal').classList.contains('hidden'))
             map.fitBounds(previewBounds, {paddingTopLeft:[32,52],paddingBottomRight:[32,32],maxZoom:18,animate:false});
     }
     function finish(value) {
+        searchGeneration++;
         el('destination-review-modal').classList.add('hidden');
         if (restoreSearch) el('start-search-modal').classList.remove('hidden');
         const resolve = pending; pending = null;
@@ -25,6 +26,11 @@
         const ko = root.I18n.getLanguage().startsWith('ko');
         original = { lat: Number(coords.lat), lng: Number(coords.lng), source: coords.source }; selected = { lat: original.lat, lng: original.lng };
         preview = !!options.route;
+        searchGeneration++;
+        el('entrance-results').replaceChildren();
+        el('btn-find-entrances').disabled=false;
+        el('btn-find-entrances').hidden=preview;
+        el('btn-find-entrances').textContent=ko?'주변 차량·주차장 입구 찾기':'Find nearby vehicle / parking entrances';
         previewBounds = null;
         el('destination-entrance-confirmed').checked = coords.entranceConfirmed === true;
         el('destination-save-favorite').checked = false;
@@ -82,6 +88,20 @@
         return new Promise(resolve => { pending = resolve; });
     }
     el('destination-entrance-confirmed').addEventListener('change', updatePosition);
+    el('btn-find-entrances').addEventListener('click',async()=>{
+        const token=++searchGeneration,button=el('btn-find-entrances'),list=el('entrance-results'),ko=root.I18n.getLanguage().startsWith('ko');
+        button.disabled=true;list.textContent=ko?'OSM 입구 확인 중…':'Checking OSM entrances…';
+        try{
+            const found=await root.EntranceCandidates.find([original.lng,original.lat],root.RoadPack?.pack);
+            if(token!==searchGeneration)return;
+            list.replaceChildren();
+            const note=document.createElement('p');note.textContent=found.items.length?(ko?'지도에서 연결된 후보입니다. 출입 가능 여부와 도착 경로를 확인하세요.':'Mapped connections only. Review access and the resulting route.'):(ko?'확인 가능한 차량 입구가 없습니다. 도착점을 직접 확인하세요.':'No mapped vehicle entrance found. Check the arrival point manually.');list.append(note);
+            for(const item of found.items){const choice=document.createElement('button');choice.type='button';choice.className='nav-btn secondary';
+                choice.textContent=`${item.name||(item.kind==='parking'?(ko?'주차장 입구':'Parking entrance'):(ko?'차량 입구':'Vehicle entrance'))} · ${root.NavigationUnits.distance(item.distance)}${item.road?' · '+item.road:''}${item.oneWay?(ko?' · 일방통행 접근':' · one-way approach'):''}`;
+                choice.addEventListener('click',()=>{selected={lat:item.lat,lng:item.lng};marker.setLatLng(selected);map.setView(selected,18);el('destination-entrance-confirmed').checked=false;updatePosition();for(const b of list.querySelectorAll('button'))b.setAttribute('aria-pressed',String(b===choice));});list.append(choice);}
+        }catch(error){if(token===searchGeneration)list.textContent=error.message==='COOLDOWN'?(ko?'잠시 후 다시 확인하세요 (요청 간격 1분).':'Please wait one minute between requests.'):(ko?'입구 자료를 확인하지 못했습니다. 핀을 직접 조정할 수 있습니다.':'Entrance data unavailable. You can adjust the pin manually.');}
+        finally{if(token===searchGeneration)button.disabled=false;}
+    });
     el('btn-review-confirm').addEventListener('click', () => finish(preview ? null : { ...selected,
         entranceConfirmed: el('destination-entrance-confirmed').checked,
         saveFavorite: el('destination-save-favorite').checked,

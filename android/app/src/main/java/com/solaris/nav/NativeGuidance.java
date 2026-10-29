@@ -51,6 +51,21 @@ final class NativeGuidance {
             if (!NavigationProgress.finite(meters) || meters < 0) throw new JSONException("Invalid turn position");
         }
         progress = new NavigationProgress(points);
+        JSONObject nearby = snapshot.optJSONObject("nearbyRoads");
+        if (nearby != null) {
+            JSONArray edges = nearby.optJSONArray("edges");
+            if (edges != null && edges.length() <= 12000) {
+                double[][] values = new double[edges.length()][6];
+                for (int i=0;i<values.length;i++) {
+                    for(int j=0;j<6;j++) {
+                        values[i][j]=edges.getJSONArray(i).getDouble(j);
+                        if(!NavigationProgress.finite(values[i][j])) throw new JSONException("Invalid nearby road");
+                    }
+                    if(Math.abs(values[i][0])>180||Math.abs(values[i][2])>180||Math.abs(values[i][1])>85||Math.abs(values[i][3])>85) throw new JSONException("Invalid nearby coordinates");
+                }
+                progress.setNearbyRoads(values, nearby.optLong("expiresAt"));
+            }
+        }
         turns = candidateTurns; phases = new int[turns.length()];
         lastLocationAt = 0; uncertain = false;
         language = snapshot.optString("language", "en-US");

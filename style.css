@@ -1387,6 +1387,14 @@ body.battery-saver-active .route-summary-floating {
 body.pip-mode #trip-preview-modal, body.pip-mode #closure-offer { display:none; }
 @media(max-height:500px){.closure-offer{top:90px;max-height:55dvh;} #trip-preview-map{height:150px;}}
 
+.drive-lab-card { width:min(94vw,640px); max-height:88dvh; overflow:auto; }
+.drive-lab-card p, #entrance-results p { white-space:pre-line; overflow-wrap:anywhere; }
+#drive-replay-map { height:230px; min-height:140px; border-radius:10px; }
+#replay-import, #replay-position { display:block; width:100%; max-width:100%; min-height:44px; margin:10px 0; }
+#replay-source { width:100%; min-height:44px; margin:8px 0; padding:8px; border:1px solid #38bdf8; border-radius:10px; background:#17263b; color:#f1f5f9; font:inherit; }
+#entrance-results .nav-btn { white-space:normal; text-align:left; width:100%; }
+#entrance-results [aria-pressed="true"] { border-color:#22d3ee; background:#164e63; }
+body.pip-mode #drive-lab-modal { display:none; }
 /* A mounted phone needs usable map space beside its junction instructions. */
 @media (orientation:landscape) and (max-height:540px) {
     body.live-driving:not(.pip-mode) .app-header { flex-basis:44px; height:44px; }

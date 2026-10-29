@@ -9,6 +9,26 @@ final class NavigationProgress {
     private boolean uncertain;
     private double pending = -1;
     private long pendingAt;
+    private double[][] nearbyRoads = new double[0][];
+    private long nearbyExpiresAt;
+    void setNearbyRoads(double[][] edges, long expiresAt) { nearbyRoads = edges; nearbyExpiresAt = expiresAt; }
+    private boolean nearbyConflict(double lon, double lat, double heading, double speed, double accuracy, double routeLon, double routeLat, long now) {
+        if (now > nearbyExpiresAt) return false;
+        java.util.ArrayList<double[]> candidates = new java.util.ArrayList<>();
+        for (double[] e : nearbyRoads) {
+            double diff = finite(heading) && speed >= 2.2 ? Math.abs((heading-e[4]+540)%360-180) : 0;
+            if (diff > 65) continue;
+            double cos = Math.cos(Math.toRadians(lat)), dx=(e[2]-e[0])*cos, dy=e[3]-e[1];
+            double t=Math.max(0,Math.min(1,((lon-e[0])*cos*dx+(lat-e[1])*dy)/Math.max(1e-20,dx*dx+dy*dy)));
+            double x=e[0]+t*(e[2]-e[0]), y=e[1]+t*(e[3]-e[1]), d=distance(lon,lat,x,y);
+            if (d<=25) candidates.add(new double[]{x,y,d,d+diff*.12,e[5]});
+        }
+        if(candidates.isEmpty()) return false;
+        java.util.Collections.sort(candidates,(a,b)->Double.compare(a[3],b[3]));
+        double[] best=candidates.get(0);
+        for(double[] other:candidates) if(other[4]!=best[4] && distance(other[0],other[1],best[0],best[1])>5 && other[3]-best[3]<Math.max(6,accuracy*.6)) return true;
+        return distance(best[0],best[1],routeLon,routeLat)>Math.max(10,accuracy) && best[2]+Math.max(6,accuracy*.5)<distance(lon,lat,routeLon,routeLat);
+    }
     // lon, lat, timestamp, route progress, accuracy, cumulative raw travel.
     private final java.util.ArrayList<double[]> history = new java.util.ArrayList<>();
     NavigationProgress(double[][] points) {
@@ -28,7 +48,7 @@ final class NavigationProgress {
         double[] anchor = !history.isEmpty() && at - history.get(0)[2] >= 2000 ? history.get(0) : null;
         boolean motionConflict = false;
         double allowance = Math.max(45, speed * Math.max(0, at - lastAt) / 1000 * 1.8 + accuracy * 2);
-        double best = Double.POSITIVE_INFINITY, progress = -1;
+        double best = Double.POSITIVE_INFINITY, progress = -1, routeLon=lon, routeLat=lat;
         java.util.ArrayList<double[]> candidates = new java.util.ArrayList<>();
         for (int i = 0; i < points.length - 1; i++) {
             double[] a = points[i], b = points[i + 1];
@@ -46,9 +66,10 @@ final class NavigationProgress {
             double residual = anchor == null ? 0 : Math.abs(Math.max(0, p-anchor[3])-moved);
             double score = d + diff * 0.15 + (continuous ? Math.max(0,last-p)*0.5 : 0) + Math.min(12,residual*0.2);
             candidates.add(new double[]{p, score});
-            if (score < best) { best = score; progress = p; }
+            if (score < best) { best = score; progress = p; routeLon=a[0]+t*(b[0]-a[0]); routeLat=a[1]+t*(b[1]-a[1]); }
         }
         if (progress < 0) { if (motionConflict) uncertain = true; pending = -1; return Double.NaN; }
+        if (nearbyConflict(lon,lat,heading,speed,accuracy,routeLon,routeLat,now)) { uncertain=true; pending=-1; return Double.NaN; }
         for (double[] candidate : candidates) if (Math.abs(candidate[0] - progress) > 60 && candidate[1] - best < Math.max(8, accuracy * 0.6)) {
             uncertain = true; pending = -1; return Double.NaN;
         }

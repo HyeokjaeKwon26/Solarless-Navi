@@ -99,7 +99,7 @@
         function conflictingRoad(point,heading,routeDistance){
             const c=nearby(point,heading),best=c[0];return !!(best&&best.distance<=8&&routeDistance>best.distance+15&&c.every(other=>other.edge.way===best.edge.way||other.distance>best.distance+8));
         }
-        return {route,nearby,conflictingRoad,edges,nodes,pack};
+        return {route,nearby,conflictingRoad,permitted,edges,nodes,pack};
     }
     return {build,distance,bearing,projection};
 });

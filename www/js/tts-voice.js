@@ -186,6 +186,7 @@ window.TTSVoice = (function () {
         if (priority === 2) turnProtectedUntil = now + 6000;
         const stopped = stopSpeech();
         const generation = speechGeneration;
+        const utteranceId = `web-${now}-${generation}`;
         const language = options.language || currentLang;
         let segments = window.NavigationGuidance.speechSegments(text, language, roadNames);
         const preferences = window.VoiceSettings?.get() || {rate:1,pitch:1,koVoice:'',enVoice:''};
@@ -193,7 +194,7 @@ window.TTSVoice = (function () {
         if (generation !== speechGeneration || isMuted || interruptionActive) return false;
         if (playChimeType && !window.Capacitor?.Plugins?.Pip?.speakFocused) playWarningChime(playChimeType);
         showVoiceToast(text);
-        if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, timestamp: now, priority, status: 'requested' } }));
+        if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, utteranceId, timestamp: now, priority, status: 'requested' } }));
         const focused = window.Capacitor?.Plugins?.Pip;
         if (focused?.speakFocused) {
             try {
@@ -202,7 +203,7 @@ window.TTSVoice = (function () {
                 if (!result.accepted) { spokenStages.clear(); lastTurnAnnounceTime = 0; }
                 if (result.languageFallback) showVoiceToast(currentLang.startsWith('ko') ? '영어 음성이 없어 한국어 음성으로 안내합니다. Android 음성 출력 설정에서 영어 음성을 설치해 주세요.' : 'English voice unavailable. Check Android text-to-speech settings.');
                 else if(result.voiceFallback&&!voiceFallbackNotified){voiceFallbackNotified=true;showVoiceToast(currentLang.startsWith('ko')?'선택한 목소리가 없어 같은 언어의 기본 음성으로 안내합니다.':'Selected voice unavailable. Using the language default.');}
-                if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, timestamp: Date.now(), status: result.accepted ? 'accepted' : 'denied', source: 'native-foreground' } }));
+                if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, utteranceId, timestamp: Date.now(), status: result.accepted ? 'accepted' : 'denied', source: 'native-foreground' } }));
                 return result.accepted === true;
             } catch (e) { spokenStages.clear(); return false; }
         }

@@ -9,7 +9,7 @@
         const language = root.TTSVoice.getLanguage();
         const unitSystem = root.NavigationUnits.system();
         const muted = root.TTSVoice.isMuted();
-        const presentation = JSON.stringify([language, unitSystem, muted]);
+        const presentation = JSON.stringify([language, unitSystem, muted, root.RoadPack?.graph?.pack?.savedAt || 0]);
         if ((identity === route && identityPresentation === presentation) || (pending === route && pendingPresentation === presentation)) return;
         const token = ++generation;
         pending = route; pendingPresentation = presentation;
@@ -31,7 +31,8 @@
                 complex: root.NavigationGuidance.complexTurn({...m,following}), following,
                 segments: root.NavigationGuidance.speechSegments(text, language, [m.name, m.ref, m.destinations]) };
         });
-        plugin().setGuidanceRoute({ route: { revision: nextRevision(), coordinates: model.coordinates, turns, language, unitSystem, muted } })
+        plugin().setGuidanceRoute({ route: { revision: nextRevision(), coordinates: model.coordinates, turns, language, unitSystem, muted,
+            nearbyRoads: root.NearbyRoads?.nativeSnapshot(root.RoadPack?.graph) || null } })
             .then(() => { if (generation === token) { identity = route; identityPresentation = presentation; } }).catch(() => {}).finally(() => { if (generation === token && pending === route) pending = null; });
     }
     function clear(force = false) {

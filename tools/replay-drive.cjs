@@ -45,6 +45,19 @@ report.voiceRequests = (recording.events || []).filter(e => e.type === 'voice' &
 report.voiceAccepted = (recording.events || []).filter(e => e.type === 'voice' && (e.data.status === 'accepted' || e.data.source === 'native-background')).length;
 report.voiceDenied = (recording.events || []).filter(e => e.type === 'voice' && e.data.status === 'denied').length;
 report.nativeLocationEvents = (recording.events || []).filter(e => e.type === 'native-location').length;
+report.recordingSha256 = require('node:crypto').createHash('sha256').update(fs.readFileSync(input)).digest('hex');
+report.appVersion = require('../app-release.json').versionName;
+report.currentRouteReplay = require('../js/drive-replay').run(recording);
+delete report.currentRouteReplay.frames;
+delete report.currentRouteReplay.routes;
+if (process.argv[4]) {
+    const before = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
+    if (before.recordingSha256 !== report.recordingSha256) throw Error('Comparison requires the identical recording');
+    report.changeFromBaseline = require('../js/drive-replay').compare(before.currentRouteReplay, report.currentRouteReplay);
+    report.changeFromBaseline.meanAbsoluteEtaErrorSec = before.journeyReview.meanAbsoluteEtaErrorSec !== null && report.journeyReview.meanAbsoluteEtaErrorSec !== null
+        ? report.journeyReview.meanAbsoluteEtaErrorSec - before.journeyReview.meanAbsoluteEtaErrorSec : null;
+    report.changeFromBaseline.falseRerouteRate = before.falseRerouteRate !== null && report.falseRerouteRate !== null ? report.falseRerouteRate - before.falseRerouteRate : null;
+}
 const json = JSON.stringify(report, null, 2) + '\n';
 if (process.argv[3]) fs.writeFileSync(process.argv[3], json);
 else process.stdout.write(json);

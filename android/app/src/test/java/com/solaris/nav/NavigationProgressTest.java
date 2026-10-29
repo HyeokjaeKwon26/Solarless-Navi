@@ -3,6 +3,21 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NavigationProgressTest {
+    @Test public void nearbyParallelRoadsDeferGuidanceAndReacquireAfterTwoClearFixes() {
+        NavigationProgress p=new NavigationProgress(new double[][]{{0,0},{.01,0}});
+        p.setNearbyRoads(new double[][]{{0,0,.01,0,90,11},{0,.00016,.01,.00016,90,12}},200000);
+        assertTrue(Double.isNaN(p.match(.001,.00008,20,90,10,100000,100000)));
+        assertTrue(Double.isNaN(p.match(.0011,0,3,90,10,101000,101000)));
+        assertTrue(p.match(.0012,0,3,90,10,102000,102000)>100);
+    }
+    @Test public void nearbyEvidenceExpiresAndDoesNotInventConnections() {
+        NavigationProgress p=new NavigationProgress(new double[][]{{0,0},{.01,0}});
+        p.setNearbyRoads(new double[][]{{0,.00016,.01,.00016,90,12}},200000);
+        assertTrue(Double.isNaN(p.match(.001,.00016,3,90,10,100000,100000)));
+        NavigationProgress expired=new NavigationProgress(new double[][]{{0,0},{.01,0}});
+        expired.setNearbyRoads(new double[][]{{0,.00016,.01,.00016,90,12}},99999);
+        assertTrue(expired.match(.001,0,3,90,10,100000,100000)>0);
+    }
     @Test public void trajectoryRejectsShortcutOntoLaterLoopDespiteHighReportedSpeed() {
         NavigationProgress p=new NavigationProgress(new double[][]{{0,0},{.00027,0},{.00027,.00009},{0,.00009},{0,.00018},{.002,.00018}});
         assertTrue(p.match(0,0,5,90,50,10000,10000)>=0);

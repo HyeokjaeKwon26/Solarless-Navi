@@ -936,6 +936,11 @@
         const parsed = await unzipPackPayload(bytes, wanted, options);
         debugScene('scene-pack-unzip-end', { pack, requestedFiles: wanted.length, returnedFiles: Object.keys(parsed || {}).length });
         const storedEntries = [];
+        // Validate the whole extraction before replacing any healthy cached tile.
+        for (const value of Object.values(parsed || {})) {
+            const tile = typeof value === 'string' ? JSON.parse(value) : value;
+            if (!tile || typeof tile !== 'object' || Array.isArray(tile)) throw createSceneError('SCENE_JSON_PARSE_FAILURE', 'invalid scene tile');
+        }
         for (const [name, value] of Object.entries(parsed || {})) {
             const tileCacheKey = `${identity}:tile:${name}`;
             const estimatedBytes = Number(parsed.__sceneByteSizes && parsed.__sceneByteSizes[name]) || 1024;
@@ -2069,7 +2074,51 @@
         return { shadeScore: null, occlusionRatio: null, shadeState: 'unknown', source: 'heuristic', buildingBlocked, terrainBlocked, tunnel: false, uncertainty };
     }
 
+    async function statusAt(point, options = {}) {
+        if (!Array.isArray(point) || point.length !== 2 || !point.every(Number.isFinite) || Math.abs(point[0]) > 180 || Math.abs(point[1]) > 85) throw Error('INVALID_LOCATION');
+        const regions = options.precomputedManifestUrl ? [{id:'custom',url:options.precomputedManifestUrl}] : PRECOMPUTED_REGION_MANIFESTS.filter(r=>point[1]>=r.bounds.south&&point[1]<=r.bounds.north&&point[0]>=r.bounds.west&&point[0]<=r.bounds.east);
+        const result=[];
+        for(const region of regions){
+            try {
+                const manifest=await loadPrecomputedManifest({...options,precomputedManifestUrl:region.url});
+                if(!manifest||![2,3].includes(Number(manifest.schema)))throw Error('INVALID_MANIFEST');
+                const tileKey=sceneTileKeyForCoordinate(point[1],point[0],manifest),meta=manifest.tiles?.[tileKey];
+                const cacheKey=meta?`${await manifestCacheIdentity(manifest)}:tile:${meta.file}`:null;
+                const memory=cacheKey?getPrecomputedCacheValue(cacheKey):null;
+                const stored=cacheKey&&!memory?await readStoredSceneValue('tiles',cacheKey):null;
+                const value=memory||stored?.value;
+                let tile=null,cacheState=meta?'not-downloaded':'missing';
+                if(value){try{tile=typeof value==='string'?JSON.parse(value):value;cacheState=stored?.expiresAt<Date.now()?'expired':'cached';if(!tile||typeof tile!=='object')throw Error();}catch{cacheState='damaged';}}
+                const extractTimestamp=manifest.sourceMetadata?.osm?.extractTimestamp||null;
+                const ageDays=extractTimestamp?Math.max(0,(Date.now()-Date.parse(extractTimestamp))/86400000):null;
+                const record=precomputedManifestCache.get(region.url)||await readStoredSceneValue('manifests',region.url);
+                result.push({region:region.id,tileKey,cacheState,source:manifest.source||'OSM scene',extractTimestamp,ageDays,
+                    releaseTag:manifest.releaseTag,manifestCheckedAt:record?.revalidateAt?record.revalidateAt-PRECOMPUTED_MANIFEST_REVALIDATE_MS:null,
+                    manifestStale:!record?.revalidateAt||record.revalidateAt<Date.now(),
+                    pack:meta?.pack||null,downloadBytes:manifest.packs?.[meta?.pack]?.sizeBytes??manifest.packs?.[meta?.pack]?.bytes??null,
+                    coverage:tile?.sceneCoverage||null});
+            }catch(error){result.push({region:region.id,cacheState:'unavailable',error:sceneErrorCode(error)});}
+        }
+        return result;
+    }
+    const repairing = new Set();
+    async function repairTile(regionId,tileKey,options={}) {
+        const region=options.precomputedManifestUrl&&regionId==='custom'?{url:options.precomputedManifestUrl}:PRECOMPUTED_REGION_MANIFESTS.find(r=>r.id===regionId);
+        if(!region)throw Error('UNKNOWN_REGION');
+        const lock=regionId+':'+tileKey;if(repairing.has(lock))throw Error('REPAIR_BUSY');repairing.add(lock);
+        try {
+            const manifest=await loadPrecomputedManifest({...options,precomputedManifestUrl:region.url});
+            const meta=manifest?.tiles?.[tileKey];if(!meta)throw Error('TILE_NOT_PUBLISHED');
+            // Fetch just this archive and extract only this tile. Existing files
+            // remain intact if download, hash verification or parsing fails.
+            const parsed=await loadPrecomputedPack(manifest,meta.pack,[meta.file],options);
+            if(!parsed?.[meta.file])throw Error('TILE_NOT_IN_PACK');
+            return {region:regionId,tileKey,pack:meta.pack,repaired:true};
+        } finally {repairing.delete(lock);}
+    }
+
     return {
+        statusAt, repairTile,
         projectPoint,
         unprojectPoint,
         pointInPolygon,

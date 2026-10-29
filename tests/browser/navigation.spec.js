@@ -1,6 +1,45 @@
 const { test, expect } = require('@playwright/test');
 const { version: mapVersion } = require('maplibre-gl/package.json');
 
+test('drive replay imports locally, selects a point and persists explicit glare observations',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-drive-replay').click();await expect(page.locator('#drive-lab-modal')).toBeVisible();
+    const at=Date.now(),recording={version:2,samples:[0,1,2].map(i=>({lat:42.36,lng:-71.07+i*.00005,accuracy:5,heading:90,reportedSpeedKmh:20,timestamp:at+i*1000,receivedAt:at+i*1000,
+        glarePrediction:{risk:.8,uncertain:false,computedAt:at,weatherModel:'OPEN_METEO_FORECAST',occlusionRatio:0}})),events:[{type:'route',recordedAt:at-1000,data:{coordinates:[[-71.07,42.36],[-71.06,42.36]],maneuvers:[]}},
+        {type:'native-location',recordedAt:at,data:{timestamp:at,lat:42.36,lng:-71.07,accuracy68:3,heading:90,speedMps:5}}]};
+    await page.locator('#replay-import').setInputFiles({name:'drive.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(recording))});
+    await expect(page.locator('#replay-summary')).toContainText('3 fixes');
+    await expect(page.locator('#btn-glare-no')).toBeEnabled();await page.locator('#btn-glare-no').click();
+    await expect(page.locator('#replay-frame')).toContainText('No glare');
+    expect(await page.evaluate(()=>GlareFeedback.summarize(DriveLab.feedback()).falsePositive)).toBe(1);
+    await page.locator('#replay-source').selectOption('native');await expect(page.locator('#replay-summary')).toContainText('1 fixes');await expect(page.locator('#btn-glare-no')).toBeDisabled();
+    await page.locator('#replay-source').selectOption('foreground');await expect(page.locator('#replay-summary')).toContainText('3 fixes');
+    await page.setViewportSize({width:320,height:740});await page.locator('#btn-lab-close').scrollIntoViewIfNeeded();
+    const width=await page.locator('.drive-lab-card').evaluate(e=>({scroll:e.scrollWidth,client:e.clientWidth}));expect(width.scroll).toBeLessThanOrEqual(width.client+1);
+    await page.screenshot({path:test.info().outputPath('drive-review-320.png')});await page.locator('#btn-lab-close').click();
+    await page.reload();expect(await page.evaluate(()=>DriveLab.feedback().length)).toBe(1);expect(state.errors).toEqual([]);
+});
+
+test('scene repair presents source age and repairs only the selected tile',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await page.evaluate(()=>{window.repairs=[];SceneShadow.statusAt=async()=>[{region:'us-northeast',tileKey:'160:96',cacheState:'not-downloaded',source:'OSM fixture',extractTimestamp:'2026-10-27T21:23:59Z',releaseTag:'scene-fixture',pack:'one',downloadBytes:5242880,manifestCheckedAt:Date.now(),manifestStale:false}];SceneShadow.repairTile=async(...args)=>repairs.push(args);});
+    await page.locator('#btn-scene-status').click();await expect(page.locator('#scene-repair-list')).toContainText('2026-10-27');
+    await page.locator('#scene-repair-list button').click();await expect(page.locator('#drive-lab-message')).toContainText('Repair complete');
+    expect(await page.evaluate(()=>repairs)).toEqual([['us-northeast','160:96']]);expect(state.errors).toEqual([]);
+});
+
+test('vehicle entrance candidates change the reviewed pin without claiming user verification',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');
+    await page.route('**/api/interpreter',route=>route.fulfill({json:{elements:[
+        {type:'node',id:1,lon:-71.07,lat:42.36},{type:'node',id:2,lon:-71.069,lat:42.36,tags:{amenity:'parking_entrance',name:'Parking A'}},
+        {type:'way',id:11,nodes:[1,2],tags:{highway:'service',oneway:'yes',name:'Driveway'}}]}}));
+    await page.evaluate(()=>{DestinationReview.show({lat:42.36,lng:-71.0688},'Test destination',null).then(v=>window.entranceChoice=v);});
+    await page.locator('#btn-find-entrances').click();await expect(page.locator('#entrance-results')).toContainText('Parking A');
+    await page.locator('#entrance-results button').click();await expect(page.locator('#destination-entrance-confirmed')).not.toBeChecked();
+    await expect(page.locator('#destination-review-position')).toContainText('-71.06900');await page.locator('#btn-review-confirm').click();
+    expect(await page.evaluate(()=>entranceChoice)).toMatchObject({lat:42.36,lng:-71.069,entranceConfirmed:false,source:'user-pin'});expect(state.errors).toEqual([]);
+});
+
 test('live glare colors, banner and voice share forecast and uncertainty on unchanged geometry', async({page})=>{
     const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);
     await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
@@ -1597,6 +1636,14 @@ async function startTilted(page,options={}){
     await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:20});return journeyTestApi.state().snapped;})).toBe(true);
     try{await expect(page.locator('#driving-map')).toHaveClass(/ready/);}catch(e){console.log(await page.evaluate(()=>({...drivingTestState,segments:drivingTestState?.segments?.length,failed:drivingTestController.failed()})));throw e;}return state;
 }
+
+test('tilted renderer caps pixel ratio under thermal pressure and keeps the live route',async({page})=>{
+    const state=await startTilted(page);
+    await page.evaluate(()=>Object.defineProperty(window,'devicePixelRatio',{value:2,configurable:true}));
+    await expect.poll(()=>page.evaluate(()=>{drivingTestController.update({...drivingTestState,thermalStatus:2});return drivingTestMap.getPixelRatio();})).toBe(1);
+    await expect(page.locator('#driving-map')).toHaveClass(/ready/);
+    expect(await page.evaluate(()=>!!drivingTestMap.getSource('driving-route'))).toBe(true);expect(state.errors).toEqual([]);
+});
 test('tilted driving projects the route and vehicle together, explores and returns to persisted 2D',async({page})=>{
     const state=await startTilted(page);
     await expect(page.locator('#btn-driving-view')).toHaveText('3D');

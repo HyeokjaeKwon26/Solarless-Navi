@@ -160,6 +160,8 @@
                         <label class="arrival-check"><input type="checkbox" id="destination-save-favorite"><span id="destination-save-label">이 도착점을 즐겨찾기에 저장</span></label>
                     </div>
                     <button type="button" class="nav-btn secondary" id="btn-review-adjust" aria-pressed="false">도착점 조정</button>
+                    <button type="button" class="nav-btn secondary" id="btn-find-entrances">주변 차량·주차장 입구 찾기</button>
+                    <div id="entrance-results" role="status"></div>
                     <button type="button" class="nav-btn primary" id="btn-review-confirm">이 위치로 경로 찾기</button>
                     <button type="button" class="nav-btn secondary" id="btn-review-cancel">검색으로 돌아가기</button>
                 </div>
@@ -216,6 +218,34 @@
                 </div>
             </div>
 
+            <div class="start-search-overlay hidden" id="drive-lab-modal" role="dialog" aria-modal="true" aria-labelledby="drive-lab-title">
+                <div class="start-search-card drive-lab-card">
+                    <h2 id="drive-lab-title">주행 검토 / Drive review</h2>
+                    <p id="drive-lab-message" role="status"></p>
+                    <div id="drive-replay-panel">
+                        <label for="replay-import">주행 JSON 불러오기 / Import drive JSON</label>
+                        <input type="file" id="replay-import" accept=".json,application/json">
+                        <label for="replay-source">위치 기록 출처 / GPS source</label>
+                        <select id="replay-source"><option value="foreground">앱 화면 / Foreground</option><option value="native">Android · 화면 꺼짐 포함 / Background</option></select>
+                        <p id="replay-summary"></p>
+                        <div id="drive-replay-map" aria-label="주행 기록 지도 / Recorded drive map"></div>
+                        <label for="replay-position">기록 위치 / Recorded position</label>
+                        <input type="range" id="replay-position" min="0" max="0" value="0" step="1">
+                        <p id="replay-frame"></p>
+                        <button type="button" class="nav-btn secondary" id="btn-replay-play">재생 / Play</button>
+                        <p>주행 후 기억을 바탕으로 선택한 지점을 평가합니다. / Review this point after driving.</p>
+                        <button type="button" class="nav-btn" id="btn-glare-yes" disabled>눈부셨음 / Glare</button>
+                        <button type="button" class="nav-btn secondary" id="btn-glare-no" disabled>눈부시지 않았음 / No glare</button>
+                        <button type="button" class="nav-btn secondary" id="btn-glare-clear">평가 삭제 / Delete observations</button>
+                        <small>기기에 최대 200건·90일 보관. 기록 내보내기에 포함됩니다. 자동 업로드 없음. / Up to 200 observations for 90 days, included in recording exports. No automatic upload.</small>
+                    </div>
+                    <div id="scene-repair-panel" hidden>
+                        <p>현재 지도 중심 타일을 확인합니다. 저장됨은 모든 건물·높이·나무의 정확성을 보장하지 않습니다. / Checks the center tile. Cached data does not guarantee complete buildings, heights or trees.</p>
+                        <div id="scene-repair-list" role="status"></div>
+                    </div>
+                    <button type="button" class="nav-btn" id="btn-lab-close">닫기 / Close</button>
+                </div>
+            </div>
             <div class="start-search-overlay hidden" id="journey-detail-modal" role="dialog" aria-modal="true" aria-labelledby="journey-detail-title">
                 <div class="start-search-card"><h2 id="journey-detail-title"></h2><p id="journey-detail-body"></p>
                     <button type="button" class="nav-btn" id="btn-close-journey-detail">닫기 / Close</button>
@@ -618,6 +648,9 @@
                                 <button type="button" id="btn-drive-record" class="nav-btn" data-recording="false"><i class="fa-solid fa-circle-dot" aria-hidden="true"></i><span id="drive-record-label">주행 기록 시작</span></button>
                                 <button type="button" id="btn-drive-export" class="nav-btn"><i class="fa-solid fa-file-export" aria-hidden="true"></i><span id="drive-export-label">기록 내보내기</span></button>
                                 <button type="button" id="btn-drive-report" class="nav-btn secondary">주행 품질 요약</button>
+                                <button type="button" id="btn-drive-replay" class="nav-btn secondary">주행 재생·눈부심 평가 / Replay & glare review</button>
+                                <button type="button" id="btn-scene-status" class="nav-btn secondary">정밀 자료 상태·복구 / Scene data & repair</button>
+                                <small>주변 도로 비교는 저장한 도로 영역에서 작동합니다. / Nearby-road checks use your saved road area.</small>
                                 <button type="button" id="btn-drive-clear" class="nav-btn secondary"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span id="drive-delete-label">저장 기록 삭제</span></button>
                                 <small id="drive-record-help">선택 시 위치·시간을 기기에만 기록합니다. 외부 업로드는 없습니다.</small>
                             </section>
@@ -855,6 +888,11 @@
     <script src="js/offline-map.js"></script>
     <script src="js/pip-controller.js"></script>
     <script src="js/route-presentation.js"></script>
+    <script src="js/drive-replay.js"></script>
+    <script src="js/nearby-roads.js"></script>
+    <script src="js/glare-feedback.js"></script>
+    <script src="js/entrance-candidates.js"></script>
+    <script src="js/drive-lab.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>
