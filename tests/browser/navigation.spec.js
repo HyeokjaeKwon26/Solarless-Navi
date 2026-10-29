@@ -1597,17 +1597,17 @@ test('tilted driving projects the route and vehicle together, explores and retur
 });
 test('tilted junction camera fits consecutive turns and changes geometry colors on the live map',async({page})=>{
     const state=await startTilted(page,{chained:true,nearTurns:true});
-    await page.evaluate(()=>{
-        const route=journeyTestApi.state().route;
-        route.analyzed.segments=route.analyzed.segments.map(s=>({...s,glareRisk:.8,occlusionRatio:null,irradiance:null}));testGps.emit({speed:0,heading:20});
-    });
+    await page.evaluate(()=>testGps.emit({speed:0,heading:20}));
     await expect(page.locator('#banner-road')).toContainText('Exit 7');await expect(page.locator('#banner-following')).toContainText('Second Street');
     await page.evaluate(()=>{
-        SunCalc.getPosition=()=>({azimuth:0,altitude:10});
-        WeatherRadiation.interpolateAt=p=>({dni:p.dni,directRadiation:p.dni*.17,diffuseRadiation:0,shortwaveRadiation:p.dni*.17});
-        const route=journeyTestApi.state().route,at=Date.now();
-        route.analyzed={...route.analyzed,segments:route.analyzed.segments.map(s=>({...s,heading:0,passTime:new Date(at),occlusionRatio:null,confirmedShade:false,shadeState:'unknown'}))};
-        route.remainingForecast={analyzed:{weatherProfile:{dni:600,weatherRetrievedAt:at}}};testGps.emit({speed:0,heading:20});
+        // Supply deterministic analysis at the camera boundary. Mutating one
+        // route's forecast races the worker's initial GPS route replacement,
+        // especially when the runner's timezone differs from the GPS country.
+        // Forecast/solar physics are exercised separately above and in units.
+        const refresh=ShadowRouter.refreshGlareSegments;
+        ShadowRouter.refreshGlareSegments=(...args)=>refresh(...args).map(s=>({...s,glareRisk:.8,occlusionRatio:null}));
+        journeyTestApi.state().route.glareSnapshot=null;
+        testGps.emit({speed:0,heading:20});
     });
     await expect.poll(()=>page.evaluate(async()=>(await drivingTestMap.getSource('driving-route').getData()).features.some(f=>f.properties.uncertain&&f.properties.color==='#eab308'))).toBe(true);
     await expect.poll(()=>page.evaluate(()=>Math.round(drivingTestMap.getPitch()))).toBe(32);

@@ -10,6 +10,7 @@ module.exports = defineConfig({
         browserName: 'chromium',
         viewport: { width: 412, height: 915 },
         locale: 'en-US',
+        timezoneId: 'UTC',
         permissions: ['geolocation'],
         trace: 'retain-on-failure',
         screenshot: 'only-on-failure',
