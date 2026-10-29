@@ -48,3 +48,17 @@
 최종 공개 버전은 1.3.28 / code 32다. 전체 검사와 공개 APK 검증 완료 후 결과를 아래에 추가한다.
 
 CI에서는 root/www 프로젝트를 별도의 독립 실행 환경에 나누고, 각 환경에서는 WebGL 작업자 1개로 순차 검사한다. APK 공개는 단위/Android 검증과 두 브라우저 프로젝트가 모두 성공해야 진행된다. 브라우저 검사 총수 218개는 유지한다.
+
+배포 소스의 독립 APK 검사에서는 브라우저 218개가 모두 통과했다. 같은 소스의 main 검사에서는 GPS 불확실 상태 테스트 하나가 초기 대안 경로 계산까지 새 요청으로 세어 실패했다. 앱 코드 변경 없이 테스트에서 분석 완료(`aria-busy=false`)를 기다린 뒤 측정하도록 보완했으며 로컬 10회 반복 검사에 통과했다. 이 테스트만 변경한 main 후속 커밋은 `047d41950b4aadd31fcc37b2b99b8b193aa7ab68`이다.
+
+## 공개 APK 검증
+
+- 공개 릴리스: [1.3.28](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.28), versionCode 32, 패키지 `com.solaris.nav`.
+- [APK 배포 검사](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40944421991): 검증·root 브라우저·www 브라우저·서명 및 공개 모두 성공. Node 379개, 브라우저 각 109개(총 218개), 합성 회귀 기록 2개 통과. Android 단위·debug 빌드·lint 및 서명 release 빌드 성공. 로컬 JVM 36개 실패/오류 0, lint 오류 0·기존 경고 19개.
+- APK **4,519,625 bytes (약 4.52 MB)**. 직전 공개 1.3.25의 4,505,732 bytes보다 **13,893 bytes(약 0.31%)** 증가. 대용량 지도 DB를 번들에 추가하지 않았다.
+- APK를 공개 주소에서 직접 내려받아 SHA-256 `a02893d3e89370b313f202bbeea7516b242d9d06d30e631abbed746d086e825f`와 manifest 크기·체크섬 파일을 대조했다. 기존 인증서 SHA-256 `59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977`와 일치하며, APK 서명 검증 및 패키지·버전·minSDK 22·debuggable 아님을 확인했다.
+- 공개 APK의 웹 자산 85개를 릴리스 소스 `ef4d643f96d632eea9c97da702c0b2dc6453f3fa`의 www와 바이트 단위로 대조했다. 새 저장 용량 조회와 기존 주행·음성 네이티브 코드 포함을 확인했다.
+- 실제 공개 GitHub 응답과 배포 updater로 검사: 설치 code 9, 17~29는 업데이트 가능, code 32는 최신 버전으로 표시. 설치 버전 식별 정보는 Chromium에서 모의했고 같은 공개 응답을 재사용했다. Android 네이티브 HTTP·설치 화면·기존 데이터 유지의 실기기 검증을 뜻하지 않는다.
+- 로컬 지도 관련 26개 및 GPS 요청 수 측정 보완 10회 반복 검사가 통과했다. 실제 폰은 연결되어 있지 않았으며 배터리 절감·실제 눈부심 회피 성능은 미측정이다.
+
+후속 main 전체 검사도 [40946259426](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40946259426)에서 모두 성공했다(Node/Android 및 root/www 브라우저). 기계 판독용 공개 파일 검증 결과는 [app-release-1.3.28-verification.json](data/app-release-1.3.28-verification.json)에 보존했다.
