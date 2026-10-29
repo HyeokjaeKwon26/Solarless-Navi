@@ -1401,7 +1401,7 @@ body.pip-mode #trip-preview-modal, body.pip-mode #closure-offer { display:none; 
     body.live-driving:not(.pip-mode) .map-bottom-overlay-stack { left:auto; right:8px; width:50%; bottom:4px; transform:none; }
     body.live-driving:not(.pip-mode) .map-controls-group { top:8px; right:8px; bottom:auto; flex-direction:row; gap:5px; }
     body.live-driving:not(.pip-mode) .map-controls-group .map-floating-btn { position:static; width:44px; height:44px; font-size:14px; }
-    body.live-driving:not(.pip-mode) .map-attribution { left:8px; right:auto; bottom:4px; max-width:44%; font-size:8px; transform:none; }
+    body.live-driving:not(.pip-mode) .map-attribution { position:fixed; left:8px; right:auto; bottom:4px; max-width:44%; font-size:8px; transform:none; }
     body.live-driving:not(.pip-mode) .speedometer-bottom-left { left:12px; bottom:26px; }
     body.live-driving:not(.pip-mode) .api-status-banner { padding:4px; font-size:10px; }
     body.live-driving:not(.pip-mode) .recenter-toast-banner { left:8px; transform:none; bottom:25px; max-width:44%; }

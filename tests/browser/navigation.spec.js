@@ -1625,6 +1625,10 @@ test('tilted junction camera fits consecutive turns and changes geometry colors 
             const boxes=await page.locator('#mobile-turn-banner,#route-summary-box').evaluateAll(els=>els.map(el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom};}));
             expect(boxes[0].right).toBeLessThan(boxes[1].left);
             for(const rect of boxes){expect(rect.top).toBeGreaterThanOrEqual(44);expect(rect.bottom).toBeLessThanOrEqual(size.height);}
+            const credit=await page.locator('#map-attribution').boundingBox();
+            expect(credit.x+credit.width).toBeLessThan(boxes[1].left);
+            expect(credit.y).toBeGreaterThan(boxes[0].bottom);
+            await expect.poll(()=>page.evaluate(()=>document.querySelector('.driving-vehicle').getBoundingClientRect().bottom-document.getElementById('route-summary-box').getBoundingClientRect().top)).toBeLessThan(0);
         }
         await page.screenshot({path:test.info().outputPath(`tilted-junction-${size.width}.png`)});
     }

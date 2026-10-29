@@ -87,7 +87,7 @@
             if(size.width<64||size.height<64)return;
             // Reserve actual HUD bounds. Extra top padding places the vehicle
             // below the centre of the remaining map, leaving more road ahead.
-            const top=Math.min(size.height*.35,Math.max(20,state.top||0)),bottom=Math.min(size.height*.35,Math.max(20,state.bottom||0));
+            const top=Math.min(size.height*.4,Math.max(20,state.top||0)),bottom=Math.min(Math.max(20,size.height-top-60),Math.max(20,state.bottom||0));
             const room=Math.max(0,size.height-top-bottom);
             const left=Math.min(size.width*.48,Math.max(24,state.left||32)),right=state.left>32?24:Math.min(88,size.width*.2);
             const padding={top:top+room*.3,bottom,left,right};
