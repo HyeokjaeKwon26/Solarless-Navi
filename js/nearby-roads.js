@@ -1,9 +1,10 @@
 /* Local road-network evidence; never fabricate a connection across nearby roads. */
 (function(root,factory){if(typeof module==='object'&&module.exports)module.exports=factory(require('./road-network'));else root.NearbyRoads=factory(root.RoadGraph);})(typeof window!=='undefined'?window:globalThis,function(roads){
     'use strict';
+    const snapshots=new WeakMap();
     function assess(graph,fix,snap,previous={}){
         const fallback={status:'unavailable',at:fix.timestamp,candidates:[],hold:false};
-        if(!graph||!Number.isFinite(fix.accuracy)||fix.accuracy>35||!Number.isFinite(fix.timestamp))return fallback;
+        if(!graph||!Number.isFinite(fix.accuracy)||fix.accuracy<=0||fix.accuracy>35||!Number.isFinite(fix.timestamp)||fix.timestamp>graph.pack.savedAt+7*86400000)return fallback;
         const speed=Number(fix.speedKmh)||0,heading=speed>=8?fix.heading:undefined;
         const elapsed=(fix.timestamp-previous.at)/1000;
         const continuity=elapsed>0&&elapsed<=8&&previous.packSavedAt===graph.pack.savedAt;
@@ -26,9 +27,17 @@
     }
     function nativeSnapshot(graph){
         if(!graph)return null;
+        if(snapshots.has(graph))return snapshots.get(graph);
         // Bounded snapshot of the saved area; route matching continues normally outside it.
         if(graph.edges.length>12000)return null;
-        return {expiresAt:graph.pack.savedAt+7*86400000,edges:graph.edges.map(e=>[...e.a,...e.b,e.heading,e.way])};
+        const byFrom=new Map();
+        for(const e of graph.edges){if(!byFrom.has(e.from))byFrom.set(e.from,[]);byFrom.get(e.from).push(e);}
+        // Legal successors use shared OSM nodes and the same turn restrictions
+        // as foreground matching. Build once per graph, never on each GPS fix.
+        const snapshot={expiresAt:graph.pack.savedAt+7*86400000,edges:graph.edges.map(e=>[...e.a,...e.b,e.heading,e.way]),
+            successors:graph.edges.map(e=>(byFrom.get(e.to)||[]).filter(n=>graph.permitted(e,n)).map(n=>n.id))};
+        if(snapshot.successors.reduce((n,row)=>n+row.length,0)>120000)return null;
+        snapshots.set(graph,snapshot);return snapshot;
     }
     return {assess,nativeSnapshot};
 });

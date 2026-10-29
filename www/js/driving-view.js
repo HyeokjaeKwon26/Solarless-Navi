@@ -62,12 +62,12 @@
         let map=null,vehicle=null,end=null,ready=false,failed=false,state=null,timer=null,theme='',generation=0;
         let lastDataAt=0,lastSegments=null,lastIndex=-1,lastReliable=null,lastFrame=0,lastCameraAt=0,errors=[],fitKey='',fitCeiling=20;
         let active=false,viewSize=null,lastChunk=-1,lastJunctionKey='';
-        let performanceState={},appliedRatio=0,heldBearing=null,pendingRender=null,renderLatencies=[],lastSpeed=null,lastTurn='',cameraKey='';
+        let performanceState={},appliedRatio=0,heldBearing=null,pendingRender=null,renderLatencies=[],lastSpeed=null,lastTurn='',cameraKey='',lastRenderAt=0;
         function markRender(){if(pendingRender===null)pendingRender=performance.now();}
         function rendered(){
             if(pendingRender===null)return;
             const elapsed=performance.now()-pendingRender;pendingRender=null;
-            renderLatencies.push(elapsed);if(renderLatencies.length>24)renderLatencies.shift();
+            lastRenderAt=Date.now();renderLatencies.push(elapsed);if(renderLatencies.length>24)renderLatencies.shift();
         }
         const activate=value=>{if(active===value)return;active=value;container.classList.toggle('ready',value);onActive(value);};
         function destroy(){
@@ -194,7 +194,7 @@
         const resize=()=>{viewSize=null;if(map){map.resize();draw(true);}};
         const observer=new ResizeObserver(resize);observer.observe(container);
         return {update,resize,recenter:()=>{if(state){state.panning=false;draw(true);}},retry:()=>{failed=false;},
-            metrics:()=>({samples:renderLatencies.length,renderLatencyMs:renderLatencies.length?Math.max(...renderLatencies):null,reduced:!!performanceState.reduced,interval:state?cadence(state,performanceState):null}),active:()=>active,failed:()=>failed,dispose:()=>{observer.disconnect();destroy();}};
+            metrics:()=>({samples:renderLatencies.length,renderLatencyMs:active&&Date.now()-lastRenderAt<=5000&&renderLatencies.length?renderLatencies.at(-1):null,reduced:!!performanceState.reduced,interval:state?cadence(state,performanceState):null}),active:()=>active,failed:()=>failed,dispose:()=>{observer.disconnect();destroy();}};
     }
     return {policy,routeData,routeChunks,CHUNK_SIZE,create,quality,cadence};
 });

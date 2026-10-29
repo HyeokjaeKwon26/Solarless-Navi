@@ -27,8 +27,10 @@
         const baseline=held.reduce((s,r)=>s+Math.abs(r.actual-r.base),0);
         const corrected=held.reduce((s,r)=>s+Math.abs(r.actual-r.base*trained),0);
         const factor=Math.max(.8,Math.min(1.5,median(ratios)));
-        if(corrected>=baseline*.9||median(ratios.map(r=>Math.abs(r-factor)))>.25||Math.abs(factor-1)<.03)return plain;
-        return {factor,count:rows.length,applied:true};
+        const ordered=ratios.slice().sort((a,b)=>a-b);
+        const range={lowFactor:ordered[Math.floor((ordered.length-1)*.1)],highFactor:ordered[Math.ceil((ordered.length-1)*.9)],count:rows.length};
+        if(corrected>=baseline*.9||median(ratios.map(r=>Math.abs(r-factor)))>.25||Math.abs(factor-1)<.03)return {...plain,range};
+        return {factor,count:rows.length,applied:true,range};
     }
     function create(storage,clock=()=>Date.now()){
         let state={enabled:false,records:[]},session=null;

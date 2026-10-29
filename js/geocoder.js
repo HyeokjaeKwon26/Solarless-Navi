@@ -50,7 +50,7 @@ window.Geocoder = (function () {
             const fetchOptions = {};
             if (controller) fetchOptions.signal = controller.signal;
             if (options.headers) fetchOptions.headers = options.headers;
-            const response = await fetch(url, fetchOptions);
+            const response = window.ServiceHealth ? await ServiceHealth.shared.run('geocode:'+new URL(url).hostname,()=>fetch(url,fetchOptions)) : await fetch(url, fetchOptions);
             if (!response.ok) {
                 throw createApiError('HTTP_ERROR', options.messageKey, `${response.status} ${url}`);
             }

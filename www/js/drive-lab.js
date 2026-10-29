@@ -9,6 +9,33 @@
         feedback(); // Prune expired observations on app start, not only on export.
         let originalRecording,recording,report,map,routeLayer,rawMarker,snapMarker,trigger,timer,token=0,scenePoint,drawnRoute=-2;
         const modal=el('drive-lab-modal');
+        const details=document.createElement('details');details.id='drive-evidence-details';
+        const heading=document.createElement('summary');heading.textContent=text('조건별 눈부심·성능 평가','Glare conditions and performance review');
+        const evidence=document.createElement('div');evidence.className='evidence-report';evidence.id='drive-evidence-report';
+        const compareLabel=document.createElement('label');compareLabel.textContent=text('이전 주행 JSON과 성능 비교','Compare performance with an earlier drive JSON');
+        const compareInput=document.createElement('input');compareInput.type='file';compareInput.accept='.json,application/json';compareInput.id='performance-compare-file';compareLabel.append(compareInput);
+        const comparison=document.createElement('p');comparison.className='evidence-report';comparison.id='performance-comparison';
+        details.append(heading,evidence,compareLabel,comparison);el('replay-summary').after(details);
+        function renderEvidence(){
+            heading.textContent=text('조건별 눈부심·성능 평가','Glare conditions and performance review');
+            const values=feedback(),groups=root.GlareFeedback.stratify(values),evaluation=root.GlareFeedback.evaluateThreshold(values);
+            const perf=root.JourneyEvidence.performanceReport(originalRecording||{});
+            const fmt=n=>Number.isFinite(n)?n.toFixed(1):'—';
+            evidence.textContent=text('눈부심 관찰은 운전자 기억에 따른 평가입니다. 자동 보정하지 않습니다.','Glare observations are driver recall, not sensor measurements. No automatic calibration.')+'\n'+
+                groups.map(g=>g.condition.split(' / ').map(v=>({'low-sun':text('낮은 태양','Low sun'),'mid-sun':text('중간 태양 고도','Mid sun'),'high-sun':text('높은 태양','High sun'),'sun-unknown':text('태양 고도 미확인','Sun elevation unknown'),shaded:text('차폐 많음','More occlusion'),exposed:text('차폐 적음','Less occlusion'),'shade-unknown':text('차폐 미확인','Occlusion unknown'),'heading-unknown':text('도로 방향 미확인','Road heading unknown'),OPEN_METEO_FORECAST:text('기상 예보 반영','Weather forecast'), 'weather-unknown':text('기상 자료 미확인','Weather unknown')})[v]||v).join(' / ')+': '+text('평가 ','labelled ')+g.labelled+text(' · 오탐 ',' · false alarms ')+g.falsePositive+text(' · 누락 ',' · misses ')+g.falseNegative+text(' · 미확인 ',' · unknown ')+g.unknown).join('\n')+'\n'+
+                (evaluation.eligible?text('날짜를 분리한 검증: ','Held-out dates: ')+(evaluation.recommendedThreshold!==null?text('검토 후보 기준값 ','Candidate threshold for review ')+evaluation.recommendedThreshold:text('기존 기준보다 개선 확인 안 됨','No verified improvement over the current threshold')):text('보정 평가 자료 부족: 4일 이상·40건 이상이며 학습/검증 각각 눈부심 유/무 5건 이상 필요','Calibration evidence insufficient: need 4+ days, 40+ observations and 5+ positives/negatives in each train/test set.'))+'\n\n'+
+                text('성능 기록 ','Performance samples ')+perf.samples+' · '+fmt(perf.minutes)+' min\n'+
+                text('배터리 소모(%p/시간): ','Battery drain (percentage points/hour): ')+fmt(perf.batteryPointsPerHour)+'\n'+
+                text('최고 배터리 온도: ','Peak battery temperature: ')+fmt(perf.maxBatteryTemperatureC)+' °C\n'+
+                text('주기적 렌더 지연 표본 p90: ','Periodic render-latency samples p90: ')+fmt(perf.p90RenderEventLatencyMs)+' ms\n'+
+                text('비교에는 같은 폰·경로·밝기·거치·날씨와 30분 이상 비충전 기록이 필요합니다. 실제 패널 FPS가 아닙니다.','Compare only the same phone, route, brightness, mount and weather with 30+ unplugged minutes. This is not panel FPS.');
+        }
+        compareInput.onchange=async()=>{const file=compareInput.files[0];if(!file)return;try{
+            if(file.size>16*1024*1024)throw Error('SIZE');
+            const baseline=JSON.parse(await file.text());if(!Array.isArray(baseline.events)||baseline.events.length>60000)throw Error('INVALID');
+            const result=root.JourneyEvidence.comparePerformance(root.JourneyEvidence.performanceReport(baseline),root.JourneyEvidence.performanceReport(originalRecording||{}));
+            comparison.textContent=result.comparable?text('배터리 소모 변화 ','Battery drain change ')+result.batteryPointsPerHourChange.toFixed(1)+text('%p/시간. 같은 경로·날씨·거치 조건인지 직접 확인해야 합니다.',' percentage points/hour. Manually confirm the same route, weather and mount conditions.'):text('비교 자료 부족: 같은 기기·고정 밝기·비충전 30분 이상 연속 기록을 사용하세요.','Insufficient comparison: use continuous 30+ minute unplugged recordings on the same device with fixed brightness.');
+        }catch{comparison.textContent=text('지원하는 주행 JSON 파일을 선택하세요.','Choose a supported drive JSON file.');}compareInput.value='';};
         function stop(){clearInterval(timer);timer=null;el('btn-replay-play').textContent=text('재생','Play');}
         function open(title){trigger=document.activeElement;modal.classList.remove('hidden');el('drive-lab-title').textContent=title;el('drive-lab-message').textContent='';el('btn-lab-close').focus();}
         function close(){token++;stop();modal.classList.add('hidden');trigger?.focus();}
@@ -38,7 +65,7 @@
             const source=el('replay-source').value;
             const prepared={...value,samples:root.DriveReplay.samples(value,source).map(s=>({...s,...(source==='foreground'?annotations.get(s.timestamp):{})})).sort((a,b)=>a.timestamp-b.timestamp)};
             const nextReport=root.DriveReplay.run(prepared);
-            originalRecording=value;recording=prepared;report=nextReport;drawnRoute=-2;
+            originalRecording=value;recording=prepared;report=nextReport;drawnRoute=-2;comparison.textContent='';renderEvidence();
             const review=root.DriveQuality.review(recording);
             el('replay-summary').textContent=text(`위치 ${report.samples}개 · 매칭 ${report.matched} · 불확실 ${report.uncertain} · 거부 ${report.rejected} · 경로 없음 ${report.missingRoute}\n위치 진행 급변 ${report.positionJumps}회 · ETA 평균 절대 오차 ${review.meanAbsoluteEtaErrorSec===null?'—':Math.round(review.meanAbsoluteEtaErrorSec)+'초'}\n정답 도로·회전 시각 라벨이 없으면 정확도·안내 지연을 확정할 수 없습니다.`,
                 `${report.samples} fixes · ${report.matched} matched · ${report.uncertain} uncertain · ${report.rejected} rejected · ${report.missingRoute} missing route\n${report.positionJumps} progress jumps · mean absolute ETA error: ${review.meanAbsoluteEtaErrorSec===null?'—':Math.round(review.meanAbsoluteEtaErrorSec)+' s'}\nRoad accuracy and instruction timing require ground-truth labels.`);
@@ -63,7 +90,7 @@
             try{const sample=recording.samples[Number(el('replay-position').value)],label=root.GlareFeedback.observation(sample,value);
                 const items=feedback().filter(v=>v.timestamp!==label.timestamp||v.lat!==label.lat||v.lng!==label.lng);items.push(label);localStorage.setItem(feedbackKey,JSON.stringify(root.GlareFeedback.retain(items)));
                 const stats=root.GlareFeedback.summarize(feedback());
-                el('drive-lab-message').textContent=text(`관찰 저장됨 · 오탐 ${stats.falsePositive} · 누락 ${stats.falseNegative} · 예측 미확인 ${stats.unknown}. 자동 보정하지 않습니다.`,`Observation saved · ${stats.falsePositive} false alarms · ${stats.falseNegative} misses · ${stats.unknown} unknown predictions. No automatic recalibration.`);frame();
+                el('drive-lab-message').textContent=text(`관찰 저장됨 · 오탐 ${stats.falsePositive} · 누락 ${stats.falseNegative} · 예측 미확인 ${stats.unknown}. 자동 보정하지 않습니다.`,`Observation saved · ${stats.falsePositive} false alarms · ${stats.falseNegative} misses · ${stats.unknown} unknown predictions. No automatic recalibration.`);renderEvidence();frame();
             }catch{el('drive-lab-message').textContent=text('저장하지 못했습니다.','Could not save.');}
         };
         el('btn-glare-clear').onclick=()=>{clear();el('drive-lab-message').textContent=text('눈부심 평가를 삭제했습니다.','Glare observations deleted.');if(originalRecording)load(originalRecording);};

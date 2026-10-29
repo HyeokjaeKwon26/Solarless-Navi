@@ -6,7 +6,7 @@ def appRelease = new groovy.json.JsonSlurper().parse(rootProject.file('../app-re
 
 android {
     testOptions {
-        unitTests.all { systemProperty 'navigation.units.fixtures', rootProject.file('../tests/fixtures/navigation-units.json').absolutePath }
+        unitTests.all { systemProperty 'navigation.parity.fixtures', rootProject.file('../tests/fixtures/guidance-parity.json').absolutePath; systemProperty 'navigation.units.fixtures', rootProject.file('../tests/fixtures/navigation-units.json').absolutePath }
     }
     namespace "com.solaris.nav"
     compileSdk rootProject.ext.compileSdkVersion

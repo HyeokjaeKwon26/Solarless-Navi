@@ -6,6 +6,7 @@
     const plugin = () => root.Capacitor?.Plugins?.Pip;
     function sync(route) {
         if (!route || !plugin()?.setGuidanceRoute) return;
+        try{root.ServiceHealth?.shared.check('native-guidance');}catch{return;}
         const language = root.TTSVoice.getLanguage();
         const unitSystem = root.NavigationUnits.system();
         const muted = root.TTSVoice.isMuted();
@@ -33,7 +34,9 @@
         });
         plugin().setGuidanceRoute({ route: { revision: nextRevision(), coordinates: model.coordinates, turns, language, unitSystem, muted,
             nearbyRoads: root.NearbyRoads?.nativeSnapshot(root.RoadPack?.graph) || null } })
-            .then(() => { if (generation === token) { identity = route; identityPresentation = presentation; } }).catch(() => {}).finally(() => { if (generation === token && pending === route) pending = null; });
+            .then(() => { if (generation === token) { identity = route; identityPresentation = presentation; root.ServiceHealth?.shared.success('native-guidance'); } })
+            .catch(() => { if(generation===token)root.ServiceHealth?.shared.failure('native-guidance',0); })
+            .finally(() => { if (generation === token && pending === route) pending = null; });
     }
     function clear(force = false) {
         if (!force && !identity && !pending) return;

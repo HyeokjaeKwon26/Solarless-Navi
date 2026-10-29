@@ -20,5 +20,29 @@
         return report;
     }
     function retain(values,now=Date.now()){return values.filter(v=>Number.isFinite(v.observedAt)&&v.observedAt<=now&&now-v.observedAt<=90*86400000).slice(-200);}
-    return {observation,summarize,retain};
+    function stratify(values){
+        const groups=new Map();
+        for(const v of values){
+            const p=v.prediction||{};
+            const elevation=Number.isFinite(p.sunAltitude)?p.sunAltitude<=10?'low-sun':p.sunAltitude<=30?'mid-sun':'high-sun':'sun-unknown';
+            const heading=Number.isFinite(p.roadHeading)?['N','E','S','W'][Math.floor((p.roadHeading+45)%360/90)]:'heading-unknown';
+            const shade=Number.isFinite(p.occlusionRatio)?p.occlusionRatio>=.5?'shaded':'exposed':'shade-unknown';
+            const key=[elevation,heading,shade,p.weatherModel||'weather-unknown'].join(' / ');
+            if(!groups.has(key))groups.set(key,[]);groups.get(key).push(v);
+        }
+        return [...groups].map(([condition,rows])=>({condition,...summarize(rows)}));
+    }
+    function evaluateThreshold(values){
+        const rows=values.filter(v=>typeof v.glare==='boolean'&&Number.isFinite(v.timestamp)&&v.prediction&&!v.prediction.uncertain&&v.prediction.evidenceKnown===true&&Number.isFinite(v.prediction.risk)).sort((a,b)=>a.timestamp-b.timestamp);
+        const days=[...new Set(rows.map(v=>Math.floor(v.timestamp/86400000)))];
+        const unavailable={eligible:false,reason:'insufficient-independent-observations',recommendedThreshold:null};
+        if(days.length<4||rows.length<40)return unavailable;
+        const split=days[Math.floor(days.length*.7)],train=rows.filter(v=>Math.floor(v.timestamp/86400000)<split),held=rows.filter(v=>Math.floor(v.timestamp/86400000)>=split);
+        if([train,held].some(set=>set.filter(v=>v.glare).length<5||set.filter(v=>!v.glare).length<5))return unavailable;
+        const loss=(set,threshold)=>{const positive=set.filter(v=>v.glare),negative=set.filter(v=>!v.glare);return .5*(positive.filter(v=>v.prediction.risk<=threshold).length/positive.length+negative.filter(v=>v.prediction.risk>threshold).length/negative.length);};
+        const candidate=[.35,.4,.45,.5,.55,.6,.65].sort((a,b)=>loss(train,a)-loss(train,b)||Math.abs(a-.45)-Math.abs(b-.45))[0];
+        const baseline=loss(held,.45),tested=loss(held,candidate),improved=baseline>0&&tested<baseline*.9;
+        return {eligible:true,reason:improved?'held-out-improvement':'no-held-out-improvement',recommendedThreshold:improved?candidate:null,trainCount:train.length,heldOutCount:held.length,baselineBalancedError:baseline,candidateBalancedError:tested,automaticCalibration:false};
+    }
+    return {observation,summarize,retain,stratify,evaluateThreshold};
 });

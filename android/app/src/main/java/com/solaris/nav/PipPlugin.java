@@ -121,6 +121,11 @@ public class PipPlugin extends Plugin {
                 result.put("batteryTemperatureC", battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0);
             }
         }
+        result.put("device", Build.MANUFACTURER + " " + Build.MODEL);
+        try {
+            result.put("brightness", android.provider.Settings.System.getInt(getContext().getContentResolver(), android.provider.Settings.System.SCREEN_BRIGHTNESS));
+            result.put("brightnessMode", android.provider.Settings.System.getInt(getContext().getContentResolver(), android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE));
+        } catch (android.provider.Settings.SettingNotFoundException | SecurityException ignored) { /* Unknown is not zero. */ }
         call.resolve(result);
     }
 

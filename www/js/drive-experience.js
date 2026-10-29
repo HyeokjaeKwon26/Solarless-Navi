@@ -3,7 +3,7 @@
     'use strict';
     const $=id=>root.document.getElementById(id),ko=()=>root.I18n.getLanguage().startsWith('ko');
     const t=(a,b)=>ko()?a:b;
-    let initialized=false,compact=false,open=false;
+    let initialized=false,compact=false,constrained=false,open=false;
     try{compact=root.localStorage?.getItem('solarless_compact_controls')==='true';}catch{}
     function same(a,b){
         const x=a?.analyzed?.coordinates,y=b?.analyzed?.coordinates;
@@ -16,10 +16,12 @@
     }
     function controls(){
         if(!initialized)return;
-        root.document.body.classList.toggle('compact-controls',compact);
-        root.document.body.classList.toggle('map-tools-open',open&&compact);
+        const effective=compact||constrained;
+        root.document.body.classList.toggle('constrained-controls',constrained);
+        root.document.body.classList.toggle('compact-controls',effective);
+        root.document.body.classList.toggle('map-tools-open',open&&effective);
         $('toggle-compact-controls').checked=compact;
-        $('btn-map-tools').setAttribute('aria-expanded',String(open&&compact));
+        $('btn-map-tools').setAttribute('aria-expanded',String(open&&effective));
         $('btn-map-tools').textContent=open?t('닫기','Close'):t('더보기','More');
         $('btn-map-tools').setAttribute('aria-label',open?t('지도 도구 닫기','Close map tools'):t('지도 도구 펼치기','Expand map tools'));
     }
@@ -53,7 +55,7 @@
         if(!initialized)return;
         $('experience-title').textContent=t('주행 화면과 알림','Driving display and alerts');
         $('compact-controls-label').textContent=t('간결한 지도 도구','Compact map controls');
-        $('compact-controls-note').textContent=t('재중앙은 항상 표시합니다. 지도 모드·범례·절전·방향은 더보기에서 펼칩니다.','Recenter stays visible. Expand More for map view, colors, battery saver and orientation.');
+        $('compact-controls-note').textContent=t('재중앙은 항상 표시합니다. 좁은 화면에서는 자동으로 접습니다. 지도 도구는 더보기에서 펼칩니다.','Recenter stays visible. Controls also fold automatically when space is limited. Expand More for map tools.');
         $('alert-settings-title').textContent=t('경고별 알림','Alerts by type');
         const labels=ko()?['눈부심 예상','과속','고속도로·유료도로']:['Predicted glare','Speeding','Highways and toll roads'];
         ['glare','speeding','road'].forEach((type,i)=>{$('alert-label-'+type).textContent=labels[i];const select=$('alert-mode-'+type);select.value=root.AlertSettings.get()[type];[...select.options].forEach((o,j)=>o.textContent=(ko()?['음성 + 화면','화면만','끔']:['Voice + display','Display only','Off'])[j]);});
@@ -97,5 +99,5 @@
         const endpoint=root.ShadowRouter.getRouteEndpoint(route),gap=endpoint?root.ShadowRouter.calculateDistanceMeters(end.lat,end.lng,endpoint.lat,endpoint.lng):null;
         el.textContent=(end.entranceConfirmed?t('선택한 차량 입구로 접근 중 · 현장 진입 방향 확인','Approaching your confirmed entrance · check access direction on site'):t('선택한 도착점으로 접근 중 · 차량 입구 미확인','Approaching your arrival pin · vehicle entrance unverified'))+(gap>25?' · '+t(`경로 끝과 핀 ${root.NavigationUnits.distance(gap)} 차이`,`Route ends ${root.NavigationUnits.distance(gap)} from pin`):'');
     }
-    return {init,render,routeSummary,arrival,groups,same,closeTools(){open=false;controls();}};
+    return {init,render,routeSummary,arrival,groups,same,setConstrained(value){if(constrained!==value){constrained=value;open=false;controls();}},closeTools(){open=false;controls();}};
 });

@@ -1889,3 +1889,66 @@ test('arrival pin note discloses access uncertainty and endpoint gap without cha
     await page.evaluate(()=>DriveExperience.arrival(false,100,null,null));await expect(page.locator('#arrival-pin-note')).toBeHidden();
     await expect(page.locator('#search-model-details')).not.toHaveAttribute('open');await page.locator('#search-model-heading').click();await expect(page.locator('#search-modal-sub')).toBeVisible();expect(state.errors).toEqual([]);
 });
+
+
+test('reliability search recovery keeps area input usable and confirms map pins',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.setViewportSize({width:320,height:740});await page.goto('./');
+    await page.evaluate(()=>{window.recoveryQueries=[];Geocoder.searchPlaces=async q=>{recoveryQueries.push(q);throw Error('network');};});
+    await page.locator('#destination-input').fill('94 Gerry Road');await page.locator('#destination-input-search').click();
+    await expect(page.locator('.search-recovery-actions')).toBeVisible();
+    await page.locator('.search-recovery-actions input').fill('Brookline, MA');
+    await page.getByRole('button',{name:'Search with area',exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>recoveryQueries.at(-1))).toContain('Brookline, MA');
+    await expect(page.locator('.search-recovery-actions')).toBeVisible();
+    const box=await page.locator('.search-recovery-actions').boundingBox();expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(320);
+    await page.getByRole('button',{name:'Choose arrival pin on map',exact:true}).click();
+    await expect(page.locator('#destination-review-modal')).toBeVisible();
+    await expect(page.locator('#destination-entrance-confirmed')).not.toBeChecked();
+    await expect(page.locator('#destination-review-address')).toContainText('Arrival pin selected on map');
+    await page.locator('#btn-review-cancel').click();expect(state.routes).toHaveLength(0);expect(state.errors).toEqual([]);
+});
+
+test('reliability junction schematic fits a narrow phone and hides for uncertain GPS',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true,chained:true,nearTurns:true});await captureJourneyControls(page);await page.setViewportSize({width:320,height:740});
+    await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit();return journeyTestApi.state().snapped;})).toBe(true);
+    await expect(page.locator('#junction-schematic')).toBeVisible();await expect(page.locator('#junction-schematic svg polyline')).toHaveCount(1);
+    const b=await page.locator('#mobile-turn-banner').boundingBox();expect(b.x).toBeGreaterThanOrEqual(0);expect(b.x+b.width).toBeLessThanOrEqual(320);
+    await expect(page.locator('#btn-map-tools')).toBeVisible();
+    const topButton=await page.locator('#btn-map-tools').boundingBox();expect(topButton.y).toBeGreaterThanOrEqual(b.y+b.height);
+    await expect(page.locator('#btn-recenter-gps')).toBeVisible();
+    await page.screenshot({path:'.codex-remote-attachments/junction-1.3.24-'+test.info().project.name+'.png'});
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({accuracy:200});return document.getElementById('junction-schematic').hidden;})).toBe(true);await expect(page.locator('#junction-schematic')).toBeHidden();expect(state.errors).toEqual([]);
+});
+
+test('reliability evidence review reports missing calibration and rejects charged performance comparison',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-drive-replay').click();
+    const at=Date.now(),recording={version:2,samples:[],events:Array.from({length:61},(_,i)=>({type:'performance-sample',recordedAt:at+i*30000,data:{version:'1.3.24',device:'test-phone',brightness:100,brightnessMode:0,visible:true,pip:false,map3d:true,live:true,saver:false,charging:false,externalPowerConnected:false,batteryPercent:80-i/10,batteryTemperatureC:32,renderLatencyMs:12}}))};
+    await page.locator('#replay-import').setInputFiles({name:'drive.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(recording))});
+    await page.locator('#drive-evidence-details summary').click();await expect(page.locator('#drive-evidence-report')).toContainText('12.0');
+    await expect(page.locator('#drive-evidence-report')).toContainText('Calibration evidence insufficient');
+    const charged=structuredClone(recording);charged.events[2].data.charging=true;
+    await page.locator('#performance-compare-file').setInputFiles({name:'prior.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(charged))});
+    await expect(page.locator('#performance-comparison')).toContainText('Insufficient comparison');expect(state.errors).toEqual([]);
+});
+
+test('reliability ETA evidence and reroute status keep totals and label uncertainty',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');
+    await page.evaluate(()=>{JourneyUI.etaEvidence(600,{range:{lowFactor:.9,highFactor:1.3,count:5}},25,true);JourneyUI.requestState('ready','forward-recovery');});
+    await expect(page.locator('#eta-evidence')).toContainText('9–13 min');await expect(page.locator('#eta-evidence')).toContainText('not a live traffic forecast');
+    await expect(page.locator('#journey-request-status')).toContainText('avoiding an early U-turn');
+    await expect(page.locator('#sum-duration')).not.toBeEmpty();expect(state.errors).toEqual([]);
+});
+
+test('reliability native guidance retries failures with bounded backoff and clears on stop',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');
+    const result=await page.evaluate(async()=>{
+        let now=1000,calls=0,clears=0;ServiceHealth.shared=ServiceHealth.create(()=>now);
+        window.Capacitor={Plugins:{Pip:{setGuidanceRoute:async()=>{calls++;throw Error('bridge busy');},clearGuidanceRoute:async()=>{clears++;}}}};
+        const route={analyzed:{coordinates:[[-71,42],[-71.01,42]]},maneuvers:[]};
+        NativeNavigation.invalidate();NativeNavigation.sync(route);await new Promise(r=>setTimeout(r,0));NativeNavigation.sync(route);await new Promise(r=>setTimeout(r,0));
+        NativeNavigation.sync(route);const bounded=calls;now+=2001;NativeNavigation.sync(route);await new Promise(r=>setTimeout(r,0));NativeNavigation.clear(true);
+        return {bounded,calls,clears};
+    });
+    expect(result).toEqual({bounded:2,calls:3,clears:1});expect(state.errors).toEqual([]);
+});

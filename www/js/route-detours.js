@@ -12,7 +12,7 @@
                 if(options.signal?.aborted)throw Error('REQUEST_CANCELLED');
                 const delay=Math.max(0,1000-(clock()-last));if(delay)await sleep(Math.ceil(delay));
                 if(options.signal?.aborted)throw Error('REQUEST_CANCELLED');
-                last=clock();return fetcher(url,options);
+                last=clock();return typeof globalThis.ServiceHealth!=='undefined' ? globalThis.ServiceHealth.shared.run('routing',()=>fetcher(url,options)) : fetcher(url,options);
             }finally{release();}
         };
     }

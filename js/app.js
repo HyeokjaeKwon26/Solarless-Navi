@@ -116,6 +116,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let isFreeDriveMode = false;
     let isPipMode = false;
     const etaLearning = EtaLearning.create(localStorage);
+    const recentDelay = JourneyEvidence.delayTracker();
+    let lastPerformanceRecordAt=0;
+    const evidenceSunCache=new WeakMap();
+    function evidenceSunAltitude(segment,lat,lng){
+        const at=+new Date(segment.passTime||0),old=evidenceSunCache.get(segment);
+        if(old&&old.at===at)return old.altitude;
+        const altitude=at>0?SunCalc.getPosition(new Date(at),lat,lng).altitude:null;
+        evidenceSunCache.set(segment,{at,altitude});return altitude;
+    }
     let tripEta = null;
     function etaEstimate(route) {
         if (!etaLearning.enabled || !isRealTimeMode || route?.remainingForecast?.traffic?.coverage > 0 || route?.traffic?.coverage > 0) return {factor:1,applied:false,count:0};
@@ -267,6 +276,9 @@ document.addEventListener('DOMContentLoaded', () => {
         recording.review = DriveQuality.review(recording);
         recording.glareObservations = DriveLab.feedback();
         recording.glareReview = GlareFeedback.summarize(recording.glareObservations);
+        recording.glareConditions=GlareFeedback.stratify(recording.glareObservations);
+        recording.glareThresholdEvaluation=GlareFeedback.evaluateThreshold(recording.glareObservations);
+        recording.performance=JourneyEvidence.performanceReport(recording);
         json = JSON.stringify(recording);
         const nativePlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Pip;
         if (window.Capacitor && window.Capacitor.isNativePlatform() && nativePlugin) {
@@ -532,6 +544,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function clearActiveNavigationSession() {
+        JourneyUI.requestState(null);JourneyUI.junction(null,null,false);recentDelay.reset();
         cachedPreview = null; clearCachedPreview();
         try { localStorage.removeItem(ACTIVE_NAVIGATION_SESSION_KEY); } catch (e) {}
     }
@@ -786,11 +799,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const update = () => {
             const height = Math.ceil(stack.getBoundingClientRect().height || 0);
             wrapper.style.setProperty('--map-bottom-overlay-height', `${height}px`);
+            const turn=document.getElementById('mobile-turn-banner').getBoundingClientRect(),bounds=wrapper.getBoundingClientRect();
+            const button=document.getElementById('btn-recenter-gps').getBoundingClientRect();
+            const available=bounds.bottom-height-28-Math.max(bounds.top,turn.bottom);
+            const landscape=window.matchMedia('(orientation:landscape) and (max-height:540px)').matches;
+            wrapper.style.setProperty('--map-tools-height', Math.max(112,available)+'px');
+            DriveExperience.setConstrained(!!(isLiveNavActive&&!isPipMode&&!landscape&&available<6*(button.height||48)+30));
             validateMapOverlayLayout();
         };
         if (typeof ResizeObserver !== 'undefined') {
             const observer = new ResizeObserver(update);
             observer.observe(stack);
+            observer.observe(wrapper);
+            observer.observe(document.getElementById('mobile-turn-banner'));
             if (summary) observer.observe(summary);
             const apiNotice = document.getElementById('api-status-banner');
             if (apiNotice) observer.observe(apiNotice);
@@ -1070,7 +1091,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if(!drivingHudBounds)drivingHudBounds=['map-perspective-wrapper','mobile-turn-banner','map-bottom-overlay-stack'].map(id=>document.getElementById(id).getBoundingClientRect());
         const [wrapper,banner,bottom]=drivingHudBounds;
         const landscape=window.matchMedia('(orientation: landscape) and (max-height: 540px)').matches;
-        if(!reliable){document.getElementById('banner-road').hidden=true;document.getElementById('mobile-turn-banner').classList.remove('junction-close');}
+        if(!reliable){JourneyUI.junction(null,null,false);document.getElementById('banner-road').hidden=true;document.getElementById('mobile-turn-banner').classList.remove('junction-close');}
         drivingView.update({live:isLiveNavActive,wanted:drivingViewWanted,saver:isBatterySaverActive,pip:isPipMode,
             visible:document.visibilityState!=='hidden',satellite:isSatelliteViewActive,available:!!roadLayerSet?.vectorSupported&&!isRasterMapFallbackActive,
             position:[currentSmoothLng,currentSmoothLat],heading:currentSmoothHeading,bearing:compassMode==='heading-up'?currentSmoothHeading:0,
@@ -1425,6 +1446,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setupFeatureListeners() {
         DriveExperience.init();
+        JourneyUI.init();
         window.addEventListener('solarless:alerts',()=>{isSpeedingWarningActive=false;document.getElementById('speeding-warning-overlay').classList.add('hidden');updateTurnBannerText(lastTurnPresentation.maneuver,lastTurnPresentation.glare,true);});
         refreshDrivingFocus();
         document.getElementById('toggle-driving-focus').addEventListener('change', event => {
@@ -1674,6 +1696,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* TURN BANNER WITH MANEUVER + ESTIMATED GLARE POSSIBILITY OVERLAY */
     function renderProvisionalGuidanceBanner() {
+        JourneyUI.junction(null,null,false);
         syncGpsControl();
         document.getElementById('banner-lanes').hidden = true;
         const following = document.getElementById('banner-following');
@@ -1706,6 +1729,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const bannerIcon = document.getElementById('banner-turn-icon');
         const laneElement = document.getElementById('banner-lanes');
         const camera = JourneyPolicy.camera(nextManeuver, lastNavigationSpeedKmh);
+        JourneyUI.junction(selectedRouteObj,nextManeuver,camera.close&&isLiveNavActive&&!isFreeDriveMode&&!isPipMode);
         banner.classList.toggle('junction-close', camera.close);
         const roadElement=document.getElementById('banner-road');
         roadElement.hidden=!camera.close;
@@ -2026,6 +2050,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // Discard it and fetch the latest state before updating the screen.
             if (runtimeHealthDisposed || runtimeHealthRefreshQueued) return;
             runtimeHealth = health;
+            if(driveRecorder.active&&Date.now()-lastPerformanceRecordAt>=30000){
+                lastPerformanceRecordAt=Date.now();
+                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.24',
+                    visible:!document.hidden,pip:isPipMode,live:isLiveNavActive,saver:isBatterySaverActive,map3d:!!drivingView?.active()});
+            }
             automaticBatterySaver = NavigationGuidance.shouldConserve(runtimeHealth, automaticBatterySaver);
             applyBatterySaverState();
         } catch (e) { /* Older bridge versions do not expose device health. */ }
@@ -3846,7 +3875,10 @@ document.addEventListener('DOMContentLoaded', () => {
             remainingSec = ShadowRouter.calculateRemainingRouteDuration(forecast.analyzed.coordinates, forecast.steps, forecast.traffic.duration, index, fraction, forecast.lookup);
         }
         const estimate=etaEstimate(selectedRouteObj);
-        const seconds = Math.max(30, (Number(remainingSec) || 0)*estimate.factor);
+        const delay=recentDelay.observe(selectedRouteObj?.analyzed?.coordinates,Date.now(),Number(remainingSec),remainingMeters,
+            isLiveNavActive&&!isFreeDriveMode&&isRealTimeMode&&snap?.isSnapped&&Date.now()-snap.timestamp<=10000&&!estimate.applied&&!(forecast?.traffic?.coverage>0)&&!(selectedRouteObj?.traffic?.coverage>0));
+        const seconds = Math.max(30, (Number(remainingSec) || 0)*estimate.factor+delay);
+        JourneyUI.etaEvidence(Number(remainingSec)||0,estimate,delay,!isFreeDriveMode&&!!selectedRouteObj);
         const badge=document.getElementById('eta-learning-badge');
         badge.hidden=!estimate.applied;
         badge.textContent=isKo?`내 기록 ${estimate.count}회 보정`:`Adjusted · ${estimate.count} trips`;
@@ -3952,8 +3984,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const rerouteReason = String(routeOptions.reason || (isMidDrive ? 'off-route' : 'planning'));
+        const recoverySelection=data=>{
+            const preferred=data.routes[currentMode]||data.routes.fastest;
+            if(!isMidDrive||rerouteReason!=='off-route')return preferred;
+            const choice=RecoveryPolicy.choose(data,currentMode,routeBudget);data.recovery=choice;
+            return choice.route||preferred;
+        };
         const destinationBackup = isMidDrive && rerouteReason === 'destination-change' ? liveDestinationBackup : null;
         if (isMidDrive && navigator.onLine === false && !RoadPack.graph) {
+            JourneyUI.requestState('failed');
             if (destinationBackup) restoreLiveDestinationBackup(destinationBackup);
             gpsOriginReroutePending = false;
             refreshGuidanceHealth();
@@ -4050,7 +4089,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const routeStartedAt = Date.now();
         const rerouteRecordId = `${routeStartedAt}-${requestGeneration}`;
         let rerouteRecorded = false;
-        if (isMidDrive) DriveArchive.record('reroute-start', {id:rerouteRecordId,reason:rerouteReason});
+        if (isMidDrive) { DriveArchive.record('reroute-start', {id:rerouteRecordId,reason:rerouteReason}); JourneyUI.requestState('pending'); }
         try {
             const fetchRouteData = routeOptions.precomputed ? async (_start, _end, _date, _toll, options) => {
                 const prepared = { ...routeOptions.precomputed, analysisPhase: 'heuristic-initial', enrichmentPending: false };
@@ -4094,7 +4133,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         verifiedRouteRequestKey = progressRequestKey;
                         verifiedRouteOriginProvisional = requestOriginProvisional;
                         updateRouteOptionButtons(routeData);
-                        const enrichedSelection = routeData.routes[currentMode] || routeData.routes.fastest;
+                        const enrichedSelection = recoverySelection(routeData);
                         const roleKey = currentMode === 'shade' ? 'shade' : (currentMode === 'glareFree' ? 'glareFree' : 'fastest');
                         const roleMeta = routeData.roleAnalysis && routeData.roleAnalysis[roleKey];
                         const isPrecisionProgress = progress.analysisPhase === 'precision-partial' ||
@@ -4144,7 +4183,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                         } else if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj ||
                             getRouteGeometryIdentity(enrichedSelection) === navigationSessionRouteId ||
-                            (isMidDrive && progress.analysisPhase === 'heuristic-initial')) {
+                            (isMidDrive && !liveRerouteCommitted && progress.analysisPhase === 'heuristic-initial')) {
                             // A partial precision callback is an enrichment
                             // event, not permission to replace active guidance.
                             // Live swaps must pass precisionRouteStartsAtVehicle
@@ -4158,7 +4197,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             // is safe to remove the old remaining polyline.
                             liveRerouteCommitted = true;
                             etaLearning.cancel();tripEta=null;
-                            DriveArchive.record('reroute-ready', {id:rerouteRecordId});
+                            DriveArchive.record('reroute-ready', {id:rerouteRecordId,recovery:routeData.recovery?.reason});
+                            JourneyUI.requestState('ready',routeData.recovery?.reason);
                             rerouteRecorded = true;
                             if (rerouteReason === 'destination-change') {
                                 DriveArchive.record('trip-redirect', {id:navigationSessionStartedAt});
@@ -4239,7 +4279,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             if (requestGeneration !== routeAnalysisGeneration || requestController.signal.aborted || routeAbortController !== requestController) return;
             if (isMidDrive && !rerouteRecorded) {
-                DriveArchive.record('reroute-failed', {id:rerouteRecordId}); rerouteRecorded = true;
+                DriveArchive.record('reroute-failed', {id:rerouteRecordId}); rerouteRecorded = true; JourneyUI.requestState('failed');
             }
             routingUnavailable = true;
             const hadPreviousRoute = !!(routeData && selectedRouteObj);
@@ -4281,7 +4321,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         updateRouteOptionButtons(routeData);
 
-        const enrichedSelection = routeData.routes[currentMode] || routeData.routes.glareFree;
+        const enrichedSelection = recoverySelection(routeData);
         if (!isLiveNavActive || !navigationSessionRouteId || !selectedRouteObj ||
             getRouteGeometryIdentity(enrichedSelection) === navigationSessionRouteId) {
             selectedRouteObj = enrichedSelection;
@@ -4749,6 +4789,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let requestGeneration = 0;
         let requestController = null;
         let activeIndex = -1;
+        let recoveryActions=null;
         if (!input || !dropdown) return;
         input.setAttribute('role', 'combobox');
         input.setAttribute('aria-controls', dropdownId);
@@ -4763,6 +4804,7 @@ document.addEventListener('DOMContentLoaded', () => {
         input.addEventListener('focus', markRecentRouteEditing);
 
         const cancel = () => {
+            recoveryActions?.remove();recoveryActions=null;dropdown.parentElement.classList.remove('search-recovery-active');
             clearTimeout(debounceTimer);
             requestGeneration += 1;
             if (requestController) requestController.abort();
@@ -4796,6 +4838,14 @@ document.addEventListener('DOMContentLoaded', () => {
             dropdown.classList.add('active');
             input.setAttribute('aria-expanded', 'true');
         };
+        const showRecovery=()=>{recoveryActions=JourneyUI.searchRecovery(dropdown,input,{
+            submit:()=>runSearch(true),
+            recent:()=>{dropdown.classList.remove('active');recoveryActions?.remove();document.getElementById('recent-history-group')?.scrollIntoView({block:'nearest'});document.querySelector('#recent-history-list button')?.focus();},
+            pin:inputId==='destination-input'&&!isLiveNavActive?async()=>{
+                const center=map.getCenter(),name=I18n.getLanguage().startsWith('ko')?'지도에서 선택한 도착점':'Arrival pin selected on map';
+                await applyDestinationSelection({lat:center.lat,lng:center.lng,source:'user-pin'},name);
+            }:null
+        });};
         const runSearch = async (submitted = false) => {
             cancel();
             const generation = requestGeneration;
@@ -4816,6 +4866,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn('Autocomplete search unavailable:', e);
                 status(e?.messageKey==='offlineSearchUnavailable' ? I18n.getText('offlineSearchUnavailable') : (isKo ? '검색 서비스에 연결하지 못했습니다. 다시 검색해 주세요.' : 'Search unavailable. Please try again.'));
                 offerAddressSearch();
+                if(submitted)showRecovery();
                 return;
             }
             if (generation !== requestGeneration) return;
@@ -4826,6 +4877,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? (isKo ? '일치하는 주소가 없습니다. 도시·주 또는 우편번호를 추가해 주세요.' : 'No matching address. Add a city, state or postal code.')
                     : (isKo ? '추천 목록에 없어도 주소를 검색할 수 있습니다. 위 버튼을 눌러 확인해 주세요.' : 'This address may still be available. Tap above to run a full address search.'));
                 if (!submitted) offerAddressSearch();
+                else showRecovery();
                 return;
             }
 
@@ -4920,7 +4972,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         document.addEventListener('click', (e) => {
-            if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+            if (!input.contains(e.target) && !dropdown.contains(e.target) && !recoveryActions?.contains(e.target)) {
                 if (e.target.closest(`#${inputId}-search, #btn-confirm-destination`)) return;
                 cancel();
                 input.setAttribute('aria-expanded', 'false');
@@ -5762,6 +5814,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 glarePrediction: recordedSegment ? {...RoutePresentation.assessment(recordedSegment),
                     computedAt:selectedRouteObj.glareSnapshot?.at,occlusionRatio:recordedSegment.occlusionRatio,
                     evidenceKnown:recordedSegment.irradiance?.model==='OPEN_METEO_FORECAST'&&Number.isFinite(recordedSegment.occlusionRatio),
+                    sunAltitude:evidenceSunAltitude(recordedSegment,lat,lng),
                     roadHeading:recordedSegment.heading,passTime:recordedSegment.passTime,dni:recordedSegment.irradiance?.dni,
                     occlusionAt:recordedSegment.occlusionAt,weatherModel:recordedSegment.irradiance?.model||null,shadeState:recordedSegment.shadeState||null} : null,
                 oppositeDirection: navigationSnap.reason === 'opposite-direction'

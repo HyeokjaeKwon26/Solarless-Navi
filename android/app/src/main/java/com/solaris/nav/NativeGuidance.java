@@ -63,7 +63,24 @@ final class NativeGuidance {
                     }
                     if(Math.abs(values[i][0])>180||Math.abs(values[i][2])>180||Math.abs(values[i][1])>85||Math.abs(values[i][3])>85) throw new JSONException("Invalid nearby coordinates");
                 }
-                progress.setNearbyRoads(values, nearby.optLong("expiresAt"));
+                JSONArray links=nearby.optJSONArray("successors");
+                int[][] successors=null;
+                if(links!=null) {
+                    if(links.length()!=values.length) throw new JSONException("Invalid road connections");
+                    successors=new int[values.length][];
+                    int total=0;
+                    for(int i=0;i<values.length;i++) {
+                        JSONArray row=links.getJSONArray(i); total+=row.length();
+                        if(total>120000) throw new JSONException("Too many road connections");
+                        successors[i]=new int[row.length()];
+                        for(int j=0;j<row.length();j++) {
+                            int id=row.getInt(j);
+                            if(id<0||id>=values.length) throw new JSONException("Invalid road connection");
+                            successors[i][j]=id;
+                        }
+                    }
+                }
+                progress.setNearbyRoads(values, nearby.optLong("expiresAt"), successors);
             }
         }
         turns = candidateTurns; phases = new int[turns.length()];
