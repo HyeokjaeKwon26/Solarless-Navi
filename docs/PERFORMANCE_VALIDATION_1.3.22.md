@@ -15,7 +15,17 @@
 - Android에서 250ms 간격 40회 입력에 복구 저장 허용은 5회인 것을 검증했다. 실제 SharedPreferences 디스크 쓰기 횟수는 OS 병합 정책에 따라 다르다.
 - 진단 기록의 UTF-8·순서·파일 회전·최대 용량·버퍼 비우기·저장 실패 처리를 JVM 테스트로 검사했다.
 
-최종 전체 테스트 및 공개 APK 검증 결과는 배포 후 기록한다.
+### 최종 검증 결과 (2026-10-29)
+
+- [배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40866184028)와 [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40866180506)가 모두 성공했다. 단위 테스트 334개, 브라우저 테스트 176개를 통과했다.
+- 로컬 Android JVM 테스트 35개를 통과했고 CI에서도 testDebugUnitTest·assembleDebug·lintDebug·assembleRelease가 성공했다. 로컬 lint 결과는 오류 0개, 기존 경고 19개다. npm audit 취약점은 0개다.
+- [공개 APK](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.22/SolarLessNavi-1.3.22.apk)를 다시 다운로드해 서명·패키지·버전 1.3.22/code 26·minSdk 22·비디버그 빌드를 검증했다. 기존 서명 인증서를 유지했다. 파일 크기는 4,472,583바이트다.
+- APK SHA-256: 72acb1ed9a87aeda1f8746ba0dcb568226cbc6272b61e33afc32724630f7a5cf
+- 소스 커밋 c73cae1fb6e922718d7364d0f737f546ab338ce9의 웹 파일 69개가 APK 내부와 바이트 단위로 일치한다. 새 네이티브 저장 클래스가 포함됐고 오프라인 지리 데이터는 추가되지 않았다.
+- 실제 공개 GitHub 응답을 사용하는 브라우저 검사에서 설치 버전 code 9 및 17–25는 업데이트 가능, code 26은 최신으로 인식됐다. 설치된 앱의 신원은 모의 입력이며 실제 Android 설치·데이터 유지 시험을 대신하지 않는다.
+- 실제 폰이 연결되지 않아 주행 정확도·음성 지연·배터리 절감률은 미측정이다. 아래 현장 검증이 남아 있다.
+- 기계 판독 기록: [app-release-1.3.22-verification.json](data/app-release-1.3.22-verification.json)
+
 
 ## 실제 폰·주행 비교
 

@@ -1,0 +1,58 @@
+{
+  "publicRelease": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.22",
+  "apkUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.22/SolarLessNavi-1.3.22.apk",
+  "sizeBytes": 4472583,
+  "certificateSha256": "59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977",
+  "sha256": "72acb1ed9a87aeda1f8746ba0dcb568226cbc6272b61e33afc32724630f7a5cf",
+  "packageName": "com.solaris.nav",
+  "version": "1.3.22",
+  "currentVersionCheck": "up to date",
+  "earlierSameKeyVersion": "update offered",
+  "apkCryptographicVerification": "passed",
+  "debuggable": false,
+  "verifiedAt": "2026-10-29T11:54:51.897Z",
+  "sourceCommit": "c73cae1fb6e922718d7364d0f737f546ab338ce9",
+  "versionCode": 26,
+  "minSdk": 22,
+  "ci": {
+    "release": 40866184028,
+    "main": 40866180506,
+    "conclusion": "success",
+    "nodeTests": 334,
+    "browserTests": 176,
+    "androidTasks": [
+      "testDebugUnitTest",
+      "assembleDebug",
+      "lintDebug",
+      "assembleRelease"
+    ]
+  },
+  "localAndroidTests": {
+    "tests": 35,
+    "failures": 0,
+    "errors": 0,
+    "lintErrors": 0,
+    "lintWarnings": 19
+  },
+  "webAssetsVerified": 69,
+  "offlineGeographicDataBundled": false,
+  "updateHttpChecks": {
+    "availableInstalledCodes": [
+      9,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25
+    ],
+    "upToDateInstalledCode": 26,
+    "installedIdentitySimulated": true
+  },
+  "phoneInstallerTested": false,
+  "actualDrivingTested": false,
+  "batterySavingsMeasured": false
+}
