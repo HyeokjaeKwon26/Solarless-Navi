@@ -490,7 +490,7 @@ const style = {
 
 async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false, initialAccuracy = 5, holdWatchFix = false, pitched = false, nearTurns = false } = {}) {
     const state = { routes: [], errors: [], releaseBravo: null, bravoFinished: false };
-    page.on('pageerror', error => state.errors.push(error.message));
+    page.on('pageerror', error => state.errors.push(error.stack || error.message));
     page.on('dialog', dialog => dialog.accept());
     await page.addInitScript(({initialAccuracy, holdWatchFix,pitched}) => {
         // Existing Leaflet interaction cases explicitly retain the 2D renderer.
@@ -1561,10 +1561,27 @@ test('settings remain accessible without Map button and long free-drive labels c
 });
 
 async function captureDrivingMap(page){
+    await page.route('**/js/map-provider.js',async route=>{
+        const response=await route.fetch();await route.fulfill({response,body:await response.text()+`\nconst createDrivingRoads=MapProvider.createRoadLayers;MapProvider.createRoadLayers=(...args)=>window.drivingRoadLayers=createDrivingRoads(...args);`});
+    });
     await page.route('**/js/driving-view.js',async route=>{
         const response=await route.fetch();await route.fulfill({response,body:await response.text()+`\nconst createDrivingView=DrivingView.create;DrivingView.create=options=>{const NativeMap=options.library.Map; options.library={...options.library,Map:class extends NativeMap{constructor(config){super(config);window.drivingTestMap=this;}}};const controller=createDrivingView(options);window.drivingTestController=controller;const update=controller.update;controller.update=s=>{window.drivingTestState=s;return update(s);};return controller;};`});
     });
 }
+test('queued vector resize cannot access a removed or replaced Leaflet map',async({page})=>{
+    const state=await fixtures(page);await captureDrivingMap(page);await page.goto('./');
+    await expect.poll(()=>page.evaluate(()=>Object.values(drivingRoadLayers.primary).some(l=>l._map&&l._glMap))).toBe(true);
+    await page.evaluate(()=>{
+        const layer=Object.values(drivingRoadLayers.primary).find(l=>l._map&&l._glMap),map=layer._map;
+        layer._transitionEnd();layer.remove();
+        window.restoreVectorFixture=()=>{layer.addTo(map);layer._transitionEnd();layer.remove();layer.addTo(map);};
+    });
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    expect(state.errors).toEqual([]);
+    await page.evaluate(()=>restoreVectorFixture());
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    expect(state.errors).toEqual([]);
+});
 async function startTilted(page,options={}){
     const state=await fixtures(page,{pitched:true,...options});await captureDrivingMap(page);await captureJourneyControls(page);
     await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();

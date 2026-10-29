@@ -42,6 +42,38 @@
         return true;
     }
 
+    function guardVectorLayer(layer, leaflet) {
+        if (!layer || typeof layer._transitionEnd !== 'function') return layer;
+        // The upstream bridge queues a frame that still reads _map after
+        // onRemove. Camera/PiP changes can remove and re-add the same layer
+        // before that frame runs. Cancel it and reject old renderer callbacks.
+        let generation = 0, frame = null;
+        const add = layer.onAdd, remove = layer.onRemove;
+        layer.onAdd = function(map) { generation++; this._zooming=false; return add.call(this,map); };
+        layer.onRemove = function(map) {
+            generation++;
+            if(frame!==null)leaflet.Util.cancelAnimFrame(frame);
+            frame=null;
+            return remove.call(this,map);
+        };
+        layer._transitionEnd = function() {
+            if(frame!==null)leaflet.Util.cancelAnimFrame(frame);
+            const map=this._map, gl=this._glMap, token=generation;
+            if(!map||!gl)return;
+            const current=()=>token===generation&&this._map===map&&this._glMap===gl;
+            frame=leaflet.Util.requestAnimFrame(()=>{
+                frame=null;if(!current())return;
+                const zoom=map.getZoom(), center=map.getCenter();
+                const offset=map.latLngToContainerPoint(map.getBounds().getNorthWest());
+                this._resizeContainer();
+                leaflet.DomUtil.setTransform(gl._actualCanvas,offset,1);
+                gl.once('moveend',()=>{if(current())this._zoomEnd();});
+                gl.jumpTo({center,zoom:zoom-1});
+            },this);
+        };
+        return layer;
+    }
+
     function createRoadLayers(leaflet, maplibregl) {
         if (!leaflet || typeof leaflet.tileLayer !== 'function') {
             throw new Error('Leaflet tile support is required');
@@ -75,14 +107,14 @@
             maxCanvasSize: [4096, 4096]
         };
         const primary = vectorSupported ? {
-            light: leaflet.maplibreGL({
+            light: guardVectorLayer(leaflet.maplibreGL({
                 ...sharedVectorOptions,
                 style: OPENFREEMAP_STYLES.light,
-            }),
-            dark: leaflet.maplibreGL({
+            }),leaflet),
+            dark: guardVectorLayer(leaflet.maplibreGL({
                 ...sharedVectorOptions,
                 style: OPENFREEMAP_STYLES.dark,
-            })
+            }),leaflet)
         } : fallback;
 
         return { primary, fallback, vectorSupported };
@@ -107,6 +139,7 @@
         ATTRIBUTION,
         configureMapLibreRuntime,
         canUseVectorMap,
+        guardVectorLayer,
         createRoadLayers,
         layerForTheme,
         attributionFor

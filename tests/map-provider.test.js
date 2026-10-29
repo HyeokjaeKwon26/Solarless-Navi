@@ -77,6 +77,20 @@ test('attribution follows the visible provider', () => {
     assert.match(provider.attributionFor({ satellite: true }), /Esri/);
 });
 
+test('removed or replaced vector layers cannot run stale resize frames or move callbacks',()=>{
+    let frames=[],cancelled=[],moves=[],resized=0,jumped=0,ended=0;
+    const leaflet={Util:{requestAnimFrame:fn=>(frames.push(fn),frames.length),cancelAnimFrame:id=>cancelled.push(id)},DomUtil:{setTransform(){}}};
+    const map={getZoom:()=>17,getCenter:()=>[0,0],getBounds:()=>({getNorthWest:()=>[0,0]}),latLngToContainerPoint:()=>[0,0]};
+    const makeGl=()=>({_actualCanvas:{},once:(event,fn)=>moves.push(fn),jumpTo:()=>jumped++});
+    const layer={_transitionEnd(){},onAdd(m){this._map=m;this._glMap=makeGl();},onRemove(){this._map=null;this._glMap=null;},_resizeContainer(){resized++;},_zoomEnd(){ended++;}};
+    provider.guardVectorLayer(layer,leaflet);layer.onAdd(map);
+    layer._transitionEnd();layer.onRemove();frames[0]();
+    assert.deepEqual(cancelled,[1]);assert.equal(resized,0);
+    layer.onAdd(map);layer._transitionEnd();frames[1]();assert.equal(jumped,1);
+    layer.onRemove();layer.onAdd(map);moves[0]();assert.equal(ended,0);
+    layer._transitionEnd();frames[2]();moves[1]();assert.equal(ended,1);
+});
+
 test('browser bundles and third-party licenses are packaged locally', () => {
     const root = path.join(__dirname, '..');
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
