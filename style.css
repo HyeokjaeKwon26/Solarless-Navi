@@ -854,6 +854,21 @@ body.pip-mode .map-attribution {
 }
 .map-floating-btn:active { transform: scale(0.92); }
 .map-controls-group .route-legend-btn { position: absolute; right: calc(100% + 8px); bottom: 0; }
+.map-controls-group .driving-view-btn { display:none; position:absolute; right:calc(100% + 8px); bottom:58px; font-weight:800; font-size:14px; }
+.live-navigation .map-controls-group .driving-view-btn { display:flex; }
+#driving-map { position:absolute; inset:0; visibility:hidden; pointer-events:none; z-index:401; background:#17263b; }
+#driving-map.ready { visibility:visible; pointer-events:auto; }
+.driving-map-active #map { visibility:hidden; pointer-events:none; }
+.driving-vehicle { width:42px; height:42px; border:3px solid white; border-radius:50%; background:#0284c7; color:white; font:800 27px/38px sans-serif; text-align:center; box-shadow:0 2px 10px #0008; }
+.driving-vehicle.uncertain { background:#64748b; border-style:dashed; }
+.driving-end { width:32px; height:32px; border:2px solid white; border-radius:50%; color:white; background:#dc2626; font:700 24px/28px sans-serif; text-align:center; }
+.driving-end[hidden] { display:none; }
+#banner-road { margin-top:5px; font-weight:800; font-size:clamp(16px,4.3vw,22px); overflow-wrap:anywhere; line-height:1.25; }
+#banner-road[hidden] { display:none; }
+.junction-close .banner-following { display:flex; gap:8px; align-items:center; border-top:1px solid #64748b; padding-top:6px; }
+.junction-close .banner-following[hidden] { display:none; }
+.banner-following-icon { flex:0 0 24px; font-size:21px; text-align:center; }
+@media(max-height:500px){ .junction-close .banner-following { font-size:12px; } #banner-road { font-size:15px; } }
 .route-legend-btn span { font-size: 9px; line-height: 1.2; margin-top: 2px; }
 #route-legend-modal { position: fixed; inset: 0; z-index: 11000; transition: opacity 0.3s ease; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
 .route-legend-card { max-height: calc(100dvh - max(16px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom))); }
@@ -1371,3 +1386,23 @@ body.battery-saver-active .route-summary-floating {
 .closure-offer.hidden { display:none; }
 body.pip-mode #trip-preview-modal, body.pip-mode #closure-offer { display:none; }
 @media(max-height:500px){.closure-offer{top:90px;max-height:55dvh;} #trip-preview-map{height:150px;}}
+
+/* A mounted phone needs usable map space beside its junction instructions. */
+@media (orientation:landscape) and (max-height:540px) {
+    body.live-driving:not(.pip-mode) .app-header { flex-basis:44px; height:44px; }
+    body.live-driving:not(.pip-mode) .sidebar-panel { position:absolute; inset:0 auto 0 0; z-index:5000; width:min(360px,90vw); height:100%; max-height:100%; transform:none; display:none; }
+    body.live-driving:not(.pip-mode) .sidebar-panel.active { display:block; }
+    body.live-driving:not(.pip-mode) .mobile-turn-banner { left:8px; right:auto; top:8px; width:44%; max-height:calc(100% - 64px); overflow:auto; padding:8px; gap:8px; }
+    body.live-driving:not(.pip-mode) #banner-dist { font-size:23px; }
+    body.live-driving:not(.pip-mode) .banner-icon { width:36px; height:42px; flex:0 0 36px; font-size:23px; }
+    body.live-driving:not(.pip-mode) #banner-road { font-size:16px; }
+    body.live-driving:not(.pip-mode) #banner-desc, body.live-driving:not(.pip-mode) #banner-lanes { font-size:11px; }
+    body.live-driving:not(.pip-mode) .map-top-bar { display:none; }
+    body.live-driving:not(.pip-mode) .map-bottom-overlay-stack { left:auto; right:8px; width:50%; bottom:4px; transform:none; }
+    body.live-driving:not(.pip-mode) .map-controls-group { top:8px; right:8px; bottom:auto; flex-direction:row; gap:5px; }
+    body.live-driving:not(.pip-mode) .map-controls-group .map-floating-btn { position:static; width:44px; height:44px; font-size:14px; }
+    body.live-driving:not(.pip-mode) .map-attribution { left:8px; right:auto; bottom:4px; max-width:44%; font-size:8px; transform:none; }
+    body.live-driving:not(.pip-mode) .speedometer-bottom-left { left:12px; bottom:26px; }
+    body.live-driving:not(.pip-mode) .api-status-banner { padding:4px; font-size:10px; }
+    body.live-driving:not(.pip-mode) .recenter-toast-banner { left:8px; transform:none; bottom:25px; max-width:44%; }
+}

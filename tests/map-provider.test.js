@@ -60,6 +60,16 @@ test('provider detection handles missing and throwing WebGL implementations', ()
     assert.equal(provider.canUseVectorMap({ supported: () => true }, {}), false);
 });
 
+test('MapLibre 6 probes WebGL2 without the removed supported helper and releases the probe',()=>{
+    const before=global.document;let lost=0;
+    try{
+        global.document={createElement:()=>({getContext:type=>{assert.equal(type,'webgl2');return {getExtension:()=>({loseContext:()=>lost++})};}})};
+        assert.equal(provider.canUseVectorMap({Map:function(){}},leafletStub()),true);assert.equal(lost,1);
+        global.document={createElement:()=>({getContext:()=>null})};
+        assert.equal(provider.canUseVectorMap({Map:function(){}},leafletStub()),false);
+    }finally{if(before===undefined)delete global.document;else global.document=before;}
+});
+
 test('attribution follows the visible provider', () => {
     assert.match(provider.attributionFor({ vectorSupported: true }), /OpenFreeMap/);
     assert.match(provider.attributionFor({ vectorSupported: true }), /OpenMapTiles/);

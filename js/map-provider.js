@@ -20,9 +20,16 @@
 
     function canUseVectorMap(maplibregl, leaflet) {
         if (!leaflet || typeof leaflet.maplibreGL !== 'function') return false;
-        if (!maplibregl || typeof maplibregl.supported !== 'function') return false;
+        if (!maplibregl) return false;
         try {
-            return !!maplibregl.supported();
+            if(typeof maplibregl.supported==='function')return !!maplibregl.supported();
+            // MapLibre 6 removed supported(). Probe WebGL2 and release this
+            // temporary context; constructor/style failures still use raster.
+            if(typeof maplibregl.Map!=='function'||typeof document==='undefined')return false;
+            const canvas=document.createElement('canvas'),context=canvas.getContext('webgl2');
+            if(!context)return false;
+            context.getExtension('WEBGL_lose_context')?.loseContext();
+            return true;
         } catch (_) {
             return false;
         }

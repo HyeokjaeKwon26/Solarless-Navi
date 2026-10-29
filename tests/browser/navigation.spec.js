@@ -488,11 +488,13 @@ const style = {
     ]
 };
 
-async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false, initialAccuracy = 5, holdWatchFix = false } = {}) {
+async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false, initialAccuracy = 5, holdWatchFix = false, pitched = false, nearTurns = false } = {}) {
     const state = { routes: [], errors: [], releaseBravo: null, bravoFinished: false };
     page.on('pageerror', error => state.errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
-    await page.addInitScript(({initialAccuracy, holdWatchFix}) => {
+    await page.addInitScript(({initialAccuracy, holdWatchFix,pitched}) => {
+        // Existing Leaflet interaction cases explicitly retain the 2D renderer.
+        if(!localStorage.getItem('solarless_driving_3d'))localStorage.setItem('solarless_driving_3d',String(pitched));
         localStorage.setItem('solarless_auto_free_drive_enabled', 'false');
         let nextId = 0;
         const watchers = new Map();
@@ -509,11 +511,12 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
             },
             clearWatch(id) { watchers.delete(id); }
         } });
+        if(pitched&&!holdWatchFix)setInterval(()=>{for(const callback of watchers.values())callback(fix());},1000);
         window.testGps = {
             emit(update) { coords = { ...coords, ...update }; for (const callback of watchers.values()) callback(fix()); },
             watchers() { return watchers.size; }
         };
-    }, {initialAccuracy, holdWatchFix});
+    }, {initialAccuracy, holdWatchFix,pitched});
     // No public routing, geocoding, weather or tile service is contacted.
     await page.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -551,16 +554,16 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
             await json({ code: 'Ok', waypoints: [{ location: start }, { location: end }], routes: [{
                 distance: 2400, duration: 300, geometry,
                 legs: [{ distance: 2400, duration: 300, steps: [
-                    { name: 'Fixture Road', distance: 600, duration: 75, mode: 'driving',
+                    { name: 'Fixture Road', distance: nearTurns ? 120 : 600, duration: 75, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: coordinates.slice(0, 11) },
                         maneuver: { type: 'depart', location: start, bearing_after: 45 }, intersections: [] },
-                    { name: 'Fixture Road', exits: '7', destinations: 'Downtown', distance: chained ? 240 : 1800, duration: chained ? 30 : 225, mode: 'driving',
+                    { name: 'Fixture Road', exits: '7', destinations: 'Downtown', distance: chained ? (nearTurns ? 180 : 240) : 1800, duration: chained ? 30 : 225, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: coordinates.slice(10) },
-                        maneuver: { type: 'turn', modifier: 'slight right', location: coordinates[10], bearing_after: 45 },
+                        maneuver: { type: 'turn', modifier: 'slight right', location: coordinates[nearTurns ? 2 : 10], bearing_after: 45 },
                         intersections: [{ location: coordinates[10], lanes: [{ valid: false, indications:['left'] }, { valid: true, indications:['straight','slight right'] }, { valid: true, indications:['slight right'] }] }] },
                     ...(chained ? [{ name: 'Second Street', distance: 1560, duration: 195, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: coordinates.slice(14) },
-                        maneuver: { type: 'turn', modifier: 'left', location: coordinates[14], bearing_after: 315 }, intersections: [] }] : []),
+                        maneuver: { type: 'turn', modifier: 'left', location: coordinates[nearTurns ? 5 : 14], bearing_after: 315 }, intersections: [] }] : []),
                     { name: 'Fixture Road', distance: 0, duration: 0, mode: 'driving',
                         geometry: { type: 'LineString', coordinates: [end, end] },
                         maneuver: { type: 'arrive', location: end, bearing_before: 45 }, intersections: [] }
@@ -1137,7 +1140,8 @@ test('MapLibre renders a GeoJSON source using the shipped local module worker', 
 test('failed vector styles switch the app to raster fallback', async ({ page }) => {
     const state = await fixtures(page, { brokenMap: true });
     await page.goto('./');
-    await expect(page.locator('#map-attribution-text')).not.toContainText('OpenFreeMap');
+    // A single startup failure waits for the production 12-second deadline.
+    await expect(page.locator('#map-attribution-text')).not.toContainText('OpenFreeMap', {timeout:15000});
     await expect(page.locator('#map .leaflet-tile-loaded').first()).toBeAttached();
     expect(state.errors).toEqual([]);
 });
@@ -1277,7 +1281,7 @@ test('chained turns and exit details clear when heading contradicts the selected
     await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
     await page.locator('#btn-map-start-nav').click();
     await establishReliableGuidance(page);
-    await expect(page.locator('#banner-desc')).toContainText('Exit 7');
+    await expect(page.locator('#mobile-turn-banner')).toContainText('Exit 7');
     await expect(page.locator('#banner-following')).toContainText('Then in');
     await expect(page.locator('#banner-following')).toBeVisible();
     await expect(page.locator('#banner-following')).toContainText('Second Street');
@@ -1290,7 +1294,7 @@ test('chained turns and exit details clear when heading contradicts the selected
     await expect(page.locator('#banner-following')).toBeHidden();
     await page.waitForTimeout(1600);
     await page.evaluate(() => window.testGps.emit({ latitude: 42.3602, heading: 20 }));
-    await expect(page.locator('#banner-desc')).toContainText('Exit 7');
+    await expect(page.locator('#mobile-turn-banner')).toContainText('Exit 7');
     expect(state.errors).toEqual([]);
 });
 
@@ -1554,4 +1558,98 @@ test('settings remain accessible without Map button and long free-drive labels c
     }
     await page.screenshot({path:test.info().outputPath('settings-switches.png')});
     expect(state.errors).toEqual([]);
+});
+
+async function captureDrivingMap(page){
+    await page.route('**/js/driving-view.js',async route=>{
+        const response=await route.fetch();await route.fulfill({response,body:await response.text()+`\nconst createDrivingView=DrivingView.create;DrivingView.create=options=>{const NativeMap=options.library.Map; options.library={...options.library,Map:class extends NativeMap{constructor(config){super(config);window.drivingTestMap=this;}}};const controller=createDrivingView(options);window.drivingTestController=controller;const update=controller.update;controller.update=s=>{window.drivingTestState=s;return update(s);};return controller;};`});
+    });
+}
+async function startTilted(page,options={}){
+    const state=await fixtures(page,{pitched:true,...options});await captureDrivingMap(page);await captureJourneyControls(page);
+    await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await expect(page.locator('#driving-map')).not.toHaveClass(/ready/);
+    await page.locator('#btn-map-start-nav').click();
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({heading:20});return journeyTestApi.state().snapped;})).toBe(true);
+    try{await expect(page.locator('#driving-map')).toHaveClass(/ready/);}catch(e){console.log(await page.evaluate(()=>({...drivingTestState,segments:drivingTestState?.segments?.length,failed:drivingTestController.failed()})));throw e;}return state;
+}
+test('tilted driving projects the route and vehicle together, explores and returns to persisted 2D',async({page})=>{
+    const state=await startTilted(page);
+    await expect(page.locator('#btn-driving-view')).toHaveText('3D');
+    await expect.poll(()=>page.evaluate(()=>drivingTestMap.queryRenderedFeatures({layers:['driving-route-solid','driving-route-uncertain']}).length)).toBeGreaterThan(0);
+    const result=await page.evaluate(async()=>{
+        const map=drivingTestMap,vehicle=document.querySelector('.driving-vehicle').getBoundingClientRect(),canvas=map.getContainer().getBoundingClientRect();
+        const coord=(await map.getSource('driving-route').getData()).features[0].geometry.coordinates[0],p=map.project(coord);
+        return {pitch:map.getPitch(),dx:Math.abs(vehicle.x+vehicle.width/2-canvas.x-p.x),dy:Math.abs(vehicle.y+vehicle.height/2-canvas.y-p.y),count:(await map.getSource('driving-route').getData()).features.length,centerY:p.y,height:canvas.height};
+    });
+    expect(result.pitch).toBeGreaterThan(30);expect(result.count).toBeGreaterThan(0);expect(result.dx).toBeLessThan(5);expect(result.dy).toBeLessThan(8);
+    expect(result.centerY).toBeGreaterThan(result.height*.5);
+    await page.screenshot({path:test.info().outputPath('tilted-drive.png')});
+    const rect=await page.locator('#driving-map').boundingBox();await page.mouse.move(rect.x+100,rect.y+rect.height*.5);await page.mouse.down();await page.mouse.move(rect.x+170,rect.y+rect.height*.5,{steps:10});await page.mouse.up();
+    await expect(page.locator('#btn-recenter-gps')).toHaveClass(/panned/);
+    await expect.poll(()=>page.evaluate(()=>drivingTestMap.isMoving())).toBe(false);
+    const explored=await page.evaluate(()=>drivingTestMap.getCenter().toArray());await page.evaluate(()=>testGps.emit({heading:30}));
+    expect(await page.evaluate(()=>drivingTestMap.getCenter().toArray())).toEqual(explored);
+    await page.locator('#btn-recenter-gps').click();await expect(page.locator('#btn-recenter-gps')).not.toHaveClass(/panned/);
+    await page.locator('#btn-driving-view').click();await expect(page.locator('#driving-map')).not.toHaveClass(/ready/);await expect(page.locator('#map')).toBeVisible();
+    expect(await page.evaluate(()=>localStorage.getItem('solarless_driving_3d'))).toBe('false');
+    await page.reload();expect(await page.evaluate(()=>localStorage.getItem('solarless_driving_3d'))).toBe('false');expect(state.errors).toEqual([]);
+});
+test('tilted junction camera fits consecutive turns and changes geometry colors on the live map',async({page})=>{
+    const state=await startTilted(page,{chained:true,nearTurns:true});
+    await page.evaluate(()=>{
+        const route=journeyTestApi.state().route;
+        route.analyzed.segments=route.analyzed.segments.map(s=>({...s,glareRisk:.8,occlusionRatio:null,irradiance:null}));testGps.emit({speed:0,heading:20});
+    });
+    await expect(page.locator('#banner-road')).toContainText('Exit 7');await expect(page.locator('#banner-following')).toContainText('Second Street');
+    await page.evaluate(()=>{
+        SunCalc.getPosition=()=>({azimuth:0,altitude:10});
+        WeatherRadiation.interpolateAt=p=>({dni:p.dni,directRadiation:p.dni*.17,diffuseRadiation:0,shortwaveRadiation:p.dni*.17});
+        const route=journeyTestApi.state().route,at=Date.now();
+        route.analyzed={...route.analyzed,segments:route.analyzed.segments.map(s=>({...s,heading:0,passTime:new Date(at),occlusionRatio:null,confirmedShade:false,shadeState:'unknown'}))};
+        route.remainingForecast={analyzed:{weatherProfile:{dni:600,weatherRetrievedAt:at}}};testGps.emit({speed:0,heading:20});
+    });
+    await expect.poll(()=>page.evaluate(async()=>(await drivingTestMap.getSource('driving-route').getData()).features.some(f=>f.properties.uncertain&&f.properties.color==='#eab308'))).toBe(true);
+    await expect.poll(()=>page.evaluate(()=>Math.round(drivingTestMap.getPitch()))).toBe(32);
+    const result=await page.evaluate(async()=>{
+        const map=drivingTestMap,points=(await map.getSource('driving-junctions').getData()).features.map(f=>map.project(f.geometry.coordinates)),r=map.getContainer().getBoundingClientRect();
+        return {points:points.map(p=>({x:p.x,y:p.y})),width:r.width,height:r.height,top:document.getElementById('mobile-turn-banner').getBoundingClientRect().bottom-r.top,bottom:document.getElementById('map-bottom-overlay-stack').getBoundingClientRect().top-r.top};
+    });
+    expect(result.points.length).toBe(2);for(const p of result.points){expect(p.x).toBeGreaterThan(10);expect(p.x).toBeLessThan(result.width-10);expect(p.y).toBeGreaterThan(result.top);expect(p.y).toBeLessThan(result.bottom);}
+    await page.screenshot({path:test.info().outputPath('tilted-junction.png')});
+    for(const size of [{width:320,height:740},{width:640,height:320}]){
+        await page.setViewportSize(size);await expect(page.locator('#btn-driving-view')).toBeVisible();
+        const box=await page.locator('#btn-driving-view').boundingBox();expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(size.width);expect(box.height).toBeGreaterThanOrEqual(44);
+        if(size.width===640){
+            await expect.poll(()=>page.evaluate(()=>drivingTestMap.getPadding().left)).toBeGreaterThan(250);
+            const boxes=await page.locator('#mobile-turn-banner,#route-summary-box').evaluateAll(els=>els.map(el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom};}));
+            expect(boxes[0].right).toBeLessThan(boxes[1].left);
+            for(const rect of boxes){expect(rect.top).toBeGreaterThanOrEqual(44);expect(rect.bottom).toBeLessThanOrEqual(size.height);}
+        }
+        await page.screenshot({path:test.info().outputPath(`tilted-junction-${size.width}.png`)});
+    }
+    await page.evaluate(()=>testGps.emit({accuracy:120}));await expect.poll(()=>page.evaluate(async()=>(await drivingTestMap.getSource('driving-junctions').getData()).features.length)).toBe(0);
+    await expect(page.locator('#banner-road')).toBeHidden();expect(state.errors).toEqual([]);
+});
+test('tilted view releases its renderer for saver and PiP, resumes and recovers context loss to 2D',async({page})=>{
+    const state=await startTilted(page);
+    await page.locator('#btn-toggle-battery-saver').click();await expect(page.locator('#driving-map canvas')).toHaveCount(0);await expect(page.locator('#map')).toBeVisible();
+    await page.locator('#btn-toggle-battery-saver').click();await expect(page.locator('#driving-map')).toHaveClass(/ready/);
+    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('solarless:pipmode',{detail:{inPip:true}})));await expect(page.locator('#driving-map canvas')).toHaveCount(0);
+    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('solarless:pipmode',{detail:{inPip:false}})));await expect(page.locator('#driving-map')).toHaveClass(/ready/);
+    await page.evaluate(()=>{window.drivingVisibility='hidden';Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>window.drivingVisibility});document.dispatchEvent(new Event('visibilitychange'));});
+    await expect(page.locator('#driving-map canvas')).toHaveCount(0);
+    await page.evaluate(()=>{window.drivingVisibility='visible';document.dispatchEvent(new Event('visibilitychange'));});await expect(page.locator('#driving-map')).toHaveClass(/ready/);
+    await page.evaluate(()=>drivingTestMap.getCanvas().dispatchEvent(new Event('webglcontextlost',{cancelable:true})));await expect(page.locator('#driving-map canvas')).toHaveCount(0);await expect(page.locator('#map')).toBeVisible();
+    await page.evaluate(()=>testGps.emit({heading:20}));await expect(page.locator('#driving-map canvas')).toHaveCount(0);
+    await page.locator('#btn-driving-view').click();await expect(page.locator('#driving-map')).toHaveClass(/ready/);
+    await page.locator('#btn-map-start-nav').click();await expect(page.locator('#driving-map canvas')).toHaveCount(0);expect(state.errors).toEqual([]);
+});
+test('tilted view style failure keeps the usable 2D route and navigation',async({page})=>{
+    const state=await fixtures(page,{pitched:true});await captureDrivingMap(page);
+    let requested=0;await page.route('https://failed-style.test/**',route=>{requested++;return route.fulfill({status:503,body:'Unavailable'});});
+    await page.route('**/js/driving-view.js',async route=>{const response=await route.fetch();await route.fulfill({response,body:(await response.text()).replace('style:theme,center:',"style:'https://failed-style.test/style.json',center:")});});
+    await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();
+    await expect.poll(()=>requested).toBeGreaterThan(0);
+    await expect(page.locator('#driving-map canvas')).toHaveCount(0,{timeout:12000});await expect(page.locator('#map')).toBeVisible();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);expect(state.errors).toEqual([]);
 });

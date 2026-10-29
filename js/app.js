@@ -1,6 +1,6 @@
 /**
  * SOLARIS NAV - Main Application Controller
- * Pure 2D High-Performance Navigation System,
+ * 2D planning and pitched MapLibre driving camera,
  * Dynamic Specific Route Voice Announcements ("최단 시간 경로로 안내를 시작합니다", "눈부심 방지 역광 회피 경로로 안내를 시작합니다", "그늘 우선 경로로 안내를 시작합니다"),
  * GPS Solar Sunrise/Sunset & Elevation Dark Mode Synchronization,
  * Toll-Free Route Avoidance Option, High-Res Satellite Imagery Layer.
@@ -15,6 +15,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ];
 
     let map = null;
+    let drivingView = null, drivingViewWanted = true, drivingSceneSegments = null, drivingFixRejected = false;
+    try { drivingViewWanted = localStorage.getItem('solarless_driving_3d') !== 'false'; } catch {}
     let lightTileLayer = null;
     let darkTileLayer = null;
     let satelliteTileLayer = null;
@@ -878,6 +880,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setupFeatureListeners();
         setupRouteLegend();
         setupMapPanTrackingListeners();
+        setupDrivingView();
         initAmbientLightSensor();
 
         const currentLang = I18n.getLanguage();
@@ -987,6 +990,62 @@ document.addEventListener('DOMContentLoaded', () => {
         // seconds is long enough to inspect nearby roads without leaving the
         // driver permanently detached from the vehicle marker.
         recenterWaitTimer = setTimeout(triggerRecenterCountdownToast, 8000);
+    }
+
+    function setupDrivingView() {
+        drivingView = DrivingView.create({container:document.getElementById('driving-map'),library:window.maplibregl,
+            color:RoutePresentation.segmentColor,uncertain:s=>RoutePresentation.assessment(s).uncertain,
+            onPan:markUserMapPanning,
+            onActive:active=>{
+                document.getElementById('map-perspective-wrapper').classList.toggle('driving-map-active',active);
+                if(active){if(currentTileLayer&&map.hasLayer(currentTileLayer))map.removeLayer(currentTileLayer);}
+                else if(currentTileLayer&&!map.hasLayer(currentTileLayer))addBaseLayerSafely(currentTileLayer);
+                if(!active&&currentSmoothLat!==null){map.panTo([currentSmoothLat,currentSmoothLng],{animate:false});applyMapRotation(currentSmoothHeading);}
+                updateDrivingViewButton();
+            },onFailure:()=>{
+                updateDrivingViewButton();
+                showApiNotice(I18n.getLanguage().startsWith('ko')?'조감도 지도를 불러오지 못해 2D로 전환했습니다.':'Tilted map unavailable. Switched to 2D.');
+            }});
+        document.getElementById('btn-driving-view').addEventListener('click',()=>{
+            drivingViewWanted=drivingView.failed()?true:!drivingViewWanted;drivingView.retry();
+            try{localStorage.setItem('solarless_driving_3d',String(drivingViewWanted));}catch{}
+            syncDrivingView();
+            if(drivingViewWanted&&(isBatterySaverActive||isPipMode||isSatelliteViewActive||isRasterMapFallbackActive))showApiNotice(I18n.getLanguage().startsWith('ko')
+                ?'현재는 2D로 표시합니다. 절전·PiP·위성 지도를 끄고 벡터 지도를 사용할 때 조감도로 전환합니다.'
+                :'Using 2D now. Tilt resumes with vector maps when battery saver, PiP and satellite view are off.');
+        });
+        document.addEventListener('visibilitychange',syncDrivingView);
+        window.addEventListener('resize',()=>{syncDrivingView();drivingView.resize();},{passive:true});
+        setInterval(()=>{if(isLiveNavActive)syncDrivingView();},1000);
+        syncDrivingView();
+    }
+    function updateDrivingViewButton(){
+        const button=document.getElementById('btn-driving-view');if(!button)return;
+        const active=drivingView?.active()===true,ko=I18n.getLanguage().startsWith('ko');
+        button.textContent=active?'3D':'2D';button.setAttribute('aria-pressed',String(active));
+        button.title=active?(ko?'조감도 · 눌러 2D 전환':'Tilted view · switch to 2D'):(ko?'2D · 눌러 조감도 전환':'2D · switch to tilted view');
+        button.setAttribute('aria-label',button.title);
+    }
+    function syncDrivingView(){
+        if(!drivingView)return;
+        const reliable=!!(!drivingFixRejected&&!liveDestinationBackup&&lastReliableFixAt&&Date.now()-lastReliableFixAt<=10000&&!navigationRouteNeedsReliableOrigin&&
+            (isFreeDriveMode||navigationRouteProgress.result?.isSnapped)&&!offRouteEvidence.confirmed);
+        const wrapper=document.getElementById('map-perspective-wrapper').getBoundingClientRect();
+        const banner=document.getElementById('mobile-turn-banner').getBoundingClientRect();
+        const bottom=document.getElementById('map-bottom-overlay-stack').getBoundingClientRect();
+        const landscape=window.matchMedia('(orientation: landscape) and (max-height: 540px)').matches;
+        if(!reliable){document.getElementById('banner-road').hidden=true;document.getElementById('mobile-turn-banner').classList.remove('junction-close');}
+        drivingView.update({live:isLiveNavActive,wanted:drivingViewWanted,saver:isBatterySaverActive,pip:isPipMode,
+            visible:document.visibilityState!=='hidden',satellite:isSatelliteViewActive,available:!!roadLayerSet?.vectorSupported&&!isRasterMapFallbackActive,
+            position:[currentSmoothLng,currentSmoothLat],heading:currentSmoothHeading,bearing:compassMode==='heading-up'?currentSmoothHeading:0,
+            reliable,segments:drivingSceneSegments||selectedRouteObj?.analyzed?.segments,index:navigationRouteProgress.segmentIndex||0,
+            end:selectedRouteObj&&!isFreeDriveMode?selectedRouteObj.analyzed?.coordinates?.at(-1):null,
+            maneuver:!isFreeDriveMode&&reliable?lastTurnPresentation.maneuver:null,speed:lastNavigationSpeedKmh,
+            autoZoom:autoZoomToggle.checked,panning:isUserMapPanning,reducedMotion:prefersReducedMotion(),
+            top:landscape?62:banner.bottom-wrapper.top,left:landscape?banner.right-wrapper.left+12:32,
+            bottom:Math.max(0,wrapper.bottom-bottom.top),
+            theme:currentTileLayer===darkTileLayer?MapProvider.OPENFREEMAP_STYLES.dark:MapProvider.OPENFREEMAP_STYLES.light});
+        updateDrivingViewButton();
     }
 
     function setupMapPanTrackingListeners() {
@@ -1255,6 +1314,7 @@ document.addEventListener('DOMContentLoaded', () => {
             map.setView([currentStart.lat, currentStart.lng], isLiveNavActive ? NAVIGATION_ZOOM : 17, { animate: true });
             applyMapRotation(compassMode === 'heading-up' ? currentHeading : 0);
         }
+        syncDrivingView();drivingView?.recenter();
     }
 
     function hideRecenterToast() {
@@ -1606,7 +1666,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const laneElement = document.getElementById('banner-lanes');
         const camera = JourneyPolicy.camera(nextManeuver, lastNavigationSpeedKmh);
         banner.classList.toggle('junction-close', camera.close);
-        if (isLiveNavActive && !isUserMapPanning && !isPipMode && autoZoomToggle.checked && map && Date.now() - lastJunctionZoom >= 5000) {
+        const roadElement=document.getElementById('banner-road');
+        roadElement.hidden=!camera.close;
+        roadElement.textContent=camera.close?NavigationGuidance.shortRoad(nextManeuver,isKo):'';
+        if (isLiveNavActive && !drivingView?.active() && !isUserMapPanning && !isPipMode && autoZoomToggle.checked && map && Date.now() - lastJunctionZoom >= 5000) {
             lastJunctionZoom = Date.now();
             if (map.getZoom() !== camera.zoom) map.setZoom(camera.zoom, { animate: false });
         }
@@ -1623,6 +1686,11 @@ document.addEventListener('DOMContentLoaded', () => {
         followingElement.textContent = followingElement.hidden ? '' : (isKo
             ? `이어서 ${NavigationUnits.distance(following.distanceAfter)} 후 ${TTSVoice.getManeuverText(following.type, following.modifier)} · ${NavigationGuidance.shortRoad(following, true)}`
             : `Then in ${NavigationUnits.distance(following.distanceAfter)}, ${TTSVoice.getManeuverText(following.type, following.modifier)} · ${NavigationGuidance.shortRoad(following, false)}`);
+        if(!followingElement.hidden){
+            const words=document.createElement('span');words.textContent=followingElement.textContent;
+            const icon=document.createElement('span');icon.className='banner-following-icon';icon.setAttribute('aria-hidden','true');
+            icon.innerHTML=getManeuverIcon(following.type,following.modifier);followingElement.replaceChildren(icon,words);
+        }
         laneElement.hidden = !lanes;
         laneElement.textContent = lanes ? (isKo
             ? `왼쪽부터 ${lanes.valid.join(', ')}번 차로 이용 · 총 ${lanes.total}차로 · 지도 정보, 현재 차로 미감지`
@@ -1660,6 +1728,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Glare overlay warning
+            if(camera.close&&roadElement.textContent)descText=turnText;
             if (glareRisk > 0.45) {
                 descText += isKo ? ' ☀️ 눈부심 예상' : ' ☀️ Glare predicted';
                 banner.classList.add('hazard');
@@ -1816,6 +1885,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function addBaseLayerSafely(layer) {
         if (!layer || !map) return;
+        if(drivingView?.active())return;
         try {
             layer.addTo(map);
             monitorVectorMapLayer(layer);
@@ -1890,6 +1960,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? (ko ? '절전 중 · 눌러 일반 모드로 전환' : 'Battery saver active · Switch to normal mode')
                 : (ko ? '일반 모드 · 눌러 절전 모드로 전환' : 'Normal mode · Switch to battery saver');
         }
+        syncDrivingView();
     }
     function toggleBatterySaverMode() {
         manualBatterySaver = !isBatterySaverActive;
@@ -2600,6 +2671,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         window.addEventListener('solarless:pipmode', event => {
             isPipMode = !!(event && event.detail && event.detail.inPip);
+            syncDrivingView();
             if (map) setTimeout(() => map.invalidateSize({ animate: false }), 80);
             if (isLiveNavActive && targetSnapLat !== null) startVehicleMarkerAnimationLoop();
         });
@@ -3073,7 +3145,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const cameraFrameInterval = window.RouteState && typeof window.RouteState.navigationCameraFrameIntervalMs === 'function'
             ? window.RouteState.navigationCameraFrameIntervalMs(!isRasterMapFallbackActive, isBatterySaverActive)
             : (isBatterySaverActive ? 50 : (isRasterMapFallbackActive ? 16 : 33));
-        if (isLiveNavActive && !isUserMapPanning && map && now - lastVehicleMapPanAt >= cameraFrameInterval) {
+        syncDrivingView();
+        if (isLiveNavActive && !drivingView?.active() && !isUserMapPanning && map && now - lastVehicleMapPanAt >= cameraFrameInterval) {
             lastVehicleMapPanAt = now;
             map.panTo([currentSmoothLat, currentSmoothLng], { animate: false, noMoveStart: true });
             applyMapRotation(currentSmoothHeading);
@@ -3183,6 +3256,8 @@ document.addEventListener('DOMContentLoaded', () => {
             selectedRouteObj._remainingDistanceLookupCoordinates = coords;
         }
         const segments = currentGlareSegments(selectedRouteObj, snap);
+        drivingSceneSegments=segments;
+        syncDrivingView();
         if (dynamicRemainingRouteId !== routeIdentity) {
             dynamicRemainingPolylineGroup.clearLayers();
             dynamicRemainingLayers = new Map();
@@ -3340,6 +3415,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (btn) btn.classList.toggle('heading-up', next === 'heading-up');
         if (tag) tag.innerText = next === 'heading-up' ? I18n.getText('compassHeading') : I18n.getText('compassNorth');
         applyMapRotation(next === 'heading-up' ? currentHeading : 0);
+        syncDrivingView();
     }
 
     function setLiveNavigationMapMode(active) {
@@ -3347,6 +3423,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!wrapper) return;
         const wasActive = wrapper.classList.contains('live-navigation');
         wrapper.classList.toggle('live-navigation', !!active);
+        document.body.classList.toggle('live-driving',!!active);
+        if(!active)drivingFixRejected=false;
+        syncDrivingView();
         if (active) updateHeadingMapOverscan();
         if (map && wasActive !== !!active) {
             // The live view uses an oversized rotated map so tile corners stay
@@ -4415,6 +4494,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderMapMarkersAndPolyline(selectedRouteObj, isLiveDrive = false) {
         if (!selectedRouteObj || !selectedRouteObj.analyzed || !selectedRouteObj.analyzed.coordinates) return;
         clearCachedPreview();
+        drivingSceneSegments=null;
 
         if (activeRoutePolylineGroup) {
             activeRoutePolylineGroup.clearLayers();
@@ -4510,6 +4590,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* CLEAR ALL MAP POLYLINES, DESTINATION MARKERS, & BANNER WHEN GUIDANCE ENDS */
     function clearRouteFromMap(keepDestination = false) {
+        drivingSceneSegments=null;
         clearCachedPreview();
         if (!keepDestination) cachedPreview = null;
         if (routeAbortController) {
@@ -5549,6 +5630,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 )
                 : { accepted: true };
             if (!fixEvaluation.accepted) {
+                drivingFixRejected=true;syncDrivingView();
                 offRouteEvidence = { lastAttempt: offRouteEvidence.lastAttempt };
                 // Still show the receiver's uncertainty, but do not move the
                 // vehicle, alter route progress, announce arrival, or reroute
@@ -5574,6 +5656,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const hasHwHeading = coords.heading !== null && coords.heading !== undefined && Number.isFinite(Number(coords.heading)) && Number(coords.heading) >= 0;
             lastReliableFixAt = timestamp;
+            drivingFixRejected=false;
             if (hasHwHeading) hasValidGpsHeading = true;
             if (hasHwHeading && !compassModeUserOverride && compassMode === 'north-up') setCompassMode('heading-up');
             applyGpsFix(normalized, source);

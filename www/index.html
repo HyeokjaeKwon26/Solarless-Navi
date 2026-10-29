@@ -651,11 +651,13 @@
                     <div class="banner-info">
                         <div class="turn-dist" id="banner-dist">-- 앞</div>
                         <div class="turn-desc" id="banner-desc"></div>
+                        <div id="banner-road" hidden></div>
                         <div id="banner-lanes" hidden></div>
                     </div>
                 </div>
 
                 <div id="map"></div>
+                <div id="driving-map" aria-label="주행 지도"></div>
                 <section id="closure-offer" class="closure-offer hidden" aria-live="polite">
                     <p id="closure-offer-text"></p>
                     <button type="button" id="btn-closure-accept" class="nav-btn">우회 경로 사용</button>
@@ -735,6 +737,7 @@
 
                 <!-- Floating Navigation Control Buttons on Map -->
                 <div class="map-controls-group">
+                    <button type="button" class="map-floating-btn driving-view-btn" id="btn-driving-view" aria-pressed="false" title="조감도 주행 화면">2D</button>
                     <button type="button" class="map-floating-btn route-legend-btn" id="btn-route-legend" aria-controls="route-legend-modal" aria-expanded="false" aria-label="경로 색상 범례">
                         <i class="fa-solid fa-list" aria-hidden="true"></i><span id="route-legend-button-label">범례</span>
                     </button>
@@ -815,6 +818,7 @@
     <script src="js/maplibre-gl.js"></script>
     <script src="js/leaflet-maplibre-gl.js"></script>
     <script src="js/map-provider.js"></script>
+    <script src="js/driving-view.js"></script>
     <script src="js/nrel-spa.js"></script>
     <script src="js/solar-physics.js"></script>
     <script src="js/weather-radiation.js"></script>
