@@ -1839,10 +1839,11 @@ test('recording batches samples and flushes before export and deletion',async({p
   await DriveArchive.setActive(true);
   await DriveArchive.record('ready',{});
   const original=IDBDatabase.prototype.transaction;let writes=0;
-  IDBDatabase.prototype.transaction=function(...args){if(args[1]==='readwrite')writes++;return original.apply(this,args);};
+  // Cache cleanup may run at startup. Count only the journal under test.
+  IDBDatabase.prototype.transaction=function(...args){if(this.name==='solarless-drive-journal'&&args[1]==='readwrite')writes++;return original.apply(this,args);};
   try{
    const saved=Array.from({length:40},(_,i)=>DriveArchive.record('sample',{lat:42.36,lng:-71.07,sequence:i,timestamp:Date.now()}));
-   const before=writes;const exported=JSON.parse(await DriveArchive.exportRecording({}));await Promise.all(saved);
+   const before=writes;const [json]=await Promise.all([DriveArchive.exportRecording({}),MapCache.trim()]);const exported=JSON.parse(json);await Promise.all(saved);
    const after=writes;await DriveArchive.clear();const cleared=JSON.parse(await DriveArchive.exportRecording({}));
    return {before,after,sequences:exported.samples.map(x=>x.sequence),remaining:cleared.samples.length+cleared.events.length};
   }finally{IDBDatabase.prototype.transaction=original;}
