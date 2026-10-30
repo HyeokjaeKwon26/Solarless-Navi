@@ -2095,10 +2095,19 @@ test('reliability evidence review reports missing calibration and rejects charge
 
 test('reliability ETA evidence and reroute status keep totals and label uncertainty',async({page})=>{
     const state=await fixtures(page,{brokenMap:true});await page.goto('./');await selectDestination(page,'Alpha');
-    await page.evaluate(()=>{JourneyUI.etaEvidence(600,{range:{lowFactor:.9,highFactor:1.3,count:5}},25,true);JourneyUI.requestState('ready','forward-recovery');});
-    await expect(page.locator('#eta-evidence')).toContainText('9–13 min');await expect(page.locator('#eta-evidence')).toContainText('not a live traffic forecast');
-    await expect(page.locator('#journey-request-status')).toContainText('avoiding an early U-turn');
-    await expect(page.locator('#sum-duration')).not.toBeEmpty();expect(state.errors).toEqual([]);
+    await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    // This is a renderer contract with synthetic history. Read its output in
+    // the same task: a real route refresh correctly replaces that history with
+    // the fixture's empty history between separate asynchronous assertions.
+    const shown=await page.evaluate(()=>{
+        const total=document.getElementById('sum-duration').textContent;
+        JourneyUI.etaEvidence(600,{range:{lowFactor:.9,highFactor:1.3,count:5}},25,true);JourneyUI.requestState('ready','forward-recovery');
+        const eta=document.getElementById('eta-evidence'),status=document.getElementById('journey-request-status');
+        return {eta:eta.textContent,hidden:eta.hidden,status:status.textContent,statusHidden:status.hidden,total,after:document.getElementById('sum-duration').textContent};
+    });
+    expect(shown.eta).toContain('9–13 min');expect(shown.eta).toContain('not a live traffic forecast');expect(shown.hidden).toBe(false);
+    expect(shown.status).toContain('avoiding an early U-turn');expect(shown.statusHidden).toBe(false);
+    expect(shown.total).not.toBe('');expect(shown.after).toBe(shown.total);expect(state.errors).toEqual([]);
 });
 
 test('reliability native guidance retries failures with bounded backoff and clears on stop',async({page})=>{
