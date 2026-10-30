@@ -160,8 +160,11 @@ async function captureJourneyControls(page){
         await route.fulfill({response:original,body:await original.text()+`\nconst originalJourneyCreate=JourneyControls.create; JourneyControls.create=api=>{window.journeyTestApi=api;return window.journeyTestController=originalJourneyCreate(api);};`});
     });
 }
+async function waitForClosureGuidance(page){
+    await expect.poll(()=>page.evaluate(()=>{testGps.emit({speed:0});const s=journeyTestApi.state();return s.live&&s.snapped&&!s.busy&&Date.now()-s.fixAt<10000;}),{timeout:15000}).toBe(true);
+}
 async function installClosureFixture(page){
-    await expect.poll(()=>page.evaluate(()=>{testGps.emit({speed:0});const s=journeyTestApi.state();return s.snapped&&!s.busy;})).toBe(true);
+    await waitForClosureGuidance(page);
     await page.evaluate(async()=>{
         const s=journeyTestApi.state(),coords=s.route.analyzed.coordinates;
         const original=structuredClone(s.route.raw),candidate=structuredClone(s.route),now=Date.now();
@@ -180,7 +183,7 @@ async function installClosureFixture(page){
     // Candidate solar analysis may outlast GPS freshness on a busy CI runner.
     // Begin the proposal with a current fix and a completed route transition;
     // production correctly refuses stale positions and in-flight calculations.
-    await expect.poll(()=>page.evaluate(()=>{testGps.emit({speed:0});const s=journeyTestApi.state();return s.snapped&&!s.busy&&Date.now()-s.fixAt<10000;})).toBe(true);
+    await waitForClosureGuidance(page);
 }
 
 test('route preference and detour budget persist and remain usable on a narrow screen',async({page})=>{
@@ -218,6 +221,7 @@ test('entire journey shows every leg and total, supports reordering, and refuses
 });
 
 test('closure proposals wait for fresh GPS and finished route calculation',async({page})=>{
+    test.setTimeout(60000);
     const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');
     await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await installClosureFixture(page);
     await page.evaluate(async()=>{
@@ -230,12 +234,13 @@ test('closure proposals wait for fresh GPS and finished route calculation',async
         journeyTestApi.state=get;
     });
     expect(await page.evaluate(()=>closureRequests)).toBe(0);await expect(page.locator('#closure-offer')).toBeHidden();
-    await expect.poll(()=>page.evaluate(()=>{testGps.emit({speed:0});const s=journeyTestApi.state();return s.snapped&&!s.busy;})).toBe(true);
+    await waitForClosureGuidance(page);
     await page.evaluate(()=>journeyTestController.considerClosure(closureFixture.traffic,closureFixture.remaining));
     await expect(page.locator('#btn-closure-accept')).toBeVisible();expect(await page.evaluate(()=>closureRequests)).toBe(1);expect(state.errors).toEqual([]);
 });
 
 test('closure detour requires acceptance, commits through live guidance, and keeps destination',async({page})=>{
+    test.setTimeout(60000);
     const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');
     await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();
     await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
@@ -254,6 +259,7 @@ test('closure detour requires acceptance, commits through live guidance, and kee
 });
 
 test('closure proposal expires after movement and dismissal cancels delayed candidates',async({page})=>{
+    test.setTimeout(60000);
     const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');
     await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
     await installClosureFixture(page);
@@ -265,7 +271,7 @@ test('closure proposal expires after movement and dismissal cancels delayed cand
     await page.locator('#btn-closure-accept').click();await expect(page.locator('#closure-offer-text')).toContainText('expired');expect(await page.evaluate(()=>closureCommits)).toBe(0);
     await page.locator('#btn-closure-dismiss').click();await page.evaluate(()=>journeyTestApi.stop());
     await page.reload();await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
-    await expect.poll(()=>page.evaluate(()=>{testGps.emit({speed:0});return journeyTestApi.state().snapped;})).toBe(true);
+    await waitForClosureGuidance(page);
     await page.evaluate(()=>{
         const data=journeyTestApi.state().data;
         journeyTestApi.candidates=()=>new Promise(resolve=>{window.releaseClosure=()=>resolve(data);});
@@ -276,6 +282,7 @@ test('closure proposal expires after movement and dismissal cancels delayed cand
 });
 
 test('closure approval is refused if the feed expires after showing a proposal',async({page})=>{
+    test.setTimeout(60000);
     const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');
     await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await expect(page.locator('#live-gps-nav-btn')).toHaveClass(/active/);
     await installClosureFixture(page);

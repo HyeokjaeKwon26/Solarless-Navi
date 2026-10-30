@@ -1,4 +1,4 @@
-SolarLess Navi 1.3.36
+SolarLess Navi 1.3.37
 
 화면 꺼짐 복구의 경로 선호, 여행별 저장, 갈림길과 주소 결과, 도착 후 주차 위치를 개선했습니다.
 
@@ -12,4 +12,4 @@ SolarLess Navi 1.3.36
 무료 공개 서비스와 기존 엔진을 사용합니다. GPS·음성 안내 주기를 낮추지 않았으며 대형 지도나 음성 모델을 추가하지 않았습니다. 실제 폰·주행·배터리 결과는 별도 확인이 필요합니다.
 
 구현 범위·검증·실제 폰 확인 목록:
-https://github.com/HyeokjaeKwon26/Solarless-Navi/blob/main/docs/JOURNEY_CONTINUITY_1.3.36.md
+https://github.com/HyeokjaeKwon26/Solarless-Navi/blob/main/docs/JOURNEY_CONTINUITY_1.3.37.md
