@@ -1,0 +1,142 @@
+{
+  "publicRelease": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.34",
+  "apkUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.34/SolarLessNavi-1.3.34.apk",
+  "sizeBytes": 4550727,
+  "certificateSha256": "59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977",
+  "sha256": "ac9ce7fb30fbca562e41c1de351abddb907b663f368bf7c174ba7059d2698d40",
+  "packageName": "com.solaris.nav",
+  "version": "1.3.34",
+  "currentVersionCheck": "up to date",
+  "earlierSameKeyVersion": "update offered",
+  "apkCryptographicVerification": "passed",
+  "debuggable": false,
+  "verifiedAt": "2026-10-30T05:47:56.396Z",
+  "sourceCommit": "8715382c5882ed80204ccc998c41585128480052",
+  "versionCode": 38,
+  "minSdk": 22,
+  "apkGrowthBytes": 19073,
+  "apkGrowthBaseline": "1.3.32",
+  "ci": {
+    "main": {
+      "id": 41009054227,
+      "conclusion": "success",
+      "sourceCommit": "8715382c5882ed80204ccc998c41585128480052",
+      "jobs": [
+        {
+          "id": 123910538966,
+          "name": "browser (root)",
+          "conclusion": "success"
+        },
+        {
+          "id": 123910539224,
+          "name": "browser (www)",
+          "conclusion": "success"
+        },
+        {
+          "id": 123910539245,
+          "name": "test",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "release": {
+      "id": 41009055991,
+      "conclusion": "success",
+      "sourceCommit": "8715382c5882ed80204ccc998c41585128480052",
+      "jobs": [
+        {
+          "id": 123910544264,
+          "name": "browser (root)",
+          "conclusion": "success"
+        },
+        {
+          "id": 123910544403,
+          "name": "browser (www)",
+          "conclusion": "success"
+        },
+        {
+          "id": 123910544477,
+          "name": "validate",
+          "conclusion": "success"
+        },
+        {
+          "id": 123913802952,
+          "name": "publish",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "nodeTests": 398,
+    "browserTests": 240,
+    "browserTestsPerBundle": 120,
+    "labelledSyntheticRegressionCases": 2
+  },
+  "localAndroidTests": {
+    "tests": 53,
+    "failures": 0,
+    "errors": 0,
+    "lintErrors": 0,
+    "lintWarnings": 19
+  },
+  "priorCandidateLocalBrowser": {
+    "version": "1.3.33",
+    "rootTests": 119,
+    "affectedWwwTests": 8
+  },
+  "localMenuRegressionRepeatedTests": 10,
+  "apkWebAssets": {
+    "count": 91,
+    "byteExactMatch": true
+  },
+  "nativeClassesVerified": [
+    "BackgroundRecovery",
+    "RecoveryHttp",
+    "RecoveryRoute",
+    "SpeechPlayback",
+    "SpeechTurnPolicy"
+  ],
+  "publicUpdateSmoke": {
+    "simulatedInstalledCodes": [
+      9,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      32,
+      33,
+      35,
+      36,
+      38
+    ],
+    "allPassed": true,
+    "limitation": "Shipping JavaScript updater using public response snapshots and simulated installed identity; not Android network or installer execution."
+  },
+  "priorUnpublishedRelease": {
+    "tag": "app-v1.3.33",
+    "sourceCommit": "74add31f592b0dbeafe7b81729cd6828240212a0",
+    "run": 41007577901,
+    "mainCi": 41007563896,
+    "mainCiResult": "success",
+    "releaseWwwResult": "118 passed, 1 failed",
+    "published": false,
+    "reason": "Automatic layout constraint changes closed a user-opened map tools menu; fixed in 1.3.34."
+  },
+  "actualPhoneTested": false,
+  "actualDrivingTested": false,
+  "actualBatteryBenefitVerified": false,
+  "newMapOrSpeechModelBundled": false,
+  "limitations": [
+    "Background recovery is ordinary driving routing, with sun/scene analysis renewed on foreground return.",
+    "Current regression gates use synthetic recordings; user-labelled field evidence is still required.",
+    "ETA and entrance access are estimates; real driving and on-site access need verification."
+  ]
+}
