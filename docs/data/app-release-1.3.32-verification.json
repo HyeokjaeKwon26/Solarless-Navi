@@ -1,0 +1,138 @@
+{
+  "publicRelease": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.32",
+  "apkUrl": "https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/download/app-v1.3.32/SolarLessNavi-1.3.32.apk",
+  "sizeBytes": 4531654,
+  "certificateSha256": "59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977",
+  "sha256": "0923a92696bf261e48f112572731258b1c640a68b2e794bd318c2dac273d17f6",
+  "packageName": "com.solaris.nav",
+  "version": "1.3.32",
+  "currentVersionCheck": "up to date",
+  "earlierSameKeyVersion": "update offered",
+  "apkCryptographicVerification": "passed",
+  "debuggable": false,
+  "verifiedAt": "2026-10-30T01:21:01.489Z",
+  "sourceCommit": "ec80e51019a52262e81e2709f750262fce87f3ff",
+  "versionCode": 36,
+  "minSdk": 22,
+  "apkGrowthBytes": 8352,
+  "apkGrowthBaseline": "1.3.31",
+  "ci": {
+    "release": {
+      "id": 40982910395,
+      "conclusion": "success",
+      "sourceCommit": "ec80e51019a52262e81e2709f750262fce87f3ff",
+      "jobs": [
+        {
+          "id": 123827020794,
+          "name": "browser (root)",
+          "conclusion": "success"
+        },
+        {
+          "id": 123827021043,
+          "name": "validate",
+          "conclusion": "success"
+        },
+        {
+          "id": 123827021067,
+          "name": "browser (www)",
+          "conclusion": "success"
+        },
+        {
+          "id": 123830181999,
+          "name": "publish",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "main": {
+      "id": 40984454354,
+      "conclusion": "success",
+      "sourceCommit": "4cca73b3fb0883a572336f15f11c2c4d45a34650",
+      "jobs": [
+        {
+          "id": 123832077531,
+          "name": "browser (www)",
+          "conclusion": "success"
+        },
+        {
+          "id": 123832077799,
+          "name": "browser (root)",
+          "conclusion": "success"
+        },
+        {
+          "id": 123832077837,
+          "name": "test",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "nodeTests": 389,
+    "browserTests": 232,
+    "browserTestsPerBundle": 116,
+    "labelledSyntheticRegressionCases": 2
+  },
+  "testOnlyFollowupCommit": "4cca73b3fb0883a572336f15f11c2c4d45a34650",
+  "initialMainCi": {
+    "id": 40982899844,
+    "conclusion": "failure",
+    "rootPassed": 115,
+    "wwwPassed": 116,
+    "failure": "Synthetic ETA renderer output was replaced by live route refresh between asynchronous test assertions.",
+    "resolution": "Read synthetic output atomically and assert totals unchanged; 10 repeated local passes, then full followup CI."
+  },
+  "localAndroidTests": {
+    "tests": 48,
+    "failures": 0,
+    "errors": 0,
+    "lintErrors": 0,
+    "lintWarnings": 19
+  },
+  "localAffectedBrowserTests": 36,
+  "apkWebAssets": {
+    "count": 86,
+    "byteExactMatch": true
+  },
+  "nativeClassesVerified": [
+    "SpeechDispatch",
+    "SpeechPlayback",
+    "SpeechTurnPolicy"
+  ],
+  "publicUpdateSmoke": {
+    "simulatedInstalledCodes": [
+      9,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      32,
+      33,
+      35,
+      36
+    ],
+    "olderVersions": "available",
+    "currentVersion": "idle",
+    "publicResponseSnapshot": true,
+    "actualAndroidInstalledIdentity": false
+  },
+  "actualVoiceAudioTested": false,
+  "actualPhoneInstallTested": false,
+  "actualDrivingTested": false,
+  "batteryConsumptionMeasured": false,
+  "addedSpeechEngine": false,
+  "addedSpeechModel": false,
+  "offlineGeographicDataBundled": false,
+  "limitations": [
+    "Engine callbacks do not prove audible speech or acoustic speaker consistency.",
+    "Most OSRM routes have no width tags; no inferred narrow-road penalty.",
+    "Battery, Bluetooth, PiP and screen-off output require a real device."
+  ]
+}

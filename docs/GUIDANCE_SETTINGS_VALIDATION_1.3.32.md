@@ -40,3 +40,14 @@
 6. 기존 서명 앱 위에 설치하여 설정 유지와 다음 업데이트 확인을 검사한다. 같은 조건 30~60분 주행으로 배터리/발열을 비교한다. 이번 작업에서는 실제 폰 설치·청취·주행·전력 측정을 하지 않았다.
 
 운전 중 조작과 청취 비교는 동승자가 맡거나 정차 후 진행한다.
+
+## 공개 APK 검증 완료
+
+- 최초 main CI의 ETA 설명 검사 1개는 테스트 임시 데이터가 실제 경로 갱신과 경쟁해 실패했다. 배포 CI의 동일 소스 전체 검사는 통과했다. 테스트만 수정한 4cca73b에서 root/www 각 5회 반복 검사 및 전체 CI를 다시 통과했다. APK 소스나 기존 태그는 변경하지 않았다.
+- [1.3.32 릴리스](https://github.com/HyeokjaeKwon26/Solarless-Navi/releases/tag/app-v1.3.32), versionCode 36, 소스 ec80e51019a52262e81e2709f750262fce87f3ff.
+- [main CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40984454354) 및 [배포 CI](https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/40982910395) 모두 성공. 전체 브라우저 root/www 116개씩 총 232개 통과. 변경 관련 로컬 검사는 중복 제외 36개 통과.
+- 공개 APK 4,531,654 bytes, 1.3.31 대비 8,352 bytes 증가. 새 지도 묶음·음성 모델 없음.
+- SHA-256 0923a92696bf261e48f112572731258b1c640a68b2e794bd318c2dac273d17f6. 공개 update.json/체크섬 및 실제 APK 바이트와 일치. 기존 인증서 59ea18b8ee971936d9e9780a57c4d4594b0c3b9ddbbc6318d1ba6559111f6977, 암호학적 서명, 비디버그 속성, 패키지·버전·minSDK 확인.
+- APK 내 웹 자산 86개가 배포 소스 www와 일치. SpeechPlayback/SpeechTurnPolicy와 진단 브리지 포함 확인.
+- 실제 updater를 공개 응답으로 실행해 기존 code 35 및 이전 지원 버전에는 업데이트, 현재 code 36에는 최신 버전 표시 확인. 설치 정보만 모의값이며 실제 폰 설치·데이터 유지 검사가 아님.
+- [검증 영수증](data/app-release-1.3.32-verification.json)에 결과와 실기기 미확인 범위를 기록.
