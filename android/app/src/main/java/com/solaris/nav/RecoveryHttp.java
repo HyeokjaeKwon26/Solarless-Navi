@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 final class RecoveryHttp {
     static JSONObject fetch(double[] start,double[] end,double bearing,boolean avoidTolls)throws Exception {
         String coordinates=start[0]+","+start[1]+";"+end[0]+","+end[1];
-        String query="?overview=full&geometries=geojson&steps=true&alternatives=false&radiuses=40;40";
+        String query="?overview=full&geometries=geojson&steps=true&alternatives=true&radiuses=40;40";
         if(NavigationProgress.finite(bearing))query+="&bearings="+Math.round((bearing%360+360)%360)+",60;";
         if(avoidTolls)query+="&exclude=toll"; // An unsupported class fails closed; never silently include tolls.
         HttpURLConnection connection=(HttpURLConnection)new URL("https://router.project-osrm.org/route/v1/driving/"+coordinates+query).openConnection();

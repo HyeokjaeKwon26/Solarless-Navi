@@ -12,12 +12,13 @@
         if(!schematic)return;
         schematic.hidden=!(visible&&turn&&root.NavigationGuidance.complexTurn(turn)&&route?.analyzed?.coordinates?.length);
         if(schematic.hidden){shapeKey='';return;}
-        const key=[route.id,turn.sequence,turn.progressMeters,root.I18n.getLanguage()].join('|');if(key===shapeKey&&shapeRoute===route.analyzed.coordinates)return;shapeKey=key;shapeRoute=route.analyzed.coordinates;
-        const points=root.JunctionPreview.shape(root.NavigationGuidance.model(route),turn);if(!points){schematic.hidden=true;return;}
+        const key=[route.id,turn.sequence,turn.progressMeters,root.I18n.getLanguage(),root.RoadPack?.graph?.pack?.savedAt].join('|');if(key===shapeKey&&shapeRoute===route.analyzed.coordinates)return;shapeKey=key;shapeRoute=route.analyzed.coordinates;
+        const layout=root.JunctionPreview.layout(root.NavigationGuidance.model(route),turn,root.RoadPack?.graph),points=layout?.points;if(!points){schematic.hidden=true;return;}
         const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 160 90');svg.setAttribute('role','img');svg.setAttribute('aria-label',t('다가오는 회전의 경로 모양','Upcoming turn route shape'));
+        for(const branch of layout.branches){const line=document.createElementNS(ns,'polyline');line.setAttribute('points',branch.map(p=>p.join(',')).join(' '));line.setAttribute('fill','none');line.setAttribute('stroke','#94a3b8');line.setAttribute('stroke-width','4');line.setAttribute('stroke-linecap','round');svg.append(line);}
         const path=document.createElementNS(ns,'polyline');path.setAttribute('points',points.map(p=>p.join(',')).join(' '));path.setAttribute('fill','none');path.setAttribute('stroke','#38bdf8');path.setAttribute('stroke-width','7');path.setAttribute('stroke-linejoin','round');path.setAttribute('stroke-linecap','round');svg.append(path);
         const start=document.createElementNS(ns,'circle');start.setAttribute('cx',points[0][0]);start.setAttribute('cy',points[0][1]);start.setAttribute('r','5');start.setAttribute('fill','#fff');svg.append(start);
-        const label=document.createElement('small');label.textContent=t('회전 경로 개요 · 차로 위치 아님','Turn overview · not lane position');schematic.replaceChildren(svg,label);
+        const label=document.createElement('small');label.textContent=(layout.branches.length?t('저장 지도 연결 · ','Saved mapped connections · '):'')+(layout.structure==='bridge'?t('교량 진입 도로 · ','Approach on bridge · '):layout.structure==='tunnel'?t('터널 진입 도로 · ','Approach in tunnel · '):'')+t('회전 경로 개요 · 차로 위치 아님','Turn overview · not lane position');schematic.replaceChildren(svg,label);
     }
     function etaEvidence(base,estimate,delay,active){
         if(!eta)return;const range=estimate?.range;eta.hidden=!active||(!range&&delay<10);

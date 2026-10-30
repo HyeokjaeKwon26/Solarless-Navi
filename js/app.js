@@ -1453,7 +1453,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isLiveNavActive) {
             updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare, true);
             NativeNavigation.invalidate();
-            if (!isFreeDriveMode && selectedRouteObj && !navigationRouteNeedsReliableOrigin) NativeNavigation.sync(selectedRouteObj,{destination:currentEnd&&[currentEnd.lng,currentEnd.lat],avoidTolls:isTollFreeOnly});
+            if (!isFreeDriveMode && selectedRouteObj && !navigationRouteNeedsReliableOrigin) NativeNavigation.sync(selectedRouteObj,{destination:currentEnd&&[currentEnd.lng,currentEnd.lat],avoidTolls:isTollFreeOnly,mode:currentMode,budget:routeBudget,analysisAt:routeData?.calculatedAt,candidates:routeData?.routes?.all});
         }
     }
 
@@ -4362,6 +4362,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 sceneRefinementAbortController = null;
             }
             if (requestGeneration === routeAnalysisGeneration) markRouteCalculationPending(false);
+            journeyControls?.render();
         }
 
         updateRouteOptionButtons(routeData);
@@ -4955,6 +4956,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 address.className='search-full-address';
                 address.textContent = res.displayName;
                 content.append(titleRow, address);
+                const evidence=document.createElement('small');evidence.className='search-match-evidence';
+                evidence.textContent=SearchEvidence.label(SearchEvidence.assess(val,res),isKo);content.append(evidence);
                 item.append(icon, content);
                 item.addEventListener('click', () => {
                     cancel();
@@ -5469,6 +5472,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const arrivalModal = document.getElementById('arrival-modal');
+        journeyControls?.arrival();
         if (arrivalModal) arrivalModal.classList.remove('hidden');
         journeyControls?.render();
 
@@ -5896,7 +5900,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return true;
             }
 
-            if (selectedRouteObj && !isFreeDriveMode) NativeNavigation.sync(selectedRouteObj,{destination:currentEnd&&[currentEnd.lng,currentEnd.lat],avoidTolls:isTollFreeOnly});
+            if (selectedRouteObj && !isFreeDriveMode) NativeNavigation.sync(selectedRouteObj,{destination:currentEnd&&[currentEnd.lng,currentEnd.lat],avoidTolls:isTollFreeOnly,mode:currentMode,budget:routeBudget,analysisAt:routeData?.calculatedAt,candidates:routeData?.routes?.all});
             if (Date.now() - lastSessionCheckpointAt >= 30000) saveActiveNavigationSession();
             const roadDestination = getActiveRoadDestination();
             if (roadDestination) {
@@ -6312,7 +6316,7 @@ document.addEventListener('DOMContentLoaded', () => {
     journeyControls = JourneyControls.create({
         state: () => ({ route: selectedRouteObj, data: routeData, start: currentStart, end: currentEnd, name: destinationName,
             mode: currentMode, budget: routeBudget, toll: isTollFreeOnly, live: isLiveNavActive, free: isFreeDriveMode,
-            realtime: isRealTimeMode, ready: isCurrentRouteReady(), busy: !!pendingRouteRequestKey || navigationTransitionPending || !!liveDestinationBackup,
+            realtime: isRealTimeMode, ready: isCurrentRouteReady(), busy: !!pendingRouteRequestKey || !!routeAbortController || navigationTransitionPending || !!liveDestinationBackup,
             fixAt: lastGpsTimestamp || gpsLastFixAt, accuracy: currentStart?.accuracy, speed: lastNavigationSpeedKmh,
             snapped: navigationRouteProgress.result?.isSnapped === true, heading: hasValidGpsHeading ? currentHeading : null }),
         remaining: () => JourneyPolicy.remaining(selectedRouteObj, navigationRouteProgress.snap),

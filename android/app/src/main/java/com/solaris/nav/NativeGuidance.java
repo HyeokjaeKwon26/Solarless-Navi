@@ -113,7 +113,7 @@ final class NativeGuidance {
     synchronized JSONObject recoveryState() throws JSONException {
         JSONObject result=new JSONObject().put("revision",revision).put("arrived",arrived);
         if(snapshot!=null&&snapshot.has("rawRoute"))result.put("route",snapshot.getJSONObject("rawRoute")).put("destination",snapshot.optJSONArray("destination"))
-            .put("recoveredAt",snapshot.optLong("recoveredAt")).put("solarAnalysisPending",true);
+            .put("recoveredAt",snapshot.optLong("recoveredAt")).put("solarAnalysisPending",true).put("preferenceReason",snapshot.optString("recoveryReason"));
         return result;
     }
     synchronized void setMuted(boolean value) { muted = value; context.getSharedPreferences("guidance", 0).edit().putBoolean("muted", value).apply(); if (value) NavigationSpeech.get(context).stop(); }
@@ -138,7 +138,13 @@ final class NativeGuidance {
         if (!background || progress == null) return "Navigation location is active";
         if(arrived)return language.startsWith("ko")?"목적지 부근 도착 · 앱에서 종료 확인":"Near destination · open app to finish";
         if(uncertain)return language.startsWith("ko")?"위치 확인 중 · 정확한 위치에서 경로 복구":"Checking position · recovery requires a reliable fix";
-        return snapshot!=null&&snapshot.has("rawRoute")?(language.startsWith("ko")?"복구 경로 안내 · 햇빛 분석 대기":"Recovery guidance · sunlight analysis pending"):(language.startsWith("ko")?"화면 꺼짐 주행 안내":"Background turn guidance");
+        if(snapshot!=null&&snapshot.has("rawRoute")){
+            String reason=snapshot.optString("recoveryReason");boolean ko=language.startsWith("ko");
+            if("fewer-turns".equals(reason))return ko?"회전 적은 복구 경로":"Recovery route with fewer turns";
+            if("cached-sun-comparison".equals(reason))return ko?"저장 분석으로 복구 · 복귀 후 갱신":"Recovery using cached sun estimates · refresh on return";
+            return ko?"일반 경로 복구 · 선호 개선 확인 안 됨":"Ordinary recovery · preference benefit unverified";
+        }
+        return language.startsWith("ko")?"화면 꺼짐 주행 안내":"Background turn guidance";
     }
     synchronized void onLocation(Location location) {
         if (!background || progress == null) return;
@@ -221,10 +227,16 @@ final class NativeGuidance {
         final long token=recovery.begin(now),routeRevision=revision;
         final String lang=language,units=unitSystem;
         final boolean toll=snapshot.optBoolean("avoidTolls");
+        final JSONObject preference=snapshot.optJSONObject("preference");
         final double bearing=origin.hasBearing()?origin.getBearing():Double.NaN;
         routing.execute(()->{
             JSONObject replacement=null;
-            try {replacement=RecoveryRoute.parse(RecoveryHttp.fetch(start,end,bearing,toll),start,end,lang); } catch(Exception ignored) { }
+            try {
+                JSONObject body=RecoveryHttp.fetch(start,end,bearing,toll);JSONArray candidates=body.getJSONArray("routes");
+                java.util.List<JSONObject> valid=new java.util.ArrayList<>();
+                for(int i=0;i<Math.min(3,candidates.length());i++)try{JSONObject single=new JSONObject().put("code",body.optString("code")).put("waypoints",body.getJSONArray("waypoints")).put("routes",new JSONArray().put(candidates.getJSONObject(i)));valid.add(RecoveryRoute.parse(single,start,end,lang));}catch(JSONException ignored){}
+                if(!valid.isEmpty())replacement=RecoveryPreference.choose(valid,preference,System.currentTimeMillis());
+            } catch(Exception ignored) { }
             final JSONObject result=replacement;
             new android.os.Handler(android.os.Looper.getMainLooper()).post(()->{
                 synchronized(NativeGuidance.this) {
@@ -235,7 +247,7 @@ final class NativeGuidance {
                     recovery.finish(token,current,result!=null&&fresh);
                     if(result==null||!fresh)return;
                     try {
-                        result.put("destination",new JSONArray(end)).put("avoidTolls",toll).put("language",lang).put("unitSystem",units)
+                        result.put("destination",new JSONArray(end)).put("avoidTolls",toll).put("language",lang).put("unitSystem",units).put("preference",preference)
                             .put("revision",Math.max(revision+1,current*1000)).put("recoveredAt",current);
                         NavigationSpeech.get(context).stop(); configure(result);
                         DriveJournal.get(context).append("native-recovery",new JSONObject().put("timestamp",current).put("solarAnalysisPending",true));

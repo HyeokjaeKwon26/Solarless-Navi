@@ -1,6 +1,36 @@
 const { test, expect } = require('@playwright/test');
 const { version: mapVersion } = require('maplibre-gl/package.json');
 
+test('journey preparation saves bounded instructions and corridor roads across reload without broad downloads',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);let requests=[];
+    await page.route('https://overpass.private.coffee/api/interpreter',route=>{requests.push(route.request().postData());return route.fulfill({json:{elements:optionalAreaElements}});});
+    await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#journey-preparation summary').click();expect(requests.length).toBe(0);
+    await page.locator('#btn-prepare-instructions').click();await expect(page.locator('#journey-coverage')).toContainText('Saved turns');expect(requests.length).toBe(0);
+    await page.locator('#btn-prepare-corridor').click();await expect(page.locator('#journey-preparation-status')).toContainText('Saved.');await expect.poll(()=>page.evaluate(()=>!!RoadPack.graph)).toBe(true);expect(requests.length).toBe(1);
+    const query=new URLSearchParams(requests[0]).get('data');expect(query.match(/way\[highway\]/g).length).toBeGreaterThan(1);expect(query).not.toContain('amenity');
+    await page.setViewportSize({width:320,height:740});await page.locator('#journey-preparation summary').scrollIntoViewIfNeeded();await page.screenshot({path:test.info().outputPath('preparation-320.png')});
+    const saved=await page.evaluate(()=>RoadPack.journey);await page.reload();await expect.poll(()=>page.evaluate(()=>!!RoadPack.journey)).toBe(true);
+    const available=await page.evaluate(({saved})=>{const c=saved.raw.geometry.coordinates;return {same:!!RoadPack.savedRoute({lng:c[0][0],lat:c[0][1]},{lng:saved.destination[0],lat:saved.destination[1]}),other:RoadPack.savedRoute({lng:0,lat:0},{lng:saved.destination[0],lat:saved.destination[1]})};},{saved});
+    expect(available.same).toBe(true);expect(available.other).toBeNull();expect(state.errors).toEqual([]);
+});
+
+test('parking memory requires explicit stop confirmation and keeps destination separate on narrow screens',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.setViewportSize({width:320,height:740});await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await expect.poll(()=>page.evaluate(()=>journeyTestApi.state().busy)).toBe(false);
+    await page.evaluate(()=>{journeyTestApi.gps=async()=>({timestamp:Date.now(),coords:{latitude:42.369,longitude:-71.066,accuracy:5,speed:null}});journeyTestController.arrival();document.getElementById('arrival-modal').classList.remove('hidden');});
+    await expect(page.locator('#btn-save-parking')).toBeDisabled();await page.locator('#parking-stopped').check();await page.locator('#btn-save-parking').click();
+    await expect(page.locator('#arrival-parking-status')).toContainText('Parking location saved');await expect(page.locator('#arrival-parking-status')).toContainText('not a walking route');
+    const saved=await page.evaluate(()=>ParkingMemory.get(localStorage));expect(saved.parked).not.toEqual(saved.destination);
+    const box=await page.locator('#btn-save-parking').boundingBox();expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(321);
+    await page.screenshot({path:test.info().outputPath('parking-320.png')});await page.reload();expect(await page.evaluate(()=>!!ParkingMemory.get(localStorage))).toBe(true);
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#parking-memory summary').click();await page.locator('#btn-clear-parking').click();await expect(page.locator('#parking-summary')).toContainText('No saved');expect(state.errors).toEqual([]);
+});
+
+test('search evidence appears without weakening exact address filters',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#destination-input').fill('Alpha');await expect(page.locator('#destination-results .search-match-evidence').first()).toContainText('Place result');expect(state.errors).toEqual([]);
+});
+
 test('an opened map tool menu stays open across automatic layout constraint changes',async({page})=>{
     const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();await page.locator('label.toggle-switch:has(#toggle-compact-controls)').click();await expect(page.locator('#toggle-compact-controls')).toBeChecked();await page.locator('#btn-open-search-modal').click();
     await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await establishReliableGuidance(page);

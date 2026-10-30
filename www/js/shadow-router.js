@@ -1788,8 +1788,11 @@ window.ShadowRouter = (function () {
                 if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new Error('OFFLINE');
                 directResponse = await fetchJsonWithTimeout(directUrl, { signal: options.signal, timeoutMs: options.directTimeoutMs || 10000 });
             } catch (error) {
-                if (options.signal?.aborted || !window.RoadPack?.graph) throw error;
-                const offline = await RoadPack.route(start, end, { heading: Number.isFinite(startHeading) ? startHeading : undefined, tollFree: isTollFreeOnly });
+                if (options.signal?.aborted || !window.RoadPack) throw error;
+                const policy={ heading: Number.isFinite(startHeading) ? startHeading : undefined, tollFree: isTollFreeOnly };
+                const saved=RoadPack.savedRoute?.(start,end,policy);
+                if(!saved&&!RoadPack.graph)throw error;
+                const offline = saved||await RoadPack.route(start, end, policy);
                 directResponse = { routes: [offline], waypoints: [{ location: offline.geometry.coordinates[0] }, { location: offline.geometry.coordinates.at(-1) }] };
             }
             rawCandidates = directResponse && Array.isArray(directResponse.routes) ? directResponse.routes.slice() : [];

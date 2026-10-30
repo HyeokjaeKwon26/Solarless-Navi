@@ -1,0 +1,35 @@
+(function(root){
+    'use strict';
+    function create(api){
+        const $=id=>document.getElementById(id),t=(ko,en)=>root.I18n.getLanguage().startsWith('ko')?ko:en;
+        const panel=document.createElement('details');panel.id='journey-preparation';const heading=document.createElement('summary'),note=document.createElement('p'),status=document.createElement('p');status.id='journey-preparation-status';status.setAttribute('role','status');panel.append(heading,note);$('btn-arrival-preview').after(panel);
+        const button=(host,id,fn)=>{const b=document.createElement('button');b.type='button';b.className='nav-btn secondary';b.id=id;b.onclick=fn;host.append(b);return b;};
+        let busy=false;
+        const run=async(fn)=>{if(busy||api.state().live||api.state().busy)return;busy=true;render();try{await fn();status.textContent=t('저장했습니다. 아래 범위는 도로 표본 검사이며 전체 연결 보증이 아닙니다.','Saved. Coverage below checks road samples, not complete connectivity.');}catch(e){status.textContent=e.message==='CORRIDOR_LIMIT'?t('주변 도로 저장은 12km 이하 경로만 지원합니다. 회전 정보만 저장할 수 있습니다.','Road corridor saving supports routes up to 12 km. You can still save turn instructions.'):t('저장하지 못했습니다. 연결·공간·경로 변경 여부를 확인하세요. 기존 저장 자료는 유지됩니다.','Could not save. Check connection, space or route changes. Existing saved data is retained.');}finally{busy=false;render();}};
+        const save=button(panel,'btn-prepare-instructions',()=>run(async()=>{const s=api.state();if(!s.ready||!s.route||!s.end)throw Error('NO_ROUTE');await root.RoadPack.saveJourney(s.route,s.end,s.toll,()=>api.state().route===s.route&&!api.state().live);}));
+        const corridor=button(panel,'btn-prepare-corridor',()=>run(async()=>{const s=api.state();if(!s.ready||!s.route)throw Error('NO_ROUTE');const coords=s.route.analyzed.coordinates;root.JourneyPreparation.corridor(coords);await root.RoadPack.save({lng:coords[0][0],lat:coords[0][1]},3,coords,()=>api.state().route===s.route&&!api.state().live);}));
+        const coverage=document.createElement('p');coverage.id='journey-coverage';panel.append(coverage,status);
+        const parking=document.createElement('details');parking.id='parking-memory';const parkingTitle=document.createElement('summary'),parkingText=document.createElement('p');parkingText.id='parking-summary';parkingText.setAttribute('role','status');parking.append(parkingTitle,parkingText);panel.after(parking);
+        const clear=button(parking,'btn-clear-parking',()=>{try{root.ParkingMemory.clear(localStorage);render();}catch{parkingText.textContent=t('삭제 실패','Could not delete');}});
+        const arrival=document.createElement('div');arrival.id='arrival-parking';const arrivalNote=document.createElement('p');arrivalNote.id='arrival-parking-status';$('btn-close-arrival-modal').before(arrival);arrival.append(arrivalNote);
+        const stoppedLabel=document.createElement('label'),stopped=document.createElement('input');stopped.type='checkbox';stopped.id='parking-stopped';const stoppedText=document.createElement('span');stoppedLabel.append(stopped,stoppedText);arrival.append(stoppedLabel);
+        const remember=button(arrival,'btn-save-parking',async()=>{const s=api.state();if(s.live||s.busy||!s.end||!stopped.checked)return;remember.disabled=true;
+            try{const pos=await api.gps();if(api.state().live||api.state().end!==s.end)throw Error('CHANGED');const c=pos.coords;
+                const value=root.ParkingMemory.save(localStorage,{lat:c.latitude,lng:c.longitude,accuracy:c.accuracy,timestamp:pos.timestamp,speed:c.speed==null?null:c.speed*3.6,stationaryConfirmed:stopped.checked},s.end,s.name);
+                arrivalNote.textContent=t('주차 위치 저장됨. ','Parking location saved. ')+describe(value);render();
+            }catch{arrivalNote.textContent=t('정차한 상태의 정확한 GPS가 필요합니다. 위치 권한과 수신 상태를 확인하세요.','A fresh accurate GPS fix while stopped is required. Check location access and reception.');}finally{remember.disabled=!stopped.checked;}});
+        stopped.onchange=()=>{remember.disabled=!stopped.checked||api.state().live||api.state().busy;};
+        const describe=v=>{const a=root.ParkingMemory.summary(v),direction=(t('북,북동,동,남동,남,남서,서,북서','N,NE,E,SE,S,SW,W,NW').split(','))[Math.round(a.bearing/45)%8];return `${v.name} · ${t('주차점에서 목적지까지 직선','Straight line from parking to destination')} ${root.NavigationUnits.distance(a.distance)} · ${direction}. `+t('보행 경로나 통행 가능 여부를 나타내지 않습니다.','This is not a walking route or access confirmation.');};
+        let coverageRoute=null,coverageGraph=null,coverageResult=null;
+        function render(){const s=api.state();heading.textContent=t('이 경로의 통신 끊김 대비','Prepare this route for a connection loss');note.textContent=t('선택 저장 · 회전 정보 24시간, 도로 7일. 주변 도로는 12km 이하 경로·폭 약 700m, 전체 도로/여정 저장 12MB 한도. 배경 지도는 포함하지 않습니다. 새 도로 자료는 이전 지역을 대체합니다.','Optional saving: turns 24 hours, roads 7 days. Corridor up to 12 km long and about 700 m wide, combined roads/trip limit 12 MB. Background map excluded. New roads replace the previous area.');
+            save.textContent=t('선택 경로·회전 정보 저장','Save selected route and turns');corridor.textContent=t('이 경로 주변 도로 저장','Save roads around this route');save.disabled=corridor.disabled=busy||s.live||s.busy||!s.ready||!s.route;
+            if(s.route!==coverageRoute||root.RoadPack.graph!==coverageGraph){coverageRoute=s.route;coverageGraph=root.RoadPack.graph;try{coverageResult=s.route?root.JourneyPreparation.coverage(s.route.analyzed.coordinates,coverageGraph):null;}catch{coverageResult=null;}}
+            const saved=root.RoadPack.journey,coords=s.route?.analyzed?.coordinates;
+            const same=saved&&coords&&root.JourneyPreparation.savedRoute(saved,{lng:coords[0][0],lat:coords[0][1]},s.end||{}, {tollFree:s.toll});
+            coverage.textContent=(same?t('이 목적지의 출발점 회전 정보 저장됨','Saved turns from this route start'):t('현재 경로 회전 정보 미저장','Current route turns not saved'))+(coverageResult?` · ${t('도로 표본','Road samples')} ${coverageResult.covered}/${coverageResult.samples}`:'')+(coverageResult?.missing.length?' · '+t('빠진 구간(출발점부터): ','Missing near distance from start: ')+coverageResult.missing.map(m=>root.NavigationUnits.distance(m)).join(', '):'')+t(' · 이탈 재탐색·배경 지도 가용성과는 별개입니다.',' · Rerouting and background map availability are separate.');
+            parkingTitle.textContent=t('저장한 주차 위치','Saved parking location');const v=root.ParkingMemory.get(localStorage);parkingText.textContent=v?new Date(v.at).toLocaleString()+' · '+describe(v):t('저장한 주차 위치 없음 · 도착 후 직접 저장할 수 있습니다.','No saved parking location. Save it explicitly after arrival.');clear.textContent=t('주차 위치 삭제','Delete parking location');clear.disabled=s.live||!v;remember.textContent=t('정차 확인 후 현재 주차 위치 저장','Save current parking location after stopping');remember.disabled=s.live||s.busy||!stopped.checked;stoppedText.textContent=t('안전하게 주차·정차했습니다','I am safely parked or stopped');
+        }
+        return {render,arrival(){stopped.checked=false;arrivalNote.textContent='';render();}};
+    }
+    root.JourneyContinuityUI={create};
+})(window);

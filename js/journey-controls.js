@@ -4,11 +4,14 @@ window.JourneyControls={create(api){
     const text=(a,b)=>ko()?a:b;
     let tripController=null,tripMap=null,tripLayers=null,tripGeneration=0,tripBusy=false,lastPreviewAt=0;
     let proposal=null,proposalController=null,lastProposalAt=0,lastClosureKey='',dismissedKey='';
+    const continuity=rootContinuity();
+    function rootContinuity(){return window.JourneyContinuityUI?.create(api);}
     const routeKey=route=>EtaLearning.routeKey(route),endKey=end=>JSON.stringify([end?.lat,end?.lng]);
     const distance=(a,b)=>ShadowRouter.calculateDistanceMeters(a.lat,a.lng,b.lat,b.lng);
     function snapshot(){const s=api.state();return {...s,routeKey:routeKey(s.route),destinationKey:endKey(s.end),position:s.start,now:Date.now()};}
     function matchingPlan(){const p=TripTools.get();return p&&TripTools.same(p.current.coords,api.state().end)?p:null;}
     function render(){
+        continuity?.render();
         const s=api.state(),p=matchingPlan(),c=JourneyUpgrades.complexity(s.route);
         $('route-preference-title').textContent=text('경로 선택','Route preference');
         $('route-preference-label').textContent=text('우선순위','Priority');
@@ -157,5 +160,5 @@ window.JourneyControls={create(api){
         if(!JourneyUpgrades.proposalCurrent(p,snapshot(),distance)||!raw||JourneyUpgrades.closureKey(PublicTraffic.evaluate(raw,p.feeds))!==p.key||PublicTraffic.evaluate(p.candidate.raw,p.feeds).blocked){proposal=null;offer(text('위치·경로·통제 자료가 변경되어 제안이 만료됐습니다. 현재 위치에서 다시 탐색하세요.','Position, route or closure data changed; this proposal expired. Recalculate from your current position.'),false);return;}
         proposal=null;$('closure-offer').classList.add('hidden');await api.commit(p.data);
     });
-    return {render,invalidate,considerClosure,closePreview};
+    return {render,invalidate,considerClosure,closePreview,arrival:()=>continuity?.arrival()};
 }};

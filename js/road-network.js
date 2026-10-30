@@ -33,6 +33,7 @@
             const a=nodes.get(from),b=nodes.get(to),length=distance(a,b);if(length<=0||length>3000)return;
             const parsed=Number.parseFloat(tags.maxspeed),speed=Number.isFinite(parsed)?Math.min(110,Math.max(5,parsed*(String(tags.maxspeed).includes('mph')?1.609344:1))):/motorway|trunk/.test(tags.highway)?70:/primary|secondary/.test(tags.highway)?45:25;
             const edge={id:edges.length,from,to,way,a,b,length,seconds:length/(speed/3.6),name:tags.name||tags.ref||'',ref:tags.ref||'',toll:tags.toll==='yes',service:tags.highway==='service',heading:bearing(a,b)};
+            edge.layer=Number.isFinite(Number(tags.layer))?Number(tags.layer):null;edge.bridge=!!tags.bridge&&tags.bridge!=='no';edge.tunnel=!!tags.tunnel&&tags.tunnel!=='no';
             edges.push(edge);if(!adj.has(from))adj.set(from,[]);adj.get(from).push(edge);
             const minX=Math.floor(Math.min(a[0],b[0])*1000),maxX=Math.floor(Math.max(a[0],b[0])*1000),minY=Math.floor(Math.min(a[1],b[1])*1000),maxY=Math.floor(Math.max(a[1],b[1])*1000);
             for(let x=minX;x<=maxX;x++)for(let y=minY;y<=maxY;y++){const key=x+','+y;if(!grid.has(key))grid.set(key,[]);grid.get(key).push(edge);}

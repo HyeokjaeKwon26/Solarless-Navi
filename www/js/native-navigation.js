@@ -11,7 +11,7 @@
         const language = root.TTSVoice.getLanguage();
         const unitSystem = root.NavigationUnits.system();
         const muted = root.TTSVoice.isMuted();
-        const presentation = JSON.stringify([language, unitSystem, muted, options.destination, options.avoidTolls, root.RoadPack?.graph?.pack?.savedAt || 0]);
+        const presentation = JSON.stringify([language, unitSystem, muted, options.destination, options.avoidTolls, options.mode, options.budget, options.analysisAt, root.RoadPack?.graph?.pack?.savedAt || 0]);
         if ((identity === route && identityPresentation === presentation) || (pending === route && pendingPresentation === presentation)) return;
         const token = ++generation;
         pending = route; pendingPresentation = presentation;
@@ -35,6 +35,7 @@
         });
         plugin().setGuidanceRoute({ route: { revision: nextRevision(), coordinates: model.coordinates, turns, language, unitSystem, muted,
             destination: options.destination || model.coordinates.at(-1), avoidTolls: options.avoidTolls === true,
+            preference: root.RecoveryPreference?.snapshot(options.candidates||[route],options.mode,options.budget) || null,
             nearbyRoads: root.NearbyRoads?.nativeSnapshot(root.RoadPack?.graph) || null } })
             .then(() => { if (generation === token) { identity = route; identityPresentation = presentation; root.ServiceHealth?.shared.success('native-guidance'); } })
             .catch(() => { if(generation===token)root.ServiceHealth?.shared.failure('native-guidance',0); })

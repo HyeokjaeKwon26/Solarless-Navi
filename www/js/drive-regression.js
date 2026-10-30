@@ -3,20 +3,27 @@
     'use strict';
     function evaluate(recording,source='foreground',existingReport){
         const report=existingReport||replay.run(recording,source),samples=replay.samples(recording,source).slice().sort((a,b)=>a.timestamp-b.timestamp);
-        let labelledFixes=0,fixErrors=0,off={},lastRoute=-1;const proposals=[];
+        let labelledFixes=0,fixErrors=0,off={},lastRoute=-1;const proposals=[],issues=[];
+        const issue=(kind,timestamp,index)=>{if(issues.length<200)issues.push({kind,timestamp,index});};
         for(let i=0;i<report.frames.length;i++){
             const f=report.frames[i],s=samples[i],hasProgress=Number.isFinite(s.expectedProgressMeters),label=typeof s.expectedMatched==='boolean'?s.expectedMatched:hasProgress?true:null;
-            if(label!==null){labelledFixes++;if(!!f.snapped!==label||label&&hasProgress&&Math.abs(f.progressMeters-s.expectedProgressMeters)>Math.max(5,Number(s.expectedToleranceMeters)||25))fixErrors++;}
+            if(label!==null){labelledFixes++;if(!!f.snapped!==label||label&&hasProgress&&Math.abs(f.progressMeters-s.expectedProgressMeters)>Math.max(5,Number(s.expectedToleranceMeters)||25)){fixErrors++;issue('fix',f.timestamp,i);}}
             if(f.routeIndex!==lastRoute){off={};lastRoute=f.routeIndex;}
             off=rules.evaluateOffRoute(off,{timestamp:s.receivedAt??s.timestamp,distanceMeters:f.rawDistanceMeters,accuracy:s.accuracy,oppositeDirection:f.reason==='opposite-direction',uncertain:!f.accepted||['ambiguous','nearby-road-conflict','reacquiring','motion-conflict'].includes(f.reason),online:s.online!==false,pending:s.reroutePending===true});
             if(off.shouldReroute)proposals.push(f.timestamp);
         }
         const events=(recording.events||[]).filter(e=>!e.data?.source||e.data.source===source),turns=events.filter(e=>e.type==='guidance-ground-truth'&&Number.isFinite(e.data?.latestAt)&&Number.isFinite(e.data?.progressMeters)&&['preview','prepare','execute'].includes(e.data?.stage));
         const stages={preview:1,prepare:2,execute:3};
-        const late=turns.filter(e=>!report.frames.some(f=>f.routeIndex===(e.data.routeIndex??0)&&f.timestamp<=e.data.latestAt&&f.timestamp>=(e.data.earliestAt??-Infinity)&&f.guidance&&Math.abs(f.guidance.progressMeters-e.data.progressMeters)<=5&&stages[f.guidance.stage]>=stages[e.data.stage])).length;
+        const lateEvents=turns.filter(e=>!report.frames.some(f=>f.routeIndex===(e.data.routeIndex??0)&&f.timestamp<=e.data.latestAt&&f.timestamp>=(e.data.earliestAt??-Infinity)&&f.guidance&&Math.abs(f.guidance.progressMeters-e.data.progressMeters)<=5&&stages[f.guidance.stage]>=stages[e.data.stage]));
+        const nearest=at=>report.frames.reduce((best,f,i)=>best<0||Math.abs(f.timestamp-at)<Math.abs(report.frames[best].timestamp-at)?i:best,-1);
+        for(const e of lateEvents){if(issues.length>=200)break;issue('guidance',e.data.latestAt,nearest(e.data.latestAt));}
+        const late=lateEvents.length;
         const windows=events.filter(e=>e.type==='reroute-ground-truth'&&Number.isFinite(e.data?.start)&&Number.isFinite(e.data?.end)&&e.data.end>=e.data.start&&typeof e.data.allowed==='boolean');
-        const falseProposals=proposals.filter(at=>windows.some(e=>!e.data.allowed&&at>=e.data.start&&at<=e.data.end)).length;
+        const falseTimes=proposals.filter(at=>windows.some(e=>!e.data.allowed&&at>=e.data.start&&at<=e.data.end));
+        for(const at of falseTimes){if(issues.length>=200)break;issue('reroute',at,nearest(at));}
+        const falseProposals=falseTimes.length;
         return {schema:1,source,synthetic:recording.synthetic===true,samples:report.samples,labelledFixes,fixErrors:labelledFixes?fixErrors:null,positionJumps:report.positionJumps,uncertain:report.uncertain,rejected:report.rejected,matched:report.matched,guidanceLabels:turns.length,lateGuidance:turns.length?late:null,rerouteLabels:windows.length,falseRerouteProposals:windows.length?falseProposals:null,rerouteProposals:proposals.length,
+            issues:issues.sort((a,b)=>a.timestamp-b.timestamp),issuesLimited:fixErrors+late+falseProposals>200,
             limitations:'Route matching and guidance eligibility/off-route policy replay; not actual speech playback, full Android execution or network rerouting.'};
     }
     function gate(actual,limits,baseline){
