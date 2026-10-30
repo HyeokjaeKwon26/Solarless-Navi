@@ -99,5 +99,8 @@
         const endpoint=root.ShadowRouter.getRouteEndpoint(route),gap=endpoint?root.ShadowRouter.calculateDistanceMeters(end.lat,end.lng,endpoint.lat,endpoint.lng):null;
         el.textContent=(end.entranceConfirmed?t('선택한 차량 입구로 접근 중 · 현장 진입 방향 확인','Approaching your confirmed entrance · check access direction on site'):t('선택한 도착점으로 접근 중 · 차량 입구 미확인','Approaching your arrival pin · vehicle entrance unverified'))+(gap>25?' · '+t(`경로 끝과 핀 ${root.NavigationUnits.distance(gap)} 차이`,`Route ends ${root.NavigationUnits.distance(gap)} from pin`):'');
     }
-    return {init,render,routeSummary,arrival,groups,same,setConstrained(value){if(constrained!==value){constrained=value;open=false;controls();}},closeTools(){open=false;controls();}};
+    // Layout measurements may cross the folding threshold during resize or
+    // junction refinement. Preserve an explicit user opening across those
+    // measurements; outside taps / Escape / the toggle still close it.
+    return {init,render,routeSummary,arrival,groups,same,setConstrained(value){if(constrained!==value){constrained=value;controls();}},closeTools(){open=false;controls();}};
 });

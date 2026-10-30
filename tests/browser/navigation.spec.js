@@ -1,6 +1,15 @@
 const { test, expect } = require('@playwright/test');
 const { version: mapVersion } = require('maplibre-gl/package.json');
 
+test('an opened map tool menu stays open across automatic layout constraint changes',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();await page.locator('label.toggle-switch:has(#toggle-compact-controls)').click();await expect(page.locator('#toggle-compact-controls')).toBeChecked();await page.locator('#btn-open-search-modal').click();
+    await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await establishReliableGuidance(page);
+    await page.locator('#btn-map-tools').click();await expect(page.locator('#btn-map-tools')).toHaveAttribute('aria-expanded','true');
+    await page.evaluate(()=>{DriveExperience.setConstrained(true);DriveExperience.setConstrained(false);DriveExperience.setConstrained(true);});
+    await expect(page.locator('#btn-map-tools')).toHaveAttribute('aria-expanded','true');await page.locator('#btn-driving-view').click({trial:true});
+    await page.keyboard.press('Escape');await expect(page.locator('#btn-map-tools')).toHaveAttribute('aria-expanded','false');await expect(page.locator('#btn-driving-view')).toBeHidden();expect(state.errors).toEqual([]);
+});
+
 test('truth reviewer labels a selected fix and exports the same evidence for version comparisons',async({page})=>{
     const state=await fixtures(page,{brokenMap:true});await page.setViewportSize({width:320,height:740});await page.goto('./');await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-drive-replay').click();
     const at=Date.now(),recording={version:2,samples:[0,1,2].map(i=>({timestamp:at+i*1000,receivedAt:at+i*1000,lat:42.36,lng:-71.07+i*.00005,accuracy:5,heading:90,speedKmh:20})),events:[{type:'route',recordedAt:at-1000,data:{coordinates:[[-71.07,42.36],[-71.06,42.36]],maneuvers:[]}}]};

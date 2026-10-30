@@ -1,4 +1,4 @@
-SolarLess Navi 1.3.33
+SolarLess Navi 1.3.34
 
 화면 꺼짐 주행 복구, 주행 기록 검증, ETA 학습, 차량 입구 선택, 교차로 화면을 개선했습니다.
 
@@ -8,7 +8,9 @@ SolarLess Navi 1.3.33
 - 차량 입구 후보를 도로 접근 방향·유턴·주행시간으로 확인합니다. 확인하지 못한 접근은 구분하며 최종 선택은 사용자가 합니다.
 - 교차로는 먼 거리의 출구·방면 표지, 가까운 거리의 확인된 차로, 회전 직전 화살표 순서로 표시합니다. 차로 자료가 없으면 추정해서 그리지 않습니다.
 
+- 화면 크기나 안내판 높이가 바뀌어도 사용자가 열어둔 지도 도구 메뉴를 유지합니다.
+
 무료 공개 서비스와 기존 엔진을 사용하며 대형 지도·음성 모델은 추가하지 않았습니다. GPS 수신 주기와 음성 안내 기준은 낮추지 않았습니다. 공개 라우팅의 가용성, 실제 GPS·배터리 성능은 기기와 주행 환경에 따라 확인이 필요합니다.
 
 구현 범위·검증 및 실제 폰/주행 확인 목록:
-https://github.com/HyeokjaeKwon26/Solarless-Navi/blob/main/docs/RELIABILITY_COMPLETION_1.3.33.md
+https://github.com/HyeokjaeKwon26/Solarless-Navi/blob/main/docs/RELIABILITY_COMPLETION_1.3.34.md

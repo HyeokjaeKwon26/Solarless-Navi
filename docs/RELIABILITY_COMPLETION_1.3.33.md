@@ -68,4 +68,7 @@
 
 ## 배포 확인
 
-배포 완료 후 공개 APK 해시·서명·용량과 전체 CI 결과를 기록한다.
+1.3.33 태그의 배포 검증에서 www의 3D 교차로 도구 버튼 검사 1건이 실패하여 publish가 실행되지 않았다. 공개 APK는 없다. 자동 배치 변경이 열린 도구 메뉴를 닫는 문제를 수정한 1.3.34에서 재검증한다.
+
+실패 실행: https://github.com/HyeokjaeKwon26/Solarless-Navi/actions/runs/41007577901
+원본 소스: `74add31f592b0dbeafe7b81729cd6828240212a0`. Node 398개·Android 검증·root 119개는 통과했으며 www는 118개 통과/1개 실패했다.
