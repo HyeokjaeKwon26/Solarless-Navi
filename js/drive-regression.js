@@ -11,7 +11,7 @@
             off=rules.evaluateOffRoute(off,{timestamp:s.receivedAt??s.timestamp,distanceMeters:f.rawDistanceMeters,accuracy:s.accuracy,oppositeDirection:f.reason==='opposite-direction',uncertain:!f.accepted||['ambiguous','nearby-road-conflict','reacquiring','motion-conflict'].includes(f.reason),online:s.online!==false,pending:s.reroutePending===true});
             if(off.shouldReroute)proposals.push(f.timestamp);
         }
-        const events=recording.events||[],turns=events.filter(e=>e.type==='guidance-ground-truth'&&Number.isFinite(e.data?.latestAt)&&Number.isFinite(e.data?.progressMeters)&&['preview','prepare','execute'].includes(e.data?.stage));
+        const events=(recording.events||[]).filter(e=>!e.data?.source||e.data.source===source),turns=events.filter(e=>e.type==='guidance-ground-truth'&&Number.isFinite(e.data?.latestAt)&&Number.isFinite(e.data?.progressMeters)&&['preview','prepare','execute'].includes(e.data?.stage));
         const stages={preview:1,prepare:2,execute:3};
         const late=turns.filter(e=>!report.frames.some(f=>f.routeIndex===(e.data.routeIndex??0)&&f.timestamp<=e.data.latestAt&&f.timestamp>=(e.data.earliestAt??-Infinity)&&f.guidance&&Math.abs(f.guidance.progressMeters-e.data.progressMeters)<=5&&stages[f.guidance.stage]>=stages[e.data.stage])).length;
         const windows=events.filter(e=>e.type==='reroute-ground-truth'&&Number.isFinite(e.data?.start)&&Number.isFinite(e.data?.end)&&e.data.end>=e.data.start&&typeof e.data.allowed==='boolean');

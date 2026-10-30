@@ -136,9 +136,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('eta-learning-title').textContent=ko?'내 주행 기반 도착시간':'Personal arrival estimates';
         document.getElementById('eta-learning-label').textContent=ko?'기기에 주행 이력을 저장하고 ETA 보정':'Save local trip history to adjust ETA';
         document.getElementById('eta-learning-enabled').checked=etaLearning.enabled;
-        document.getElementById('eta-learning-help').textContent=ko?'같은 경로·요일·2시간대의 완료 주행 5회 이상으로 검증 후 적용합니다. 최대 100회·90일, 기기에만 저장합니다. 실시간 교통이 아닙니다.':'Uses at least 5 completed trips on the same route, weekday and two-hour window, after validation. Up to 100 trips / 90 days, only on this device. Not live traffic.';
+        document.getElementById('eta-learning-help').textContent=ko?'같은 방향의 공유 구간 또는 전체 경로를 요일·2시간대별로 5회 이상 검증한 뒤 보정합니다. 긴 정차·GPS 공백 구간은 제외합니다. 전체 주행 100회·구간 관찰 600건·90일 한도로 기기에만 저장합니다. 실시간 교통이 아닙니다.':'Adjusts shared road sections in the same direction, or complete routes, after 5 comparable trips in the same weekday / two-hour window and held-out validation. Excludes long stops and GPS gaps. Device only: 100 trips, 600 section observations, 90 days. Not live traffic.';
         document.getElementById('btn-eta-clear').textContent=ko?'ETA 이력 삭제':'Delete ETA history';
-        document.getElementById('eta-learning-status').textContent=error?(ko?'저장 실패 · 설정을 변경하지 못했습니다.':'Could not save the change.'):(ko?`저장 ${etaLearning.count}회 · ${etaLearning.enabled?'학습 켜짐':'학습 꺼짐'}`:`${etaLearning.count} saved trips · ${etaLearning.enabled?'Learning on':'Learning off'}`);
+        document.getElementById('eta-learning-status').textContent=error?(ko?'저장 실패 · 설정을 변경하지 못했습니다.':'Could not save the change.'):(ko?`저장 ${etaLearning.count}회 · 구간 ${etaLearning.segmentCount}건 · ${etaLearning.enabled?'학습 켜짐':'학습 꺼짐'}`:`${etaLearning.count} saved trips · ${etaLearning.segmentCount} section observations · ${etaLearning.enabled?'Learning on':'Learning off'}`);
     }
     document.getElementById('eta-learning-enabled').addEventListener('change',event=>{
         try{etaLearning.enable(event.target.checked);tripEta=null;renderEtaSettings();}catch{renderEtaSettings(true);}
@@ -340,6 +340,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 TTSVoice.pauseGuidance();
                 renderProvisionalGuidanceBanner();
                 document.getElementById('banner-lanes').hidden = true;
+                if(document.getElementById('banner-sign'))document.getElementById('banner-sign').hidden=true;
                 const following = document.getElementById('banner-following');
                 if (following) following.hidden = true;
             }
@@ -1097,7 +1098,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if(!drivingHudBounds)drivingHudBounds=['map-perspective-wrapper','mobile-turn-banner','map-bottom-overlay-stack'].map(id=>document.getElementById(id).getBoundingClientRect());
         const [wrapper,banner,bottom]=drivingHudBounds;
         const landscape=window.matchMedia('(orientation: landscape) and (max-height: 540px)').matches;
-        if(!reliable){JourneyUI.junction(null,null,false);document.getElementById('banner-road').hidden=true;document.getElementById('mobile-turn-banner').classList.remove('junction-close');}
+        if(!reliable){if(document.getElementById('banner-sign'))document.getElementById('banner-sign').hidden=true;JourneyUI.junction(null,null,false);document.getElementById('banner-road').hidden=true;document.getElementById('mobile-turn-banner').classList.remove('junction-close');}
         drivingView.update({live:isLiveNavActive,wanted:drivingViewWanted,saver:isBatterySaverActive,pip:isPipMode,
             visible:document.visibilityState!=='hidden',satellite:isSatelliteViewActive,available:!!roadLayerSet?.vectorSupported&&!isRasterMapFallbackActive,
             position:[currentSmoothLng,currentSmoothLat],heading:currentSmoothHeading,bearing:compassMode==='heading-up'?currentSmoothHeading:0,
@@ -1452,7 +1453,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isLiveNavActive) {
             updateTurnBannerText(lastTurnPresentation.maneuver, lastTurnPresentation.glare, true);
             NativeNavigation.invalidate();
-            if (!isFreeDriveMode && selectedRouteObj && !navigationRouteNeedsReliableOrigin) NativeNavigation.sync(selectedRouteObj);
+            if (!isFreeDriveMode && selectedRouteObj && !navigationRouteNeedsReliableOrigin) NativeNavigation.sync(selectedRouteObj,{destination:currentEnd&&[currentEnd.lng,currentEnd.lat],avoidTolls:isTollFreeOnly});
         }
     }
 
@@ -1716,6 +1717,7 @@ document.addEventListener('DOMContentLoaded', () => {
         JourneyUI.junction(null,null,false);
         syncGpsControl();
         document.getElementById('banner-lanes').hidden = true;
+                if(document.getElementById('banner-sign'))document.getElementById('banner-sign').hidden=true;
         const following = document.getElementById('banner-following');
         if (following) following.hidden = true;
         const ko = I18n.getLanguage().startsWith('ko');
@@ -1746,7 +1748,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const bannerIcon = document.getElementById('banner-turn-icon');
         const laneElement = document.getElementById('banner-lanes');
         const camera = JourneyPolicy.camera(nextManeuver, lastNavigationSpeedKmh);
-        JourneyUI.junction(selectedRouteObj,nextManeuver,camera.close&&isLiveNavActive&&!isFreeDriveMode&&!isPipMode);
+        const junction=JunctionPresentation.present(nextManeuver,lastNavigationSpeedKmh,isKo);
+        banner.dataset.junctionPhase=junction.phase;
+        let sign=document.getElementById('banner-sign');
+        if(!sign){sign=document.createElement('div');sign.id='banner-sign';sign.className='banner-sign';bannerDesc.before(sign);}
+        sign.textContent=junction.sign;sign.hidden=!junction.sign||junction.compact;
+        JourneyUI.junction(selectedRouteObj,nextManeuver,junction.phase==='prepare'&&camera.close&&isLiveNavActive&&!isFreeDriveMode&&!isPipMode);
         banner.classList.toggle('junction-close', camera.close);
         const roadElement=document.getElementById('banner-road');
         roadElement.hidden=!camera.close;
@@ -1755,7 +1762,7 @@ document.addEventListener('DOMContentLoaded', () => {
             lastJunctionZoom = Date.now();
             if (map.getZoom() !== camera.zoom) map.setZoom(camera.zoom, { animate: false });
         }
-        const lanes = nextManeuver && nextManeuver.distanceFromCar <= 500 && nextManeuver.lanes;
+        const lanes = junction.lanes;
         let followingElement = document.getElementById('banner-following');
         if (!followingElement) {
             followingElement = document.createElement('div');
@@ -1763,7 +1770,7 @@ document.addEventListener('DOMContentLoaded', () => {
             followingElement.className = 'banner-following';
             laneElement.after(followingElement);
         }
-        const following = nextManeuver && nextManeuver.distanceFromCar <= 400 && nextManeuver.following;
+        const following = junction.following;
         followingElement.hidden = !following || following.distanceAfter > 180;
         followingElement.textContent = followingElement.hidden ? '' : (isKo
             ? `이어서 ${NavigationUnits.distance(following.distanceAfter)} 후 ${TTSVoice.getManeuverText(following.type, following.modifier)} · ${NavigationGuidance.shortRoad(following, true)}`
@@ -1796,7 +1803,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Turn instruction text
             const turnText = TTSVoice.getManeuverText(nextManeuver.type, nextManeuver.modifier);
-            const roadName = NavigationGuidance.roadLabel(nextManeuver, isKo);
+            const roadName = junction.sign?NavigationGuidance.shortRoad({...nextManeuver,exits:null,ref:null},isKo):NavigationGuidance.roadLabel(nextManeuver, isKo);
 
             let descText;
             if (isKo) {
@@ -1810,7 +1817,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Glare overlay warning
-            if(camera.close&&roadElement.textContent)descText=turnText;
+            if((camera.close&&roadElement.textContent)||junction.compact)descText=turnText;
             if (glareRisk > 0.45) {
                 descText += isKo ? ' ☀️ 눈부심 예상' : ' ☀️ Glare predicted';
                 banner.classList.add('hazard');
@@ -2070,7 +2077,7 @@ document.addEventListener('DOMContentLoaded', () => {
             runtimeHealth = health;
             if(driveRecorder.active&&Date.now()-lastPerformanceRecordAt>=30000){
                 lastPerformanceRecordAt=Date.now();
-                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.32',
+                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:BuildInfo.versionName,
                     visible:!document.hidden,pip:isPipMode,live:isLiveNavActive,saver:isBatterySaverActive,map3d:!!drivingView?.active()});
             }
             automaticBatterySaver = NavigationGuidance.shouldConserve(runtimeHealth, automaticBatterySaver);
@@ -2668,6 +2675,23 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (!isLiveNavActive) return;
             if (map) map.invalidateSize({pan:false});
+            if (!isFreeDriveMode) {
+                try {
+                    const target=currentEnd, recovery=await NativeNavigation.recovery(target,selectedRouteObj);
+                    if(recovery&&isLiveNavActive&&target===currentEnd) {
+                        // Use the fresh native route as a candidate, then run the normal sun/scene analysis.
+                        // A stale recovery is recalculated from a fresh location instead.
+                        NativeNavigation.invalidate();
+                        await applyNativeLastLocationOnResume();
+                        const fresh=Date.now()-recovery.recoveredAt<=60000&&Date.now()>=recovery.recoveredAt&&
+                            currentStart&&PublicTraffic.distance(recovery.route.geometry.coordinates[0],[currentStart.lng,currentStart.lat])<150;
+                        if(isLiveNavActive&&target===currentEnd) {
+                            showApiNotice(I18n.getLanguage().startsWith('ko')?'화면 꺼짐 중 복구한 경로를 확인하고 햇빛 분석을 갱신합니다.':'Checking the background recovery route and updating sunlight analysis.');
+                            await updateRoute(true,{reason:'native-recovery',nativeCandidates:fresh?[recovery.route]:null});
+                        }
+                    }
+                }catch(error){DebugLogger?.log('native-recovery-handoff-error',{message:String(error.message||error)});}
+            }
             await applyNativeLastLocationOnResume();
             resetGpsSources();
             restartWebGpsWatchAfterInterruption(true);
@@ -3893,14 +3917,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const fraction = index === 0 ? (snap.t - forecast.startT) / Math.max(.0001, 1 - forecast.startT) : snap.t;
             remainingSec = ShadowRouter.calculateRemainingRouteDuration(forecast.analyzed.coordinates, forecast.steps, forecast.traffic.duration, index, fraction, forecast.lookup);
         }
-        const estimate=etaEstimate(selectedRouteObj);
-        const delay=recentDelay.observe(selectedRouteObj?.analyzed?.coordinates,Date.now(),Number(remainingSec),remainingMeters,
+        const savedEstimate=etaEstimate(selectedRouteObj);
+        const estimate=savedEstimate.remainingFactor?{...savedEstimate,factor:savedEstimate.remainingFactor(snap?.progressMeters||0,Number(remainingSec))}:savedEstimate;
+        const delay=recentDelay.observe(selectedRouteObj?.analyzed?.coordinates,Date.now(),Number(remainingSec)*estimate.factor,remainingMeters,
             isLiveNavActive&&!isFreeDriveMode&&isRealTimeMode&&snap?.isSnapped&&Date.now()-snap.timestamp<=10000&&!estimate.applied&&!(forecast?.traffic?.coverage>0)&&!(selectedRouteObj?.traffic?.coverage>0));
         const seconds = Math.max(30, (Number(remainingSec) || 0)*estimate.factor+delay);
         JourneyUI.etaEvidence(Number(remainingSec)||0,estimate,delay,!isFreeDriveMode&&!!selectedRouteObj);
         const badge=document.getElementById('eta-learning-badge');
         badge.hidden=!estimate.applied;
-        badge.textContent=isKo?`내 기록 ${estimate.count}회 보정`:`Adjusted · ${estimate.count} trips`;
+        badge.textContent=estimate.segmentCount?(isKo?`공유 구간 ${estimate.segmentCount}개 · 기록 ${estimate.count}회`:`${estimate.segmentCount} shared sections · ${estimate.count} trips`):(isKo?`내 기록 ${estimate.count}회 보정`:`Adjusted · ${estimate.count} trips`);
         const arrivalEl = document.getElementById('sum-time');
         const durationEl = document.getElementById('sum-duration');
         const distanceEl = document.getElementById('sum-dist');
@@ -4132,7 +4157,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     // when that is the only connected option.
                     startHeading: isMidDrive && (hasValidGpsHeading || !!lastStableMovingGps) &&
                         Number.isFinite(Number(currentHeading)) ? currentHeading : null,
-                    candidates: routeOptions.moreAlternatives ? null : reusableCandidates,
+                    candidates: routeOptions.nativeCandidates || (routeOptions.moreAlternatives ? null : reusableCandidates),
                     reuseOsrmCache: !routeOptions.moreAlternatives,
                     viaRequestBudget: routeOptions.moreAlternatives ? 4 : 2,
                     reuseSceneCache: true,
@@ -5416,6 +5441,7 @@ document.addEventListener('DOMContentLoaded', () => {
         clearActiveNavigationSession();
         stopGpsWatch();
         isLiveNavActive = false;
+        NativeNavigation.clear(true);
         refreshDrivingFocus();
         stopRouteSummaryCycling();
         setLiveNavigationMapMode(false);
@@ -5496,6 +5522,7 @@ document.addEventListener('DOMContentLoaded', () => {
             etaLearning.cancel();tripEta=null;
             stopGpsWatch();
             isLiveNavActive = false;
+            NativeNavigation.clear(true);
             isFreeDriveMode = false;
             refreshDrivingFocus();
             stopRouteSummaryCycling();
@@ -5869,7 +5896,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return true;
             }
 
-            if (selectedRouteObj && !isFreeDriveMode) NativeNavigation.sync(selectedRouteObj);
+            if (selectedRouteObj && !isFreeDriveMode) NativeNavigation.sync(selectedRouteObj,{destination:currentEnd&&[currentEnd.lng,currentEnd.lat],avoidTolls:isTollFreeOnly});
             if (Date.now() - lastSessionCheckpointAt >= 30000) saveActiveNavigationSession();
             const roadDestination = getActiveRoadDestination();
             if (roadDestination) {
@@ -5913,6 +5940,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     document.getElementById('banner-dist').textContent = '—';
                     document.getElementById('banner-desc').textContent = isKo ? '경로 이탈 · 회전 안내 대기' : 'Off route · turn guidance paused';
                     document.getElementById('banner-lanes').hidden = true;
+                if(document.getElementById('banner-sign'))document.getElementById('banner-sign').hidden=true;
                     return true;
                 }
             }
@@ -5923,6 +5951,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('banner-desc').textContent = I18n.getLanguage().startsWith('ko')
                     ? '도로 위치 확인 중 · 회전 안내 대기' : 'Checking road position · turn guidance paused';
                 document.getElementById('banner-lanes').hidden = true;
+                if(document.getElementById('banner-sign'))document.getElementById('banner-sign').hidden=true;
                 const following = document.getElementById('banner-following');
                 if (following) following.hidden = true;
                 return true;

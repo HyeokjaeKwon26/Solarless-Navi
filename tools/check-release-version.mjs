@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 const config = JSON.parse(fs.readFileSync('app-release.json', 'utf8'));
+const buildInfo=fs.readFileSync('js/build-info.js','utf8');
+if(!buildInfo.includes(`versionName:'${config.versionName}'`)||!buildInfo.includes(`versionCode:${config.versionCode}`))throw new Error('Web build identity differs from app-release.json');
 if (!/^\d+\.\d+\.\d+$/.test(config.versionName) || !Number.isSafeInteger(config.versionCode) || config.versionCode < 2) throw new Error('Invalid version');
 // Read version metadata from published app tags in Git, never from scene tags.
 const tags = execFileSync('git', ['tag', '--list', 'app-v*'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);

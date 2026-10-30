@@ -3068,7 +3068,9 @@ test('navigation lifecycle survives brief interruptions without recalculating th
     assert.ok(resumeSource.includes('setNavigationActive(true)'));
     assert.ok(resumeSource.includes('applyNativeLastLocationOnResume()'));
     assert.ok(resumeSource.includes('restartWebGpsWatchAfterInterruption(true)'));
-    assert.equal(resumeSource.includes('updateRoute('), false);
+    // Ordinary resume keeps the route. Only an explicit, same-destination native recovery is reanalysed.
+    assert.ok(resumeSource.includes('if(recovery&&isLiveNavActive&&target===currentEnd)'));
+    assert.ok(resumeSource.includes("reason:'native-recovery'"));
     assert.ok(appSource.includes("window.__solarlessProcessNavigationPosition(position, 'web-watch-resumed')"));
     assert.ok(appSource.includes('navigationResumePromise'));
 });

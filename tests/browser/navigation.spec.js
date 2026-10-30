@@ -1,6 +1,46 @@
 const { test, expect } = require('@playwright/test');
 const { version: mapVersion } = require('maplibre-gl/package.json');
 
+test('truth reviewer labels a selected fix and exports the same evidence for version comparisons',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.setViewportSize({width:320,height:740});await page.goto('./');await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-drive-replay').click();
+    const at=Date.now(),recording={version:2,samples:[0,1,2].map(i=>({timestamp:at+i*1000,receivedAt:at+i*1000,lat:42.36,lng:-71.07+i*.00005,accuracy:5,heading:90,speedKmh:20})),events:[{type:'route',recordedAt:at-1000,data:{coordinates:[[-71.07,42.36],[-71.06,42.36]],maneuvers:[]}}]};
+    await page.locator('#replay-import').setInputFiles({name:'drive.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(recording))});
+    await page.locator('#drive-truth-editor summary').click();await page.locator('#truth-progress').fill('0');await page.locator('#truth-on-route').click();
+    await expect(page.locator('#truth-status')).toContainText('Fix labelled');await expect(page.locator('#replay-summary')).not.toContainText('fix errors —');
+    await page.evaluate(()=>{window.savedTruth=[];window.Capacitor={Plugins:{Pip:{saveDriveRecording:async value=>{savedTruth.push(value);return {saved:true};}}}};});
+    await page.locator('#truth-export-recording').click();await expect(page.locator('#truth-status')).toHaveText('File saved');await page.locator('#truth-export-report').click();
+    await expect.poll(()=>page.evaluate(()=>savedTruth.length)).toBe(2);
+    const saved=await page.evaluate(()=>savedTruth.map(v=>JSON.parse(v.json)));expect(saved[0].samples[0].expectedProgressMeters).toBe(0);expect(saved[1].metrics.labelledFixes).toBe(1);
+    await page.locator('#truth-compare').setInputFiles({name:'baseline.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({...saved[1],appVersion:'baseline'}))});
+    await expect(page.locator('#truth-status')).toContainText('Fix errors: 0');
+    await page.locator('#truth-off-route').click();await page.locator('#truth-compare').setInputFiles({name:'baseline.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(saved[1]))});
+    await expect(page.locator('#truth-status')).toContainText('identical labelled recording');
+    await page.screenshot({path:test.info().outputPath('truth-review-320.png')});expect(state.errors).toEqual([]);
+});
+
+test('resume adopts a same-destination native recovery candidate and runs normal solar analysis',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await captureJourneyControls(page);await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();await page.locator('#btn-map-start-nav').click();await establishReliableGuidance(page);
+    await page.evaluate(()=>{
+        const s=journeyTestApi.state(),route=structuredClone(s.route.raw);route.duration=260;
+        window.recoveryFixture={route,destination:[s.end.lng,s.end.lat],revision:Date.now()*1000,recoveredAt:Date.now(),solarAnalysisPending:true};window.recoveryChecks=0;
+        window.Capacitor={Plugins:{Pip:{getGuidanceRecovery:async()=>{recoveryChecks++;return recoveryFixture||{};},setGuidanceRoute:async()=>{recoveryFixture=null;},clearGuidanceRoute:async()=>{},setNavigationActive:async()=>({locationServiceStarted:true})}}};
+        document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect.poll(()=>page.evaluate(()=>recoveryChecks)).toBeGreaterThan(0);
+    await expect.poll(()=>page.evaluate(()=>journeyTestApi.state().route?.raw?.duration),{timeout:15000}).toBe(260);
+    expect(await page.evaluate(()=>journeyTestApi.state().route.analyzed.coordinates.length)).toBeGreaterThan(2);
+    await expect(page.locator('#btn-map-start-nav')).toHaveClass(/active/);expect(state.errors).toEqual([]);
+});
+
+test('junction presentation moves from exit sign to lanes to immediate arrow on a narrow phone',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true});await page.setViewportSize({width:320,height:740});await page.goto('./');
+    const result=await page.evaluate(()=>{
+        const turn={type:'off ramp',exits:'7',destinations:'Downtown',ref:'I-90',lanes:{total:3,valid:[2,3]},following:{distanceAfter:100}};
+        return [800,250,15].map(distanceFromCar=>JunctionPresentation.present({...turn,distanceFromCar},60));
+    });
+    expect(result.map(v=>v.phase)).toEqual(['approach','prepare','execute']);expect(result[0].sign).toContain('Downtown');expect(result[1].lanes.valid).toEqual([2,3]);expect(result[2].lanes).toBeNull();expect(result[2].compact).toBe(true);expect(state.errors).toEqual([]);
+});
+
 test('drive replay imports locally, selects a point and persists explicit glare observations',async({page})=>{
     const state=await fixtures(page,{brokenMap:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
     await page.locator('#btn-drive-replay').click();await expect(page.locator('#drive-lab-modal')).toBeVisible();

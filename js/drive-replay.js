@@ -15,7 +15,7 @@
         const fixes=samples(recording,source).slice().sort((a,b)=>a.timestamp-b.timestamp);
         if(fixes.length>50000)throw Error('REPLAY_TOO_LARGE');
         const report={version:1,samples:fixes.length,matched:0,uncertain:0,missingRoute:0,rejected:0,positionJumps:0,labelledMatches:0,wrongRoadMatches:0,turnTimingLabels:0,lateTurnRequests:0,frames:[]};
-        let ri=-1,state={},lastFix=null,lastSnap=null,geometryWork=0;
+        let ri=-1,state={},lastFix=null,lastSnap=null,geometryWork=0;const models=[];
         for(const sample of fixes){
             const now=Number.isFinite(sample.receivedAt)?sample.receivedAt:sample.timestamp;
             while(ri+1<routes.length&&routes[ri+1].recordedAt<=now){ri++;state={};lastSnap=null;}
@@ -28,7 +28,7 @@
             const data=routes[ri].data;
             geometryWork+=data.coordinates.length;
             if(geometryWork>25000000)throw Error('REPLAY_TOO_LARGE');
-            const route=routes[ri]._model||(routes[ri]._model={analyzed:{coordinates:data.coordinates},maneuvers:data.maneuvers||[],distanceMeters:data.distanceMeters});
+            const route=models[ri]||(models[ri]={analyzed:{coordinates:data.coordinates},maneuvers:data.maneuvers||[],distanceMeters:data.distanceMeters});
             const confirmed=guidance.confirmMatch(guidance.match(route,fix,state.snap),fix,state);
             const snap=confirmed.result;state={...state,...confirmed};
             Object.assign(frame,{snapped:snap.isSnapped,reason:snap.reason,progressMeters:snap.progressMeters,rawDistanceMeters:snap.rawDistanceMeters??snap.distMeters,matched:snap.isSnapped?[snap.lng,snap.lat]:null});

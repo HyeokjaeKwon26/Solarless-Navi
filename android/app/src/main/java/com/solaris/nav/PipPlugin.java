@@ -91,6 +91,12 @@ public class PipPlugin extends Plugin {
     @PluginMethod public void clearGuidanceRoute(PluginCall call) {
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> { NativeGuidance.get(getContext()).clear(call.getLong("revision", 0L)); call.resolve(); });
     }
+    @PluginMethod public void getGuidanceRecovery(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            try { call.resolve(JSObject.fromJSONObject(NativeGuidance.get(getContext()).recoveryState())); }
+            catch (Exception error) { call.reject("Unable to read recovery state"); }
+        });
+    }
     @PluginMethod public void setGuidanceMuted(PluginCall call) {
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> { NativeGuidance.get(getContext()).setMuted(call.getBoolean("muted", false)); call.resolve(); });
     }
@@ -159,7 +165,8 @@ public class PipPlugin extends Plugin {
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/json");
-        intent.putExtra(Intent.EXTRA_TITLE, "solarless-drive-" + System.currentTimeMillis() + ".json");
+        String requestedName=call.getString("name", "");
+        intent.putExtra(Intent.EXTRA_TITLE, requestedName.matches("[a-zA-Z0-9-]{1,60}\\.json")?requestedName:"solarless-drive-" + System.currentTimeMillis() + ".json");
         startActivityForResult(call, intent, "driveRecordingSaved");
     }
 

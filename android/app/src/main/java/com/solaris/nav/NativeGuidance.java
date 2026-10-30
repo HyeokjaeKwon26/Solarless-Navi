@@ -8,7 +8,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
 
-/** Route snapshot survives WebView suspension. No network or speculative dead reckoning. */
+/** Route snapshot survives WebView suspension; bounded recovery uses existing fixes. */
 final class NativeGuidance {
     private static NativeGuidance instance;
     private final Context context;
@@ -19,6 +19,13 @@ final class NativeGuidance {
     private String unitSystem = "metric";
     private boolean muted, background, uncertain;
     private long lastVoice, revision, lastLocationAt;
+    private double[][] coordinates;
+    private JSONObject snapshot;
+    private final BackgroundRecovery recovery = new BackgroundRecovery();
+    private final java.util.concurrent.ExecutorService routing = Executors.newSingleThreadExecutor();
+    private Location latest;
+    private long lastRecoveryCheck, arrivalSince;
+    private boolean arrived;
     private final java.util.concurrent.ExecutorService io = Executors.newSingleThreadExecutor();
     static synchronized NativeGuidance get(Context context) {
         if (instance == null) instance = new NativeGuidance(context.getApplicationContext());
@@ -32,7 +39,7 @@ final class NativeGuidance {
             AtomicFile file = new AtomicFile(new File(context.getFilesDir(), "navigation-snapshot.json"));
             JSONObject snapshot = new JSONObject(new String(file.readFully(), StandardCharsets.UTF_8));
             long age = System.currentTimeMillis() - snapshot.optLong("savedAt");
-            if (age >= 0 && age < 12 * 3600000L) load(snapshot);
+            if (age >= 0 && age < 12 * 3600000L) { load(snapshot); revision=snapshot.optLong("revision"); }
         } catch (Exception ignored) { }
     }
     private synchronized void load(JSONObject snapshot) throws JSONException {
@@ -50,7 +57,7 @@ final class NativeGuidance {
             double meters = turn.optDouble("progressMeters", Double.NaN);
             if (!NavigationProgress.finite(meters) || meters < 0) throw new JSONException("Invalid turn position");
         }
-        progress = new NavigationProgress(points);
+        NavigationProgress candidateProgress = new NavigationProgress(points);
         JSONObject nearby = snapshot.optJSONObject("nearbyRoads");
         if (nearby != null) {
             JSONArray edges = nearby.optJSONArray("edges");
@@ -80,9 +87,10 @@ final class NativeGuidance {
                         }
                     }
                 }
-                progress.setNearbyRoads(values, nearby.optLong("expiresAt"), successors);
+                candidateProgress.setNearbyRoads(values, nearby.optLong("expiresAt"), successors);
             }
         }
+        progress=candidateProgress; this.coordinates=points; this.snapshot=snapshot; recovery.reset(); arrived=false; arrivalSince=0;
         turns = candidateTurns; phases = new int[turns.length()];
         lastLocationAt = 0; uncertain = false;
         language = snapshot.optString("language", "en-US");
@@ -92,6 +100,7 @@ final class NativeGuidance {
         long incoming = snapshot.optLong("revision");
         if (incoming <= revision) return;
         load(snapshot); revision = incoming;
+        if(background)NavigationSpeech.get(context).stop();
         final byte[] bytes = snapshot.put("savedAt", System.currentTimeMillis()).toString().getBytes(StandardCharsets.UTF_8);
         io.execute(() -> {
             AtomicFile file = new AtomicFile(new File(context.getFilesDir(), "navigation-snapshot.json"));
@@ -100,7 +109,13 @@ final class NativeGuidance {
             catch (IOException e) { if (out != null) file.failWrite(out); }
         });
     }
-    synchronized void setBackground(boolean value) { if (background && !value) NavigationSpeech.get(context).stop(); background = value; }
+    synchronized void setBackground(boolean value) { if (background && !value) { NavigationSpeech.get(context).stop(); recovery.reset(); } background = value; }
+    synchronized JSONObject recoveryState() throws JSONException {
+        JSONObject result=new JSONObject().put("revision",revision).put("arrived",arrived);
+        if(snapshot!=null&&snapshot.has("rawRoute"))result.put("route",snapshot.getJSONObject("rawRoute")).put("destination",snapshot.optJSONArray("destination"))
+            .put("recoveredAt",snapshot.optLong("recoveredAt")).put("solarAnalysisPending",true);
+        return result;
+    }
     synchronized void setMuted(boolean value) { muted = value; context.getSharedPreferences("guidance", 0).edit().putBoolean("muted", value).apply(); if (value) NavigationSpeech.get(context).stop(); }
     synchronized void clear(long incoming) {
         if (incoming <= revision) return;
@@ -112,6 +127,7 @@ final class NativeGuidance {
     }
     private void clearState() {
         progress = null; turns = new JSONArray(); phases = new int[0];
+        snapshot=null; coordinates=null; latest=null; arrived=false; recovery.reset();
         NavigationSpeech.get(context).stop();
         io.execute(() -> new AtomicFile(new File(context.getFilesDir(), "navigation-snapshot.json")).delete());
     }
@@ -120,14 +136,23 @@ final class NativeGuidance {
     }
     synchronized String notificationText() {
         if (!background || progress == null) return "Navigation location is active";
-        return uncertain ? "Position or route uncertain. Open app to check or reroute." : "Background turn guidance. Open app for rerouting.";
+        if(arrived)return language.startsWith("ko")?"목적지 부근 도착 · 앱에서 종료 확인":"Near destination · open app to finish";
+        if(uncertain)return language.startsWith("ko")?"위치 확인 중 · 정확한 위치에서 경로 복구":"Checking position · recovery requires a reliable fix";
+        return snapshot!=null&&snapshot.has("rawRoute")?(language.startsWith("ko")?"복구 경로 안내 · 햇빛 분석 대기":"Recovery guidance · sunlight analysis pending"):(language.startsWith("ko")?"화면 꺼짐 주행 안내":"Background turn guidance");
     }
     synchronized void onLocation(Location location) {
-        if (!background || muted || progress == null) return;
+        if (!background || progress == null) return;
         if (location.getTime() <= lastLocationAt) return;
         lastLocationAt = location.getTime();
         long now = System.currentTimeMillis();
+        latest=new Location(location);
         double speed = location.hasSpeed() ? Math.max(0, location.getSpeed()) : 0;
+        if(arrived) {
+            double[] end=coordinates[coordinates.length-1];
+            if(!location.hasAccuracy()||location.getAccuracy()*1.62>25||now-location.getTime()>10000)return;
+            if(NavigationProgress.distance(location.getLongitude(),location.getLatitude(),end[0],end[1])<=60)return;
+            arrived=false;arrivalSince=0; // Passing the arrival area must not permanently suppress guidance.
+        }
         double at = progress.match(location.getLongitude(), location.getLatitude(), location.hasAccuracy() ? location.getAccuracy() * 1.62 : Double.NaN,
             location.hasBearing() ? location.getBearing() : Double.NaN, speed, location.getTime(), now);
         if (!NavigationProgress.finite(at)) {
@@ -135,9 +160,26 @@ final class NativeGuidance {
                 NavigationSpeech.get(context).stop();
                 java.util.Arrays.fill(phases, 0);
             }
-            uncertain = true; return;
+            uncertain = true; arrivalSince=0;
+            if(now-lastRecoveryCheck>=1000) {
+                lastRecoveryCheck=now;
+                double distance=BackgroundRecovery.distanceToPath(location.getLongitude(),location.getLatitude(),coordinates);
+                if(recovery.observe(distance,location.hasAccuracy()?location.getAccuracy()*1.62:Double.NaN,speed,location.getTime(),now)) requestRecovery(location,now);
+            }
+            return;
         }
+        recovery.reset();
         uncertain = false;
+        JSONObject endTurn=turns.optJSONObject(turns.length()-1);
+        double[] end=coordinates[coordinates.length-1];
+        boolean nearEnd=endTurn!=null&&"arrive".equals(endTurn.optString("type"))&&endTurn.optDouble("progressMeters",Double.MAX_VALUE)-at<30&&
+            NavigationProgress.distance(location.getLongitude(),location.getLatitude(),end[0],end[1])<25&&speed<2;
+        if(nearEnd) { if(arrivalSince==0)arrivalSince=now; if(now-arrivalSince>=10000) {
+            arrived=true;NavigationSpeech.get(context).stop();
+            if(!muted)NavigationSpeech.get(context).speak(language.startsWith("ko")?"목적지 부근입니다. 안전한 곳에서 도착 위치를 확인하세요.":"Near your destination. Check the arrival point when safe.",language,true);
+            return;
+        } } else arrivalSince=0;
+        if(muted)return;
         for (int i = 0; i < turns.length(); i++) {
             JSONObject turn = turns.optJSONObject(i);
             if (turn == null || "arrive".equals(turn.optString("type"))) continue;
@@ -170,5 +212,37 @@ final class NativeGuidance {
             return;
         }
         NavigationSpeech.get(context).updateTurn("",true);
+    }
+    private void requestRecovery(Location origin,long now) {
+        JSONArray target=snapshot==null?null:snapshot.optJSONArray("destination");
+        if(target==null||target.length()!=2)return;
+        final double[] start={origin.getLongitude(),origin.getLatitude()},end={target.optDouble(0),target.optDouble(1)};
+        if(!NavigationProgress.finite(end[0])||!NavigationProgress.finite(end[1])||Math.abs(end[0])>180||Math.abs(end[1])>85)return;
+        final long token=recovery.begin(now),routeRevision=revision;
+        final String lang=language,units=unitSystem;
+        final boolean toll=snapshot.optBoolean("avoidTolls");
+        final double bearing=origin.hasBearing()?origin.getBearing():Double.NaN;
+        routing.execute(()->{
+            JSONObject replacement=null;
+            try {replacement=RecoveryRoute.parse(RecoveryHttp.fetch(start,end,bearing,toll),start,end,lang); } catch(Exception ignored) { }
+            final JSONObject result=replacement;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(()->{
+                synchronized(NativeGuidance.this) {
+                    long current=System.currentTimeMillis();
+                    if(!background||revision!=routeRevision||!recovery.current(token))return;
+                    boolean fresh=latest!=null&&recovery.accepts(token,background,routeRevision,revision,now,latest.getTime(),current,
+                        NavigationProgress.distance(start[0],start[1],latest.getLongitude(),latest.getLatitude()));
+                    recovery.finish(token,current,result!=null&&fresh);
+                    if(result==null||!fresh)return;
+                    try {
+                        result.put("destination",new JSONArray(end)).put("avoidTolls",toll).put("language",lang).put("unitSystem",units)
+                            .put("revision",Math.max(revision+1,current*1000)).put("recoveredAt",current);
+                        NavigationSpeech.get(context).stop(); configure(result);
+                        DriveJournal.get(context).append("native-recovery",new JSONObject().put("timestamp",current).put("solarAnalysisPending",true));
+                        DriveJournal.get(context).append("route",new JSONObject().put("coordinates",result.getJSONArray("coordinates")).put("maneuvers",result.getJSONArray("maneuvers")).put("distanceMeters",result.getDouble("geometryMeters")).put("nativeRecovery",true));
+                    }catch(JSONException ignored) { }
+                }
+            });
+        });
     }
 }

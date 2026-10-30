@@ -16,6 +16,11 @@
         const compareInput=document.createElement('input');compareInput.type='file';compareInput.accept='.json,application/json';compareInput.id='performance-compare-file';compareLabel.append(compareInput);
         const comparison=document.createElement('p');comparison.className='evidence-report';comparison.id='performance-comparison';
         details.append(heading,evidence,compareLabel,comparison);el('replay-summary').after(details);
+        const truth=root.DriveTruthUI.create(el('drive-replay-panel'),{live:options.live,current:()=>{
+            const f=report?.frames[Number(el('replay-position').value)],coordinates=report?.routes[f?.routeIndex];
+            const data=coordinates&&(originalRecording?.events||[]).find(e=>e.type==='route'&&e.data?.coordinates===coordinates)?.data;
+            return {recording:originalRecording,frame:f,source:el('replay-source').value,turns:data?root.NavigationGuidance.model({analyzed:{coordinates:data.coordinates},maneuvers:data.maneuvers||[],distanceMeters:data.distanceMeters}).maneuvers:[]};
+        },update:value=>{const position=el('replay-position').value;load(value);el('replay-position').value=position;frame();}});
         function renderEvidence(){
             heading.textContent=text('조건별 눈부심·성능 평가','Glare conditions and performance review');
             const values=feedback(),groups=root.GlareFeedback.stratify(values),evaluation=root.GlareFeedback.evaluateThreshold(values);
@@ -57,6 +62,7 @@
                 (prediction?`\n${text('당시 눈부심 예측','Recorded glare estimate')}: ${Math.round(prediction.risk*100)}% · ${prediction.uncertain||prediction.evidenceKnown===false?text('미확인','uncertain'):text('기상·차폐 반영','weather / occlusion included')}`:'')+
                 (saved?'\n'+text('저장한 관찰: ','Saved observation: ')+(saved.glare?text('눈부셨음','Glare'):text('눈부시지 않았음','No glare')):'');
             for(const id of ['btn-glare-yes','btn-glare-no'])el(id).disabled=options.live()||!prediction||!f.accepted;
+            truth.refresh();
         }
         function load(value){
             stop();
@@ -69,7 +75,7 @@
             const review=root.DriveQuality.review(recording);
             el('replay-summary').textContent=text(`위치 ${report.samples}개 · 매칭 ${report.matched} · 불확실 ${report.uncertain} · 거부 ${report.rejected} · 경로 없음 ${report.missingRoute}\n위치 진행 급변 ${report.positionJumps}회 · ETA 평균 절대 오차 ${review.meanAbsoluteEtaErrorSec===null?'—':Math.round(review.meanAbsoluteEtaErrorSec)+'초'}\n정답 도로·회전 시각 라벨이 없으면 정확도·안내 지연을 확정할 수 없습니다.`,
                 `${report.samples} fixes · ${report.matched} matched · ${report.uncertain} uncertain · ${report.rejected} rejected · ${report.missingRoute} missing route\n${report.positionJumps} progress jumps · mean absolute ETA error: ${review.meanAbsoluteEtaErrorSec===null?'—':Math.round(review.meanAbsoluteEtaErrorSec)+' s'}\nRoad accuracy and instruction timing require ground-truth labels.`);
-            const regression=root.DriveRegression.evaluate(prepared,'foreground',report);
+            const regression=root.DriveRegression.evaluate(value,source,report);
             el('replay-summary').textContent+='\n'+text('라벨 기반 회귀: ','Labelled regression: ')+text('위치 오류 ','fix errors ')+(regression.fixErrors??'—')+' · '+text('안내 조건 지연 ','late guidance eligibility ')+(regression.lateGuidance??'—')+' · '+text('불필요 재탐색 제안 ','false reroute proposals ')+(regression.falseRerouteProposals??'—')+'\n'+text('실제 음성 출력 지연이나 전체 Android 재탐색 시험이 아닙니다.','This does not test actual speech latency or full Android rerouting.');
             el('replay-position').max=Math.max(0,report.frames.length-1);el('replay-position').value=0;el('replay-position').disabled=!report.frames.length;
             el('btn-replay-play').disabled=!report.frames.length;

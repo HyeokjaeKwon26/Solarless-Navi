@@ -2,15 +2,16 @@
     'use strict';
     let identity = null, pending = null, generation = 0, revision = 0;
     let identityPresentation = '', pendingPresentation = '';
+    let blockedRoute = null, recovering = false;
     const nextRevision = () => (revision = Math.max(revision + 1, Date.now() * 1000));
     const plugin = () => root.Capacitor?.Plugins?.Pip;
-    function sync(route) {
-        if (!route || !plugin()?.setGuidanceRoute) return;
+    function sync(route, options = {}) {
+        if (!route || recovering || route === blockedRoute || !plugin()?.setGuidanceRoute) return;
         try{root.ServiceHealth?.shared.check('native-guidance');}catch{return;}
         const language = root.TTSVoice.getLanguage();
         const unitSystem = root.NavigationUnits.system();
         const muted = root.TTSVoice.isMuted();
-        const presentation = JSON.stringify([language, unitSystem, muted, root.RoadPack?.graph?.pack?.savedAt || 0]);
+        const presentation = JSON.stringify([language, unitSystem, muted, options.destination, options.avoidTolls, root.RoadPack?.graph?.pack?.savedAt || 0]);
         if ((identity === route && identityPresentation === presentation) || (pending === route && pendingPresentation === presentation)) return;
         const token = ++generation;
         pending = route; pendingPresentation = presentation;
@@ -33,16 +34,30 @@
                 segments: root.NavigationGuidance.speechSegments(text, language, [m.name, m.ref, m.destinations]) };
         });
         plugin().setGuidanceRoute({ route: { revision: nextRevision(), coordinates: model.coordinates, turns, language, unitSystem, muted,
+            destination: options.destination || model.coordinates.at(-1), avoidTolls: options.avoidTolls === true,
             nearbyRoads: root.NearbyRoads?.nativeSnapshot(root.RoadPack?.graph) || null } })
             .then(() => { if (generation === token) { identity = route; identityPresentation = presentation; root.ServiceHealth?.shared.success('native-guidance'); } })
             .catch(() => { if(generation===token)root.ServiceHealth?.shared.failure('native-guidance',0); })
             .finally(() => { if (generation === token && pending === route) pending = null; });
     }
     function clear(force = false) {
-        if (!force && !identity && !pending) return;
-        generation++; identity = null; pending = null;
+        if (!force && !identity && !pending && !blockedRoute) return;
+        generation++; identity = null; pending = null; blockedRoute = null;
         if (plugin()?.clearGuidanceRoute) plugin().clearGuidanceRoute({ revision: nextRevision() }).catch(() => {});
     }
     function invalidate() { generation++; identity = null; pending = null; }
-    root.NativeNavigation = { sync, clear, invalidate };
+    async function recovery(destination, previousRoute) {
+        if (!plugin()?.getGuidanceRecovery || !destination) return null;
+        const token=generation; recovering=true;
+        let state,timer;
+        try { state = await Promise.race([plugin().getGuidanceRecovery(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('RECOVERY_BRIDGE_TIMEOUT')),2000);})]); }
+        finally {clearTimeout(timer);recovering=false;}
+        if(token!==generation)return null;
+        revision = Math.max(revision, Number(state.revision) || 0);
+        const target = state.destination;
+        if (!state.route || !Array.isArray(target) || root.PublicTraffic.distance(target, [destination.lng,destination.lat]) > 5) return null;
+        blockedRoute = previousRoute;
+        return state;
+    }
+    root.NativeNavigation = { sync, clear, invalidate, recovery };
 })(window);
