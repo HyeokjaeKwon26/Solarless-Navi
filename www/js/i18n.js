@@ -534,6 +534,7 @@ window.I18n = (function () {
             }
         }
 
+        window.SettingsLayout?.render();
         const destInput = document.getElementById('destination-input');
         if (destInput) destInput.placeholder = dict.destPlaceholder;
     }

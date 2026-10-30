@@ -6,8 +6,33 @@ test('comfortable route respects time cap, counts U-turns and never changes trav
     const a=route('a',600,[['turn','uturn']]),b=route('b',720,[['turn','left'],['turn','right']]),c=route('c',920,[]);
     const data={routes:{fastest:a,glareFree:c,shade:b,all:[a,b,c]}};
     J.apply(data,2);assert.equal(data.routes.simple,b);assert.equal(data.routes.glareFree,a);assert.equal(data.routes.shade,b);assert.equal(b.durationSec,720);
-    J.apply(data,10);assert.equal(data.routes.glareFree,c);assert.equal(data.routes.simple,c);
+    J.apply(data,10);assert.equal(data.routes.glareFree,c);assert.equal(data.routes.simple,b);
     J.apply(data,0);assert.equal(data.routes.simple,a);assert.equal(data.routes.shade,a);
+});
+test('easier routes reject unknown guidance and bound detours by benefit and journey length',()=>{
+    const base=route('a',600,[['turn','left'],['turn','right']]);
+    assert.equal(J.comfort(base,route('unknown',600,[]),10).eligible,false);
+    assert.equal(J.comfort(base,route('one',631,[['turn','left']]),10).eligible,false);
+    assert.equal(J.comfort(base,route('one',630,[['turn','left']]),10).eligible,true);
+    const short=route('short',100,[['turn','uturn']]);
+    assert.equal(J.comfort(short,route('detour',121,[['depart']]),10).eligible,false);
+    assert.equal(J.comfort(base,route('uturn',590,[['turn','uturn']]),10).eligible,false);
+});
+test('close and sharp turns use provided maneuver distances, not guessed road types',()=>{
+    const r=route('r',600,[['turn','sharp left'],['turn','right'],['turn','left']]);
+    r.raw.legs[0].steps.forEach((s,i)=>{s.distance=[70,200,100][i];s.name='';s.tags={highway:'residential'};});
+    const c=J.complexity(r);assert.equal(c.rapidTurns,1);assert.equal(c.sharpTurns,1);assert.equal(c.widthCoverage,0);assert.equal(c.narrowMeters,0);
+    delete r.raw.legs[0].steps[0].distance;assert.equal(J.complexity(r).rapidTurns,0);
+});
+test('width penalties require complete explicit width coverage on both candidates',()=>{
+    const a=route('a',600,[['depart']]),b=route('b',610,[['depart']]);
+    a.raw.legs[0].steps[0].distance=b.raw.legs[0].steps[0].distance=1000;
+    a.raw.legs[0].steps[0].tags={width:'3 m'};
+    assert.equal(J.comfort(a,b,5).narrowMetersSaved,null);assert.equal(J.comfort(a,b,5).eligible,false);
+    b.raw.legs[0].steps[0].tags={width:'7'};assert.equal(J.comfort(a,b,5).narrowMetersSaved,1000);assert.equal(J.comfort(a,b,5).eligible,true);
+    b.raw.legs[0].steps[0].tags.width='unknown';assert.equal(J.comfort(a,b,5).eligible,false);
+    b.raw.legs[0].steps[0].tags.width='7';b.raw.legs[0].steps.push({maneuver:{type:'arrive'}});
+    assert.equal(J.comfort(a,b,5).narrowMetersSaved,null);
 });
 test('preference rejects blocked/invalid candidates and normalizes persisted budget',()=>{
     const a=route('a',600,[['turn','left']]),b=route('b',610,[]);b.traffic={blocked:true};

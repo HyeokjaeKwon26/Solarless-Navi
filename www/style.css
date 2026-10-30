@@ -1497,3 +1497,15 @@ body.pip-mode #map-detail-status { display:none; }
 #storage-summary, #storage-note { overflow-wrap:anywhere; font-size:.9rem; line-height:1.5; }
 
 .driving-road-label { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.settings-navigation { padding:12px; margin-bottom:16px; border:1px solid #334155; border-radius:16px; background:#0f172a; }
+.settings-view-switch,.settings-shortcuts { display:flex; gap:8px; flex-wrap:wrap; }
+.settings-view-switch .nav-btn { flex:1; min-width:100px; padding:10px; font-size:14px; }
+.settings-view-switch [aria-pressed="true"] { background:#075985; border-color:#38bdf8; }
+.settings-shortcuts { margin-top:8px; }
+.settings-shortcut { flex:1 1 42%; min-height:44px; border:1px solid #475569; border-radius:10px; background:#17263c; color:#bae6fd; font-size:14px; }
+.settings-common-card { padding:16px; min-width:0; }
+.settings-common-card > .nav-btn { width:100%; margin-top:8px; white-space:normal; }
+#settings-voice > summary { cursor:pointer; min-height:44px; font-weight:700; color:#e2e8f0; }
+#settings-voice .speech-settings { border:0; padding:0; }
+#sidebar-panel[data-settings-view="basic"] .settings-advanced { display:none !important; }
+.settings-navigation button:focus-visible,#settings-voice > summary:focus-visible { outline:2px solid #38bdf8; outline-offset:2px; }

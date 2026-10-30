@@ -22,10 +22,13 @@ window.TTSVoice = (function () {
     const spokenStages = new Map();
     let guidancePaused = false;
     let voiceFallbackNotified = false;
+    let currentTurnKey="",activeSpeechTurnKey="";
+    let turnUpdateBarrier=Promise.resolve();
     const spokenDistance = meters => window.NavigationUnits.distance(meters, { speech: true, language: currentLang });
 
     function resetGuidance() {
         guidancePaused = false;
+        currentTurnKey="";activeSpeechTurnKey="";
         glareEpisodes?.reset();nearTurnUntil=0;
         stopSpeech();
         spokenStages.clear();
@@ -139,6 +142,7 @@ window.TTSVoice = (function () {
 
     function handleInterruptionEnd() {
         interruptionActive = false;
+        currentTurnKey='';
         // Permit the next accepted GPS fix to repeat the current maneuver.
         // A call or another full-screen interruption may have hidden or
         // silenced the instruction that was emitted immediately beforehand.
@@ -190,22 +194,24 @@ window.TTSVoice = (function () {
         lastSpokenTime = now;
         if (priority === 2) turnProtectedUntil = now + Math.min(12000,Math.max(6000,text.length*65));
         const stopped = stopSpeech();
+        activeSpeechTurnKey=options.turnKey||"";
         const generation = speechGeneration;
         const utteranceId = `web-${now}-${generation}`;
         const language = options.language || currentLang;
         let segments = window.NavigationGuidance.speechSegments(text, language, roadNames);
         const preferences = window.VoiceSettings?.get() || {rate:1,pitch:1,koVoice:'',enVoice:''};
         await stopped;
-        if (generation !== speechGeneration || isMuted || interruptionActive) return false;
+        if(options.turnKey)await turnUpdateBarrier;
+        if (generation !== speechGeneration || isMuted || interruptionActive || options.turnKey&&options.turnKey!==currentTurnKey) return false;
         if (playChimeType && !window.Capacitor?.Plugins?.Pip?.speakFocused) playWarningChime(playChimeType);
         showVoiceToast(text);
         if (window.dispatchEvent && window.CustomEvent) window.dispatchEvent(new CustomEvent('solarless:voice', { detail: { text, utteranceId, timestamp: now, priority, status: 'requested' } }));
         const focused = window.Capacitor?.Plugins?.Pip;
         if (focused?.speakFocused) {
             try {
-                const result = await focused.speakFocused({ text, lang: language, segments });
+                const result = await focused.speakFocused({ text, lang: language, segments, turnKey:options.turnKey||'' });
                 if (generation !== speechGeneration) return false;
-                if (!result.accepted) { spokenStages.clear(); lastTurnAnnounceTime = 0; }
+                if (!result.accepted) { spokenStages.clear(); lastTurnAnnounceTime = 0;currentTurnKey=''; }
                 if(result.onDeviceVoiceUnavailable)showVoiceToast(currentLang.startsWith('ko')?'기기용 음성을 설치한 뒤 다시 시도해 주세요.':'Install an on-device voice, then try again.');
                 else if (result.languageFallback) showVoiceToast(currentLang.startsWith('ko') ? '영어 음성이 없어 한국어 음성으로 안내합니다. Android 음성 출력 설정에서 영어 음성을 설치해 주세요.' : 'English voice unavailable. Check Android text-to-speech settings.');
                 else if(result.voiceFallback&&!voiceFallbackNotified){voiceFallbackNotified=true;showVoiceToast(currentLang.startsWith('ko')?'선택한 목소리가 없어 같은 언어의 기본 음성으로 안내합니다.':'Selected voice unavailable. Using the language default.');}
@@ -372,7 +378,13 @@ window.TTSVoice = (function () {
 
     // Announce each maneuver phase once; speed changes cannot replay an older phase.
     function announceTurnManeuver(maneuver, distanceMeters, speedKmh = 0) {
-        if (isMuted || interruptionActive || !maneuver || maneuver.type === 'arrive' || !Number.isFinite(distanceMeters)) return;
+        const nextKey=maneuver&&maneuver.type!=='arrive'&&Number.isFinite(distanceMeters)&&distanceMeters>=-8 ? `${maneuver.sequence ?? ''}|${maneuver.location}|${maneuver.type}|${maneuver.modifier}` : '';
+        if(nextKey!==currentTurnKey){
+            currentTurnKey=nextKey;
+            if(activeSpeechTurnKey&&activeSpeechTurnKey!==nextKey){stopSpeech();activeSpeechTurnKey='';turnProtectedUntil=0;}
+            turnUpdateBarrier=Promise.resolve(window.Capacitor?.Plugins?.Pip?.updateSpeechTurn?.({turnKey:nextKey})).catch(()=>{});
+        }
+        if (isMuted || interruptionActive || !nextKey) return;
         const now = Date.now();
         guidancePaused = false;
         const limits = window.NavigationGuidance.thresholds(speedKmh, maneuver);
@@ -404,7 +416,7 @@ window.TTSVoice = (function () {
             message += isKo ? ` 이어서 ${spokenDistance(following.distanceAfter)} 후 ${nextTurn}입니다.`
                 : ` Then in ${spokenDistance(following.distanceAfter)}, ${nextTurn}.`;
         }
-        speak(message, true, null, 2, [maneuver.name, maneuver.ref, maneuver.destinations, following?.name, following?.ref]);
+        speak(message, true, null, 2, [maneuver.name, maneuver.ref, maneuver.destinations, following?.name, following?.ref],{turnKey:key});
     }
 
     function preview() {

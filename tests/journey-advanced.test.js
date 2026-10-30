@@ -21,6 +21,12 @@ test('recovery avoids early U-turn only within budget and honors unverified sun 
     assert.equal(Recovery.choose(data,'fastest',2).route,b);assert.equal(Recovery.choose(data,'fastest',0).route,a);
     assert.equal(Recovery.choose(data,'glareFree',2).route,a);b.traffic={blocked:true};assert.equal(Recovery.choose(data,'fastest',2).route,a);
 });
+test('easier-route recovery also honors the benefit and percentage detour limits',()=>{
+    const J=require('../js/journey-upgrades'),a=route(100,true),b=route(130);
+    const data={routes:{fastest:a,simple:a,all:[a,b]}},allowed=r=>J.comfort(a,r,5).eligible;
+    assert.equal(Recovery.choose(data,'simple',5,undefined,allowed).route,a);
+    b.durationSec=120;assert.equal(Recovery.choose(data,'simple',5,undefined,allowed).route,b);
+});
 test('service backoff isolates failures, obeys retry-after and does not punish cancellation',async()=>{
     let now=1000;const health=Health.create(()=>now);health.failure('route',429,'90');
     assert.throws(()=>health.check('route'),e=>e.retryAfterMs===90000);assert.doesNotThrow(()=>health.check('weather'));

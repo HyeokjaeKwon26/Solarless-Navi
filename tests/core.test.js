@@ -2819,7 +2819,7 @@ test('GPS permission and GPS fix are separate, with one in-flight request', () =
     assert.ok(appSource.includes('await requestUserGpsLocation(false);'));
     assert.ok(appSource.includes('const shouldRefreshExistingRoute = !!currentEnd && !navigationStartPending;'));
     assert.ok(appSource.includes('if (currentEnd && !currentStart) {'));
-    assert.ok(appSource.includes('startNavigationFlow();\n                return;'));
+    assert.match(appSource, /startNavigationFlow\(\);\s+return;/);
     assert.ok(appSource.includes("e.code === 1 && gpsPermissionState === 'denied'"));
     assert.ok(appSource.includes('The current GPS fix is not ready yet.'));
 });

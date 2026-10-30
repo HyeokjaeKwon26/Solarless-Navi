@@ -2070,7 +2070,7 @@ document.addEventListener('DOMContentLoaded', () => {
             runtimeHealth = health;
             if(driveRecorder.active&&Date.now()-lastPerformanceRecordAt>=30000){
                 lastPerformanceRecordAt=Date.now();
-                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.31',
+                DriveArchive.record('performance-sample',{...health,...drivingView?.metrics(),version:'1.3.32',
                     visible:!document.hidden,pip:isPipMode,live:isLiveNavActive,saver:isBatterySaverActive,map3d:!!drivingView?.active()});
             }
             automaticBatterySaver = NavigationGuidance.shouldConserve(runtimeHealth, automaticBatterySaver);
@@ -4006,7 +4006,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const recoverySelection=data=>{
             const preferred=data.routes[currentMode]||data.routes.fastest;
             if(!isMidDrive||rerouteReason!=='off-route')return preferred;
-            const choice=RecoveryPolicy.choose(data,currentMode,routeBudget,ShadowRouter.glareMetrics);data.recovery=choice;
+            const choice=RecoveryPolicy.choose(data,currentMode,routeBudget,ShadowRouter.glareMetrics,
+                route=>currentMode!=='simple'||JourneyUpgrades.comfort(data.routes.fastest,route,routeBudget).eligible);data.recovery=choice;
             return choice.route||preferred;
         };
         const destinationBackup = isMidDrive && rerouteReason === 'destination-change' ? liveDestinationBackup : null;
@@ -5929,7 +5930,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const glareRisk = calculateLiveGlareRisk(lat, lng, currentHeading);
             const nextManeuver = findNextManeuver(lat, lng);
             updateTurnBannerText(nextManeuver, glareRisk);
-            if (nextManeuver) TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar, lastNavigationSpeedKmh);
+            TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver?.distanceFromCar, lastNavigationSpeedKmh);
             if(glareRisk>0.45)TTSVoice.announceProactiveGlareWarning(currentHeading,glareRisk);else TTSVoice.observeGlareRecovery(glareRisk);
             // Do not let the generic "continue straight" hazard message
             // overwrite a real upcoming left/right turn announcement.
@@ -6045,9 +6046,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateTurnBannerText(nextManeuver, glareRisk);
 
                 // Turn-by-turn voice announcement (3-tier: 300m/100m/30m)
-                if (nextManeuver) {
-                    TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver.distanceFromCar, lastNavigationSpeedKmh);
-                }
+                TTSVoice.announceTurnManeuver(nextManeuver, nextManeuver?.distanceFromCar, lastNavigationSpeedKmh);
 
                 if(glareRisk>0.45)TTSVoice.announceProactiveGlareWarning(currentHeading,glareRisk);else TTSVoice.observeGlareRecovery(glareRisk);
 

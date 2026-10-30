@@ -9,7 +9,9 @@
     const matches=(lang,voice)=>String(voice.lang||'').toLowerCase().split(/[-_]/)[0]===lang.split('-')[0];
     function selected(config,language,voices){const id=language.startsWith('ko')?config.koVoice:config.enVoice;return voices.find(v=>v.networkRequired!==true&&v.id===id&&matches(language,v))||null;}
     let config={...defaults},catalog=[],ready=false,busy=false,initialized=false,canPreview=()=>true;
-    let notes=Object.create(null);
+    let notes=Object.create(null),comparisonProfile=null;
+    function comparisonRecords(){try{const rows=JSON.parse(root.localStorage.getItem('solarless_voice_comparisons')||'[]');return Array.isArray(rows)?rows.filter(r=>r&&typeof r.key==='string'&&r.key.length<=4096&&['good','speaker','pronunciation'].includes(r.rating)).slice(-40):[];}catch{return [];}}
+
     const native=()=>root?.Capacitor?.Plugins?.Pip?.getSpeechSettings?root.Capacitor.Plugins.Pip:null;
     const ko=()=>root.I18n?.getLanguage().startsWith('ko');
     const label=(a,b)=>ko()?a:b;
@@ -40,6 +42,9 @@
             'speech-mode-help':config.unifiedVoice
                 ?label('선택한 목소리 하나로 문장 전체를 읽고 영어 도로명에 발음 언어 정보를 전달합니다. 실제 발음·음색 유지 여부는 음성 엔진에 따라 다릅니다.','Uses one selected voice for the whole instruction and passes language hints for English roads. Pronunciation and speaker consistency depend on the engine.')
                 :label('한국어와 영어를 각각 선택한 목소리로 읽습니다. 도로명에서 음색이 바뀔 수 있습니다.','Uses the selected Korean and English voices separately. The tone can change at road names.'),
+            'speech-comparison-rating-label':label('방금 들은 결과 · 이 기기에 저장','What you just heard · saved on this device'),
+            'speech-playback-title':label('음성 재생 진단','Speech playback diagnostics'),
+            'btn-speech-playback':label('현재 재생 기록 확인','Read current playback records'),
             'speech-comparison-help':label('같은 한영 문장을 같은 속도·음높이로 비교합니다. 설정은 바뀌지 않습니다. 발음과 음색이 유지되는지 직접 들어보세요.','Compare the same Korean/English sentence at the same rate and pitch without changing settings. Listen for pronunciation and speaker consistency.'),
             'btn-compare-default':label('기본 목소리로 비교 듣기','Compare: default Korean voice'),
             'btn-compare-selected':label('선택한 목소리로 비교 듣기','Compare: selected Korean voice'),
@@ -51,6 +56,9 @@
             'speech-settings-help':label('가람·Alex 등은 구분용 별칭입니다. 성별·음색은 미리 듣기로 확인하고 메모해 두세요. 품질·응답은 엔진 제공 등급입니다. 설치된 기기용 음성만 표시합니다. Android에서는 PiP·화면 꺼짐에도 설정을 유지합니다. 엔진 변경 후 앱을 다시 켜 주세요.','Garam, Alex and similar names are app nicknames. Preview each voice and note its tone. Quality and response are engine-reported ratings. Only installed on-device voices are listed. Android keeps settings in PiP and with the screen off. Restart after changing engines.')
         };
         for(const [id,value] of Object.entries(text))el(id).textContent=value;
+        comparisonProfile=null;el('speech-comparison-rating').disabled=true;el('speech-comparison-saved').textContent='';
+        for(const [i,text] of (ko()?['미확인','같은 목소리 · 영어 자연스러움','중간에 목소리 바뀜','영어 발음 어색함']:['Not checked','Same speaker · natural English','Speaker changed','Awkward English pronunciation']).entries())el('speech-comparison-rating').options[i].textContent=text;
+        el('speech-playback-diagnostics').hidden=!native()?.getSpeechPlayback;
         el('speech-comparison').hidden=!native()?.compareSpeechPreview;
         el('speech-mode').value=config.unifiedVoice?'unified':'separate';
         el('speech-mode').options[0].textContent=label('한 목소리로 통일 (기본)','One voice throughout (default)');
@@ -117,19 +125,44 @@
         if(!canPreview()){status(label('주행 안내를 종료한 뒤 미리 들어보세요.','End guidance before previewing.'));return;}
         if(root.TTSVoice.isMuted()){status(label('상단 스피커 버튼으로 음성을 켜 주세요.','Enable voice using the speaker button first.'));return;}
         const plugin=native();if(!plugin?.compareSpeechPreview)return;
+        comparisonProfile=null;el('speech-comparison-rating').disabled=true;
         busy=true;controls();
         try{
             const result=await deadline(plugin.compareSpeechPreview({useDefault}));
             if(!result.accepted)throw Error('PREVIEW_UNAVAILABLE');
+            comparisonProfile=JSON.stringify([result.engine,result.reportedVoices,result.rate,result.pitch,'mixed-v1']);
+            el('speech-comparison-rating').value=comparisonRecords().find(r=>r.key===comparisonProfile)?.rating||'unchecked';
+            el('speech-comparison-rating').disabled=false;
+            el('speech-comparison-saved').textContent=label('청취 후 결과를 선택하세요. 자동 평가가 아닙니다.','Choose the result after listening. This is not an automatic assessment.');
             const source=useDefault?label('기본','Default'):label('선택','Selected');
             el('speech-comparison-details').textContent=`${source} · ${result.engine||''} · ${result.requestedVoice||label('기기용 기본','On-device default')} → ${(result.reportedVoices||[]).join(', ')} · ${result.rate}× / ${result.pitch}×`;
             status(result.voiceFallback?label('선택한 음성이 없어 기본 음성으로 비교했습니다.','Selected voice unavailable; compared using the default voice.'):label('비교 재생을 요청했습니다. 설정은 바뀌지 않았습니다.','Comparison requested. Settings are unchanged.'));
         }catch{status(label('비교 재생을 시작하지 못했습니다. 안내 종료·음량·설치 음성을 확인하세요.','Could not start comparison. End guidance and check volume and installed voices.'));}
         finally{busy=false;controls();}
     }
+    async function playbackReport(){
+        const target=el('speech-playback-status');
+        try{
+            const result=await deadline(native().getSpeechPlayback()),p=result.playback;
+            if(!p||!Array.isArray(p.events))throw Error('INVALID_DIAGNOSTICS');
+            const last=p.events.slice().reverse().find(e=>Number.isFinite(e.startDelayMs));
+            target.textContent=label(`이번 앱 실행: 요청 ${p.requested} · 시작 ${p.started} · 완료 ${p.completed} · 오류 ${p.errors} · 시간 초과 ${p.expired} · 취소 ${p.cancelled}. 마지막 시작 지연 ${last?last.startDelayMs+' ms':'—'}. 엔진 콜백 기준이며 실제 스피커 소리는 검증하지 않습니다.`,
+                `This app session: requested ${p.requested} · started ${p.started} · completed ${p.completed} · errors ${p.errors} · timeouts ${p.expired} · cancelled ${p.cancelled}. Last start delay ${last?last.startDelayMs+' ms':'—'}. Engine callbacks do not verify audible speaker output.`);
+        }catch{target.textContent=label('재생 진단을 읽지 못했습니다. 다시 시도하세요.','Could not read playback diagnostics. Try again.');}
+    }
     function init(options={}){
         if(initialized)return;initialized=true;canPreview=options.canPreview||canPreview;
         try{const stored=JSON.parse(root.localStorage.getItem('solarless_voice_notes')||'{}');for(const [id,note] of Object.entries(stored||{}).slice(0,200))if(typeof note==='string')notes[id]=note.slice(0,80);}catch{}
+        el('btn-speech-playback').addEventListener('click',playbackReport);
+        el('speech-comparison-rating').addEventListener('change',event=>{
+            if(!comparisonProfile)return;
+            try{
+                const rows=comparisonRecords().filter(r=>r.key!==comparisonProfile);
+                if(event.target.value!=='unchecked')rows.push({key:comparisonProfile,rating:event.target.value});
+                root.localStorage.setItem('solarless_voice_comparisons',JSON.stringify(rows.slice(-40)));
+                el('speech-comparison-saved').textContent=label('청취 결과를 이 기기에 저장했습니다.','Listening result saved on this device.');
+            }catch{el('speech-comparison-saved').textContent=label('청취 결과를 저장하지 못했습니다.','Could not save the listening result.');}
+        });
         el('btn-compare-default').addEventListener('click',()=>compare(true));
         el('btn-compare-selected').addEventListener('click',()=>compare(false));
         el('speech-mode').addEventListener('change',e=>save({...config,unifiedVoice:e.target.value==='unified'}));

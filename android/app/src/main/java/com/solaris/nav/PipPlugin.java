@@ -46,11 +46,20 @@ public class PipPlugin extends Plugin {
             // Only the native route engine owns speech then; otherwise both
             // providers could interrupt each other on the same GPS update.
             NavigationSpeech speech = NavigationSpeech.get(getContext());
-            result.put("accepted", MainActivity.foreground && speech.speak(call.getString("text", ""), call.getString("lang", "en-US"), false, call.getArray("segments")));
+            result.put("accepted", MainActivity.foreground && speech.speakTurn(call.getString("text", ""), call.getString("lang", "en-US"), false, call.getArray("segments"), call.getString("turnKey", "")));
             result.put("languageFallback", speech.usedLanguageFallback());
             result.put("voiceFallback", speech.usedVoiceFallback());
             result.put("onDeviceVoiceUnavailable", speech.onDeviceVoiceUnavailable());
             call.resolve(result);
+        });
+    }
+    @PluginMethod public void getSpeechPlayback(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> call.resolve(NavigationSpeech.get(getContext()).playbackStatus()));
+    }
+    @PluginMethod public void updateSpeechTurn(PluginCall call) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            if(MainActivity.foreground)NavigationSpeech.get(getContext()).updateTurn(call.getString("turnKey",""),false);
+            call.resolve();
         });
     }
     @PluginMethod public void getSpeechSettings(PluginCall call) {

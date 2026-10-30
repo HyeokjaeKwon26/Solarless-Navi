@@ -13,10 +13,16 @@ window.JourneyControls={create(api){
         $('route-preference-title').textContent=text('경로 선택','Route preference');
         $('route-preference-label').textContent=text('우선순위','Priority');
         $('route-budget-label').textContent=text('최단시간 대비 허용 우회','Maximum extra driving time');
-        for(const [i,label] of (ko()?['최단시간','회전·유턴 적게','역광 회피','그늘 우선']:['Fastest','Fewer turns and U-turns','Avoid glare','Prefer shade']).entries())$('route-preference').options[i].textContent=label;
+        for(const [i,label] of (ko()?['최단시간','운전하기 편한 경로','역광 회피','그늘 우선']:['Fastest','Easier driving','Avoid glare','Prefer shade']).entries())$('route-preference').options[i].textContent=label;
         $('route-preference').value=s.mode;$('route-budget').value=String(s.budget);
         for(const o of $('route-budget').options)o.textContent=`${o.value} ${ko()?'분':'min'}`;
-        $('route-preference-status').textContent=text('수신한 후보 안에서 선택합니다. 햇빛 경로가 한도를 넘으면 최단시간 경로를 사용합니다. 도로 폭·운전 난이도는 미확인입니다.','Selects among returned candidates. Solar routes exceeding the limit fall back to fastest. Road width and driving difficulty are unverified.')+(s.route?text(` 현재 경로: 회전 ${c.turns} · 유턴 ${c.uturns} · 분기 ${c.branches}`,` Current route: ${c.turns} turns · ${c.uturns} U-turns · ${c.branches} branches`):'');
+        const choice=s.route&&s.data?.routes?.fastest?JourneyUpgrades.comfort(s.data.routes.fastest,s.route,s.budget):null;
+        const comfort=s.mode==='simple'&&s.route ? (choice?.eligible
+            ?text(`최단 대비 +${Math.max(0,choice.extraSeconds/60).toFixed(1)}분 · 회전 ${choice.turnsSaved>=0?'-':'+'}${Math.abs(choice.turnsSaved)}회 · 연속 회전 ${choice.rapidTurnsSaved>=0?'-':'+'}${Math.abs(choice.rapidTurnsSaved)}회 · 유턴 ${choice.uturnsSaved>=0?'-':'+'}${Math.abs(choice.uturnsSaved)}회 · 급회전 ${-choice.sharpTurnsSaved}회 · 분기 ${-choice.branchesSaved}회. `,
+                `Vs fastest +${Math.max(0,choice.extraSeconds/60).toFixed(1)} min · ${choice.turnsSaved>=0?'-':'+'}${Math.abs(choice.turnsSaved)} turns · ${choice.rapidTurnsSaved>=0?'-':'+'}${Math.abs(choice.rapidTurnsSaved)} close turns · ${choice.uturnsSaved>=0?'-':'+'}${Math.abs(choice.uturnsSaved)} U-turns · ${-choice.sharpTurnsSaved} sharp turns · ${-choice.branchesSaved} branches. `)
+            :text('허용 시간 안에서 충분히 단순한 후보가 없어 최단시간 경로를 사용합니다. ','No sufficiently simpler candidate within the time limit; using fastest. ')):'';
+        $('route-preference-status').textContent=comfort+text('수신한 후보만 비교합니다. 편한 경로는 최대 2분·20% 및 설정한 우회 한도 안에서 선택합니다. 폭 자료가 없으면 좁은 도로로 추정하지 않습니다.',
+            'Compares returned candidates only. Easier routes stay within 2 min, 20%, and your detour limit. Missing width data is not treated as a narrow road.')+(s.route&&c.known?text(` 현재: 회전 ${c.turns} · 유턴 ${c.uturns} · 연속 회전 ${c.rapidTurns} · 급회전 ${c.sharpTurns}`,` Current: ${c.turns} turns · ${c.uturns} U-turns · ${c.rapidTurns} close turns · ${c.sharpTurns} sharp turns`):'');
         $('btn-trip-preview').textContent=text('전체 여정 미리보기','Preview entire journey');
         $('trip-preview-title').textContent=text('전체 여정','Entire journey');
         $('btn-close-trip-preview').textContent=text('닫기','Close');

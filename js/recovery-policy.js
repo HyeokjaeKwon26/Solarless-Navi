@@ -12,7 +12,7 @@
         }
         return {earlyUturns,turns};
     }
-    function choose(data,mode,budgetMinutes,glareMetrics){
+    function choose(data,mode,budgetMinutes,glareMetrics,preferenceAllows=()=>true){
         const original=data?.routes?.[mode]||data?.routes?.fastest;
         if(!original||!profile(original).earlyUturns)return {route:original,reason:'preferred'};
         // Respect the selected sun preference: only improve its complexity when
@@ -26,7 +26,7 @@
             const candidate=glareMetrics(r.analyzed);
             return ['burden','strongSeconds','longestSeconds'].every(k=>Number.isFinite(candidate[k])&&Number.isFinite(originalGlare[k])&&candidate[k]<=originalGlare[k]);
         };
-        const allowed=(data.routes.all||[]).filter(r=>r&&r.analyzed?.coordinates?.length>1&&!r.traffic?.blocked&&
+        const allowed=(data.routes.all||[]).filter(r=>r&&preferenceAllows(r)&&r.analyzed?.coordinates?.length>1&&!r.traffic?.blocked&&
             Number.isFinite(r.durationSec)&&r.durationSec>0&&r.durationSec<=original.durationSec+cap&&r.durationSec<=baseline.durationSec+Math.max(0,Number(budgetMinutes)||0)*60&&
             !profile(r).earlyUturns&&(['fastest','simple'].includes(mode)||['heuristic','scene','hybrid-scene'].includes(r.analysisMode)&&r.analysisMode===original.analysisMode&&
                 !!r.weatherMode&&r.weatherMode!=='unknown'&&r.weatherMode===original.weatherMode&&

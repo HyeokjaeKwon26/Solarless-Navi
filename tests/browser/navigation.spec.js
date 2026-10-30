@@ -528,7 +528,7 @@ const style = {
     ]
 };
 
-async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false, initialAccuracy = 5, holdWatchFix = false, pitched = false, nearTurns = false } = {}) {
+async function fixtures(page, { brokenMap = false, holdBravo = false, chained = false, initialAccuracy = 5, holdWatchFix = false, pitched = false, nearTurns = false, everydaySettings = false } = {}) {
     const state = { routes: [], errors: [], releaseBravo: null, bravoFinished: false };
     page.on('pageerror', error => state.errors.push(error.stack || error.message));
     page.on('dialog', dialog => dialog.accept().catch(error => {
@@ -536,7 +536,9 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
         // the page. Keep real dialog errors; ignore only a closed test target.
         if(!page.isClosed()&&!/Test ended|Target page, context or browser has been closed/.test(error.message))state.errors.push(error.message);
     }));
-    await page.addInitScript(({initialAccuracy, holdWatchFix,pitched}) => {
+    await page.addInitScript(({initialAccuracy, holdWatchFix,pitched,everydaySettings}) => {
+        // Legacy feature cases explicitly use the complete settings view.
+        if(!everydaySettings && !localStorage.getItem('solarless_settings_view'))localStorage.setItem('solarless_settings_view','all');
         // Existing Leaflet interaction cases explicitly retain the 2D renderer.
         if(!localStorage.getItem('solarless_driving_3d'))localStorage.setItem('solarless_driving_3d',String(pitched));
         localStorage.setItem('solarless_auto_free_drive_enabled', 'false');
@@ -563,7 +565,7 @@ async function fixtures(page, { brokenMap = false, holdBravo = false, chained = 
             snapshot: fix,
             watchers() { return watchers.size; }
         };
-    }, {initialAccuracy, holdWatchFix,pitched});
+    }, {initialAccuracy, holdWatchFix,pitched,everydaySettings});
     // No public routing, geocoding, weather or tile service is contacted.
     await page.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -701,6 +703,7 @@ async function speechSettingsFixture(page,{missing=false,delayed=false}={}) {
         if(missing&&!localStorage.getItem('native-speech-fixture'))localStorage.setItem('native-speech-fixture',JSON.stringify({koVoice:'removed:ko',enVoice:'',rate:1,pitch:1}));
         const get=()=>({ready:!delayed||window.speechReads>1,voices:window.speechCatalogue,settings:JSON.parse(localStorage.getItem('native-speech-fixture')||'{"koVoice":"","enVoice":"","rate":1,"pitch":1}')});
         window.Capacitor={Plugins:{Pip:{
+            getSpeechPlayback:async()=>{if(window.diagnosticFailure)throw Error('NO_REPORT');return {playback:{requested:3,started:2,completed:1,errors:0,expired:1,cancelled:1,events:[{event:'started',startDelayMs:240}]}};},
             compareSpeechPreview:async({useDefault})=>{
                 const saved=get().settings;
                 (window.comparisonRequests ||= []).push({useDefault,saved});
@@ -758,6 +761,81 @@ test('voice comparison keeps saved settings and reports errors without interrupt
     await page.locator('#mobile-toggle-panel').click();await page.locator('#btn-compare-default').click();
     await expect(page.locator('#speech-settings-status')).toContainText('End guidance');
     expect(await page.evaluate(()=>comparisonRequests.length)).toBe(3);expect(state.errors).toEqual([]);
+});
+
+test('voice listening results are local, profile-specific and survive reload',async({page})=>{
+    const state=await speechSettingsFixture(page);await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await expect(page.locator('#speech-voice-ko')).toBeEnabled();await page.locator('#speech-voice-ko').selectOption('engine:ko1');
+    await expect(page.locator('#speech-voice-ko')).toBeEnabled();
+    await page.evaluate(()=>localStorage.setItem('solarless_voice_comparisons','[null,{},"bad"]'));
+    await page.locator('#btn-compare-selected').click();await page.locator('#speech-comparison-rating').selectOption('good');
+    await expect(page.locator('#speech-comparison-saved')).toContainText('saved');
+    await page.locator('#btn-compare-default').click();await expect(page.locator('#speech-comparison-rating')).toHaveValue('unchecked');
+    await page.reload();await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#btn-compare-selected').click();await expect(page.locator('#speech-comparison-rating')).toHaveValue('good');
+    await page.locator('#speech-rate').fill('0.8');await page.locator('#speech-rate').dispatchEvent('change');
+    await expect(page.locator('#speech-voice-ko')).toBeEnabled();await page.locator('#btn-compare-selected').click();
+    await expect(page.locator('#speech-comparison-rating')).toHaveValue('unchecked');
+    await page.evaluate(()=>window.compareFailure=true);await page.locator('#btn-compare-selected').click();
+    await expect(page.locator('#speech-comparison-rating')).toBeDisabled();expect(state.errors).toEqual([]);
+});
+
+test('speech callback diagnostics are on demand and do not enqueue audio',async({page})=>{
+    const state=await speechSettingsFixture(page);await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    await page.locator('#speech-playback-title').click();await page.locator('#btn-speech-playback').click();
+    await expect(page.locator('#speech-playback-status')).toContainText('240 ms');
+    await expect(page.locator('#speech-playback-status')).toContainText('do not verify audible');
+    expect(await page.evaluate(()=>speechRequests.length)).toBe(0);
+    await page.evaluate(()=>window.diagnosticFailure=true);await page.locator('#btn-speech-playback').click();
+    await expect(page.locator('#speech-playback-status')).toContainText('Could not read');expect(state.errors).toEqual([]);
+});
+
+test('everyday settings group common controls and preserve all tools without starting a drive',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true,everydaySettings:true});await page.goto('./');
+    await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#settings-basic')).toHaveAttribute('aria-pressed','true');
+    await expect(page.locator('#time-slider')).toBeHidden();await expect(page.locator('#btn-drive-record')).toBeHidden();
+    await page.locator('#settings-go-route').click();await expect(page.locator('#route-preference')).toBeVisible();
+    await expect(page.locator('#toggle-toll-free')).toBeAttached();
+    await page.locator('#settings-go-voice').click();await expect(page.locator('#speech-voice-ko')).toBeVisible();
+    await expect(page.locator('#speech-pitch')).toBeHidden();
+    await page.locator('#settings-go-update').click();await expect(page.locator('#btn-check-update')).toBeVisible();
+    await expect(page.locator('body')).not.toHaveClass(/live-driving/);
+    await page.locator('#settings-all').click();await expect(page.locator('#time-slider')).toBeVisible();await expect(page.locator('#speech-pitch')).toBeVisible();
+    await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#settings-all')).toHaveAttribute('aria-pressed','true');
+    await page.locator('#settings-basic').click();await expect(page.locator('#settings-basic')).toBeFocused();
+    await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#time-slider')).toBeHidden();
+    await page.locator('#btn-toggle-lang').click();await expect(page.locator('#settings-basic')).toHaveText('자주 쓰는 설정');
+    expect(state.errors).toEqual([]);
+});
+
+test('everyday settings shortcuts fit narrow and landscape screens with usable touch targets',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true,everydaySettings:true});await page.goto('./');await page.locator('#mobile-toggle-panel').click();
+    for(const size of [{width:320,height:740},{width:640,height:320}]){
+        await page.setViewportSize(size);await page.locator('#settings-basic').scrollIntoViewIfNeeded();
+        const bounds=await page.locator('#settings-navigation button').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,height:r.height};}));
+        for(const b of bounds){expect(b.left).toBeGreaterThanOrEqual(0);expect(b.right).toBeLessThanOrEqual(size.width);expect(b.height).toBeGreaterThanOrEqual(44);}
+        await page.screenshot({path:test.info().outputPath(`everyday-${size.width}.png`)});
+    }
+    expect(state.errors).toEqual([]);
+});
+
+test('easier driving selection explains verified tradeoffs and the fastest fallback',async({page})=>{
+    const state=await fixtures(page,{brokenMap:true,everydaySettings:true});await captureJourneyControls(page);
+    await page.goto('./');await selectDestination(page,'Alpha');await expect(page.locator('#btn-map-start-nav')).toBeEnabled();
+    await page.locator('#mobile-toggle-panel').click();await page.locator('#route-preference').selectOption('simple');
+    await expect(page.locator('#route-preference-status')).toContainText('No sufficiently simpler');
+    await expect(page.locator('#route-preference-status')).toContainText('20%');
+    await page.evaluate(()=>{
+        const state=journeyTestApi.state(),base=structuredClone(state.route),alternative=structuredClone(base);
+        base.durationSec=600;base.raw.legs=[{steps:[{distance:100,maneuver:{type:'turn',modifier:'uturn'}}]}];
+        alternative.durationSec=660;alternative.raw.legs=[{steps:[{distance:100,maneuver:{type:'depart'}},{distance:0,maneuver:{type:'arrive'}}]}];
+        const data=JourneyUpgrades.apply({routes:{fastest:base,all:[base,alternative]}},5);
+        journeyTestApi.state=()=>({...state,data,route:data.routes.simple,mode:'simple',budget:5});journeyTestController.render();
+    });
+    await expect(page.locator('#route-preference-status')).toContainText('+1.0 min');
+    await expect(page.locator('#route-preference-status')).toContainText('-1 U-turns');
+    await page.reload();await page.locator('#mobile-toggle-panel').click();await expect(page.locator('#route-preference')).toHaveValue('simple');
+    expect(state.errors).toEqual([]);
 });
 
 test('online choices disappear and saved network voice migrates to its installed counterpart',async({page})=>{

@@ -36,6 +36,25 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
     private boolean languageFallback;
     private boolean voiceFallback;
     private boolean onDeviceVoiceUnavailable;
+    private final SpeechPlayback playback = new SpeechPlayback();
+    private final SpeechTurnPolicy turns = new SpeechTurnPolicy();
+    private String spokenTurnKey = "";
+    private final Runnable playbackWatchdog = () -> { if(playback.timeout(SystemClock.elapsedRealtime())) stop(); };
+    private void watchPlayback() {
+        main.removeCallbacks(playbackWatchdog);
+        if(playback.active())main.postDelayed(playbackWatchdog,Math.max(1,playback.deadline()-SystemClock.elapsedRealtime()));
+    }
+    JSObject playbackStatus() { JSObject result=new JSObject();result.put("playback",playback.snapshot());return result; }
+    void updateTurn(String key, boolean fromBackground) {
+        turns.update(key,fromBackground);
+        if(backgroundOwner==fromBackground && !spokenTurnKey.isEmpty() && !spokenTurnKey.equals(key)) {
+            playback.cancel("turn-changed",SystemClock.elapsedRealtime()); stop();
+        }
+    }
+    boolean speakTurn(String text,String language,boolean fromBackground,JSONArray segments,String key) {
+        if(!turns.accepts(key,fromBackground))return false;
+        return speak(text,language,fromBackground,segments,settings(),key);
+    }
     private JSObject lastPreview = new JSObject();
     boolean onDeviceVoiceUnavailable() { return onDeviceVoiceUnavailable; }
     boolean usedLanguageFallback() { return languageFallback; }
@@ -52,9 +71,17 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
             if (ready) { engine = tts.getDefaultEngine(); tts.setAudioAttributes(attributes); }
         });
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-            @Override public void onStart(String id) { }
-            @Override public void onDone(String id) { main.post(() -> { if (id.equals(currentId)) release(); }); }
-            @Override public void onError(String id) { main.post(() -> { if (!currentGroup.isEmpty() && id.startsWith(currentGroup)) stop(); }); }
+            @Override public void onStart(String id) { main.post(() -> {
+                if(!playback.owns(id))return;
+                if(!playback.start(id,SystemClock.elapsedRealtime())) { stop(); return; }
+                watchPlayback();
+            }); }
+            @Override public void onDone(String id) { main.post(() -> {
+                if(playback.done(id,SystemClock.elapsedRealtime())) { main.removeCallbacks(playbackWatchdog);spokenTurnKey="";release(); }
+            }); }
+            @Override public void onError(String id) { main.post(() -> {
+                if(playback.error(id,SystemClock.elapsedRealtime()))stop();
+            }); }
         });
     }
     private SpeechPreferences settings() {
@@ -139,6 +166,9 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         return speak(text, language, fromBackground, segments, settings());
     }
     private boolean speak(String text, String language, boolean fromBackground, JSONArray segments, SpeechPreferences config) {
+        return speak(text,language,fromBackground,segments,config,"");
+    }
+    private boolean speak(String text, String language, boolean fromBackground, JSONArray segments, SpeechPreferences config, String turnKey) {
         languageFallback = false;
         voiceFallback = false;
         onDeviceVoiceUnavailable = false;
@@ -156,6 +186,8 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         backgroundOwner = fromBackground;
         currentGroup = "nav-" + (++sequence) + "-";
         currentId = currentGroup + (parts.size() - 1);
+        spokenTurnKey=turnKey==null?"":turnKey;
+        playback.begin(currentGroup,currentId,SystemClock.elapsedRealtime(),fromBackground);
         List<Voice> availableVoices = voices();
         tts.setSpeechRate(config.rate); tts.setPitch(config.pitch);
         JSONArray reported = new JSONArray();
@@ -182,7 +214,8 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         lastPreview.put("requestedVoice", config.forLanguage(language)); lastPreview.put("reportedVoices", reported);
         lastPreview.put("utterances", parts.size()); lastPreview.put("languageRanges", parts.get(0).ranges.size());
         lastPreview.put("rate", config.rate); lastPreview.put("pitch", config.pitch);
-        if (!dispatched.accepted) stop();
+        if (!dispatched.accepted) { playback.error(currentId,SystemClock.elapsedRealtime()); stop(); }
+        else watchPlayback();
         return dispatched.accepted;
     }
     JSObject comparePreview(boolean useDefault) {
@@ -202,7 +235,10 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
         return lastPreview;
     }
     void stopForeground() { if (!backgroundOwner) stop(); }
-    void stop() { currentId = ""; currentGroup = ""; if (tts != null) tts.stop(); release(); }
+    void stop() {
+        playback.cancel("cancelled",SystemClock.elapsedRealtime());main.removeCallbacks(playbackWatchdog);
+        spokenTurnKey="";currentId="";currentGroup="";if(tts!=null)tts.stop();release();
+    }
     private void release() {
         if (audio == null) return;
         if (Build.VERSION.SDK_INT >= 26 && focus != null) audio.abandonAudioFocusRequest(focus);
@@ -210,7 +246,7 @@ final class NavigationSpeech implements AudioManager.OnAudioFocusChangeListener 
     }
     @Override public void onAudioFocusChange(int change) {
         if (change < 0) {
-            currentId = ""; currentGroup = ""; tts.stop();
+            playback.cancel("audio-focus-lost",SystemClock.elapsedRealtime());stop();
             NativeGuidance.repeatAfterInterruption();
         }
         if (change == AudioManager.AUDIOFOCUS_GAIN) {

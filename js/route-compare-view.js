@@ -23,8 +23,10 @@
             for(const section of root.RouteComparison.differences(route,baseline))root.L.polyline(points(section.coordinates),{color:section.shared?'#a855f7':'#0284c7',weight:5}).addTo(layer);
             const hot=(route.analyzed.segments||[]).filter(s=>{const a=root.RoutePresentation.assessment(s);return !a.uncertain&&a.warningRisk>.45;}).slice(0,256);
             for(const s of hot)root.L.polyline([s.p1,s.p2],{color:'#f59e0b',weight:7}).addTo(layer);
+            const ease=root.JourneyUpgrades.complexity(route);
             const value=root.JourneyPolicy.solarTradeoff(baseline,route),extra=value?`${value.extraSeconds>=0?'+':''}${(value.extraSeconds/60).toFixed(1)} ${ko()?'분':'min'}`:'—';
             summary.textContent=t('기준 대비 시간 ','Time vs baseline ')+extra+' · '+(value?.comparable?t(`직사광선 감소 추정 ${(value.sunlitSecondsSaved/60).toFixed(1)}분`,`Predicted direct-sun reduction ${(value.sunlitSecondsSaved/60).toFixed(1)} min`):t('분석 조건이 달라 햇빛 감소 비교 불가','Sun reduction unavailable: different analysis conditions'));
+            if(ease.known)summary.textContent+=t(` · 회전 ${ease.turns} · 연속 회전 ${ease.rapidTurns} · 급회전 ${ease.sharpTurns}`,` · ${ease.turns} turns · ${ease.rapidTurns} close turns · ${ease.sharpTurns} sharp turns`);
             map.invalidateSize();map.fitBounds(layer.getBounds(),{padding:[20,20],maxZoom:17,animate:false});
         }
         select.value=Math.max(0,groups.findIndex(g=>g.members.some(r=>r===selected||r.id===selected?.id)));select.onchange=draw;draw();select.focus();

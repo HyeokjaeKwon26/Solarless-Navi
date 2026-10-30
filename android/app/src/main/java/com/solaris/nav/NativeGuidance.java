@@ -143,6 +143,8 @@ final class NativeGuidance {
             if (turn == null || "arrive".equals(turn.optString("type"))) continue;
             double distance = turn.optDouble("progressMeters", -1000) - at;
             if (distance < -8) continue;
+            String speechKey=revision+":"+i;
+            NavigationSpeech.get(context).updateTurn(speechKey,true);
             int phase = NavigationProgress.phase(distance, speed, turn.optBoolean("complex", false));
             if (phase <= phases[i] || (phase != 3 && now - lastVoice < 2500)) return;
             boolean ko = language.startsWith("ko");
@@ -161,11 +163,12 @@ final class NativeGuidance {
                     for (int part = 0; part < followingParts.length(); part++) segments.put(followingParts.get(part));
                 }
             } catch (JSONException ignored) { }
-            if (NavigationSpeech.get(context).speak(text, language, true, segments)) {
+            if (NavigationSpeech.get(context).speakTurn(text, language, true, segments, speechKey)) {
                 phases[i] = phase; lastVoice = now;
                 try { DriveJournal.get(context).append("voice", new JSONObject().put("text", text).put("source", "native-background").put("timestamp", now)); } catch (JSONException ignored) { }
             }
             return;
         }
+        NavigationSpeech.get(context).updateTurn("",true);
     }
 }

@@ -107,10 +107,31 @@ function voice(native = null) {
     vm.runInContext(fs.readFileSync(require.resolve('../js/navigation-units.js'), 'utf8'), context);
     vm.runInContext(fs.readFileSync(require.resolve('../js/alert-settings.js'), 'utf8'), context);
     vm.runInContext(fs.readFileSync(require.resolve('../js/tts-voice.js'), 'utf8'), context);
-    return { api: context.TTSVoice, units: context.NavigationUnits, spoken, advance: ms => { now += ms; } };
+    return { api: context.TTSVoice, units: context.NavigationUnits, context, spoken, advance: ms => { now += ms; } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const turn = { sequence: 1, type: 'turn', modifier: 'right', location: [1, 2], name: 'Main', exits: '7' };
+
+test('a turn superseded during an asynchronous stop is never enqueued',async()=>{
+    const v=voice(),calls=[],keys=[];let release;const pending=new Promise(resolve=>{release=resolve;});
+    v.context.Capacitor={Plugins:{Pip:{stopFocusedSpeech:()=>pending,
+        updateSpeechTurn:async({turnKey})=>keys.push(turnKey),speakFocused:async r=>{calls.push(r);return {accepted:true};}}}};
+    v.api.announceTurnManeuver(turn,20,40);await flush();
+    v.api.announceTurnManeuver(null,undefined,40);await flush();release();await flush();
+    assert.equal(calls.length,0);assert.equal(keys.at(-1),'');
+});
+
+test('new execute-phase turn supersedes earlier turn even during cooldown',async()=>{
+    const v=voice(),calls=[],keys=[];
+    v.context.Capacitor={Plugins:{Pip:{stopFocusedSpeech:async()=>{},updateSpeechTurn:async r=>keys.push(r.turnKey),
+        speakFocused:async r=>{calls.push(r);return {accepted:true};}}}};
+    v.api.announceTurnManeuver(turn,20,40);await flush();
+    v.api.announceTurnManeuver({...turn,sequence:2,modifier:'left'},20,40);await flush();
+    assert.equal(calls.length,2);assert.notEqual(calls[0].turnKey,calls[1].turnKey);assert.equal(calls[1].turnKey,keys.at(-1));
+    v.api.handleInterruptionStart();v.api.handleInterruptionEnd();
+    v.api.announceTurnManeuver({...turn,sequence:2,modifier:'left'},20,40);await flush();
+    assert.equal(calls.length,3);assert.equal(keys.length,3);assert.equal(calls[2].turnKey,keys.at(-1));
+});
 
 test('cancel during a bilingual native segment prevents the remaining Korean instruction', async () => {
     const calls=[];let completeEnglish;
